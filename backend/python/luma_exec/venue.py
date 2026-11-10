@@ -933,7 +933,9 @@ class Haze:
 class LibraryMode:
     """One mode of a library fixture — the string `distribute` takes as `mode`."""
 
-    __slots__ = ("name", "channels", "moves", "role", "cells", "colours", "supported")
+    __slots__ = (
+        "name", "channels", "moves", "role", "cells", "colours", "cell_colours", "supported",
+    )
 
     def __init__(self, row: Mapping[str, Any]) -> None:
         self.name = str(row["name"])
@@ -945,13 +947,31 @@ class LibraryMode:
         self.cells = int(row.get("cells", 1))
         #: The LED colours this mode drives (`red`, `warm_white`, `uv`, ...).
         self.colours = tuple(str(c) for c in row.get("colours") or ())
+        #: Which cells make which colours: `{"red+green+blue": (0, 1, ...),
+        #: "white": (16, ...)}`. `cells_with("white")` picks from it.
+        self.cell_colours = {
+            str(k): tuple(int(c) for c in v) for k, v in (row.get("cellColours") or {}).items()
+        }
         #: False for a mode Luma cannot light (its colour only through
         #: presets of unknown colour); patch another mode.
         self.supported = bool(row.get("supported", True))
 
+    def cells_with(self, colour: str) -> tuple[int, ...]:
+        """The cells, from 0, that can make `colour` (`"white"`, `"red"`,
+        `"uv"`): name them `(fixture, cell)` in `group`, `highlight` or
+        `focus` to target just those."""
+        return tuple(sorted(
+            cell for colours, cells in self.cell_colours.items()
+            if colour in colours.split("+") for cell in cells
+        ))
+
     def __repr__(self) -> str:
         aims = ", moves" if self.moves else ""
-        cells = f", {self.cells} cells" if self.cells > 1 else ""
+        if len(self.cell_colours) > 1:
+            split = "; ".join(f"{len(v)} {k}" for k, v in self.cell_colours.items())
+            cells = f", {self.cells} cells ({split})"
+        else:
+            cells = f", {self.cells} cells" if self.cells > 1 else ""
         colours = f" {'+'.join(self.colours)}" if self.colours else ""
         unsupported = ", unsupported" if not self.supported else ""
         return f"<{self.name} {self.channels}ch {self.role}{colours}{cells}{aims}{unsupported}>"

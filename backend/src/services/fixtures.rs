@@ -193,6 +193,10 @@ pub struct LibraryMode {
     /// ...), in channel order. Empty for a mode whose colour comes from a
     /// lamp, flags or a wheel, and for a QLC+ file.
     pub colours: Vec<String>,
+    /// Which cells make which colours: each distinct set of emitter colours
+    /// (`"red+green+blue"`, `"white"`) and the cells, from 0, that have
+    /// exactly it. Empty for a QLC+ file.
+    pub cell_colours: std::collections::BTreeMap<String, Vec<usize>>,
     /// Whether Luma can light it in this mode.
     pub supported: bool,
 }
@@ -270,6 +274,62 @@ fn emitter_colours(
     out
 }
 
+/// For each cell of `mode`, the emitter colours its channels drive there and
+/// its dies can make (or the firmware emulates), grouped by identical sets.
+fn cell_colours(
+    definition: &crate::models::fixtures::FixtureDefinition,
+    mode: &crate::models::fixtures::Mode,
+) -> std::collections::BTreeMap<String, Vec<usize>> {
+    use luma_fixture::{CellEmitters, EmitterColour};
+    let mut out = std::collections::BTreeMap::new();
+    let Some(library) = definition.library.as_ref() else {
+        return out;
+    };
+    let built = &library.built;
+    let params: Vec<&luma_fixture::control::Param> = mode
+        .channels
+        .iter()
+        .filter_map(|channel| {
+            definition
+                .channels
+                .iter()
+                .find(|c| c.name == channel.name)
+                .and_then(|c| c.lowered.as_deref())
+                .filter(|lowered| lowered.rank == 0)
+                .map(|lowered| &*lowered.param)
+        })
+        .collect();
+    for cell in 0..built.cells.len() {
+        let dies = match built.cell_emitters(cell) {
+            CellEmitters::Known(set) => Some(set),
+            _ => None,
+        };
+        let mut colours: Vec<String> = Vec::new();
+        for param in &params {
+            let covers = param.cell.is_none_or(|span| {
+                let [a, z] = span.span();
+                (a as usize..=z as usize).contains(&cell)
+            });
+            let Some(colour) = EmitterColour::of(param.attr).filter(|_| covers) else {
+                continue;
+            };
+            if !(param.emulated || dies.is_none_or(|d| d.lit_by(colour))) {
+                continue;
+            }
+            let name = snake(&format!("{colour:?}"));
+            if !colours.contains(&name) {
+                colours.push(name);
+            }
+        }
+        if !colours.is_empty() {
+            out.entry(colours.join("+"))
+                .or_insert_with(Vec::new)
+                .push(cell);
+        }
+    }
+    out
+}
+
 /// `WarmWhite` as `warm_white`.
 fn snake(camel: &str) -> String {
     let mut out = String::new();
@@ -297,6 +357,7 @@ fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
                 .to_string(),
             cells: mode.heads.len().max(1),
             colours: emitter_colours(&definition, mode),
+            cell_colours: cell_colours(&definition, mode),
             supported: definition.supports_mode(&mode.name),
         })
         .collect();

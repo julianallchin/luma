@@ -1141,6 +1141,16 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(self.venue.fixtures[0].label, "Mover 1")
         self.assertEqual(self.host.last("venue.fixtures"), {})
 
+    def test_cells_are_picked_by_the_colour_they_make(self) -> None:
+        from luma_exec.venue import LibraryMode
+        mode = LibraryMode({"name": "64ch", "channels": 64, "moves": False, "role": "strobe",
+                            "cells": 6, "colours": ["red", "green", "blue", "white"],
+                            "cellColours": {"red+green+blue": [0, 1, 3, 4], "white": [2, 5]}})
+        self.assertEqual(mode.cells_with("white"), (2, 5))
+        self.assertEqual(mode.cells_with("red"), (0, 1, 3, 4))
+        self.assertEqual(mode.cells_with("uv"), ())
+        self.assertIn("2 white", repr(mode))
+
     def test_a_mode_is_found_by_name_or_channel_count(self) -> None:
         [head] = self.venue.fixture_library("robe")
         self.assertEqual(head.mode("Basic"), "Basic")
