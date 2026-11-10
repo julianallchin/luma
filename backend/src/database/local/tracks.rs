@@ -27,54 +27,22 @@ pub struct TrackDeletionPlan {
 // Track records
 // -----------------------------------------------------------------------------
 
-pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String> {
-    sqlx::query_as::<_, TrackSummary>(
-        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
-                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
-                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
-                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
-         FROM tracks t
-         JOIN auth_visible_tracks visible ON visible.track_id = t.id
-         ORDER BY t.created_at DESC, t.id DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list tracks: {}", e))
-}
-
-/// Per-artifact-table preprocessor versions, used to gate `has_X` flags so a
-/// version bump correctly flips a track back to "needs reprocessing" in the
-/// UI. Sourced from `crate::preprocessing::registry::current_artifact_versions`.
-#[derive(Debug, Clone, Copy)]
-pub struct ArtifactVersions {
-    pub beats: i64,
-    pub stems: i64,
-    pub roots: i64,
-    pub drum_onsets: i64,
-    pub bar_classifications: i64,
-    pub genres: i64,
-}
-
 pub async fn list_tracks_enriched(
     pool: &SqlitePool,
     venue_id: Option<&str>,
-    versions: ArtifactVersions,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     let mut connection = pool
         .acquire()
         .await
         .map_err(|error| format!("Failed to open enriched track read: {error}"))?;
-    list_tracks_enriched_for_connection(&mut connection, venue_id, versions).await
+    list_tracks_enriched_for_connection(&mut connection, venue_id).await
 }
 
 pub async fn list_tracks_enriched_for_connection(
     connection: &mut SqliteConnection,
     venue_id: Option<&str>,
-    versions: ArtifactVersions,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     let vid = venue_id.unwrap_or("");
-    // `track_stems` has 4 rows per track (one per stem), so we count rather
-    // than EXISTS to require all four at the current version.
     let mut rows = sqlx::query_as::<_, TrackBrowserRow>(
         "SELECT
             t.id, t.uid, t.title, t.artist, t.album, t.duration_seconds,
@@ -84,13 +52,7 @@ pub async fn list_tracks_enriched_for_connection(
             COALESCE(vac.cnt, 0) AS venue_annotation_count,
             COALESCE(vsc.cnt, 0) AS venue_score_count,
             COALESCE(vsc.cnt, 0) > 0 AS is_in_venue,
-            (t.storage_path IS NOT NULL) AS has_storage,
-            EXISTS(SELECT 1 FROM track_beats x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_beats,
-            (SELECT COUNT(*) FROM track_stems x WHERE x.track_id = t.id AND x.processor_version >= ?) >= 4 AS has_stems,
-            EXISTS(SELECT 1 FROM track_roots x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_roots,
-            EXISTS(SELECT 1 FROM track_drum_onsets x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_drum_onsets,
-            EXISTS(SELECT 1 FROM track_bar_classifications x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_bar_classifications,
-            EXISTS(SELECT 1 FROM track_genres x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_genres
+            (t.storage_path IS NOT NULL) AS has_storage
          FROM tracks t
          JOIN auth_visible_tracks visible ON visible.track_id = t.id
          LEFT JOIN track_beats tb ON tb.track_id = t.id
@@ -118,12 +80,6 @@ pub async fn list_tracks_enriched_for_connection(
          ) vsc ON vsc.track_id = t.id
          ORDER BY t.created_at DESC, t.id DESC",
     )
-    .bind(versions.beats)
-    .bind(versions.stems)
-    .bind(versions.roots)
-    .bind(versions.drum_onsets)
-    .bind(versions.bar_classifications)
-    .bind(versions.genres)
     .bind(vid)
     .bind(vid)
     .fetch_all(&mut *connection)
@@ -246,7 +202,7 @@ pub async fn insert_track_record(
     file_path: &str,
     album_art_path: &Option<String>,
     album_art_mime: &Option<String>,
-    uid: Option<String>,
+    uid: &str,
     source_type: Option<&str>,
     source_id: Option<&str>,
     source_filename: Option<&str>,
@@ -257,12 +213,12 @@ pub async fn insert_track_record(
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|error| format!("Failed to begin track insert: {error}"))?;
-    let admitted: Option<Option<String>> = sqlx::query_scalar(
+    let admitted: Option<String> = sqlx::query_scalar(
         "SELECT active_uid FROM auth_write_admission
          WHERE singleton = 1 AND armed = 1 AND accepting = 1
-           AND maintenance = 0 AND remote_writes = 0 AND active_uid IS ?",
+           AND maintenance = 0 AND remote_writes = 0 AND active_uid = ?",
     )
-    .bind(uid.as_deref())
+    .bind(uid)
     .fetch_optional(&mut *transaction)
     .await
     .map_err(|error| format!("Failed to authorize track insert: {error}"))?;
@@ -278,10 +234,10 @@ pub async fn insert_track_record(
     let source_match = match (source_type, source_id) {
         (Some(source_type), Some(source_id)) => sqlx::query_scalar::<_, String>(
             "SELECT id FROM tracks
-             WHERE uid IS ? AND source_type = ? AND source_id = ?
+             WHERE uid = ? AND source_type = ? AND source_id = ?
              LIMIT 1",
         )
-        .bind(uid.as_deref())
+        .bind(uid)
         .bind(source_type)
         .bind(source_id)
         .fetch_optional(&mut *transaction)
@@ -293,9 +249,9 @@ pub async fn insert_track_record(
         source_match
     } else {
         sqlx::query_scalar::<_, String>(
-            "SELECT id FROM tracks WHERE uid IS ? AND track_hash = ? LIMIT 1",
+            "SELECT id FROM tracks WHERE uid = ? AND track_hash = ? LIMIT 1",
         )
-        .bind(uid.as_deref())
+        .bind(uid)
         .bind(track_hash)
         .fetch_optional(&mut *transaction)
         .await
@@ -345,55 +301,29 @@ pub async fn insert_track_record(
 pub async fn prepare_track_deletion(
     connection: &mut SqliteConnection,
     track_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Option<TrackDeletionPlan>, String> {
-    let row = match owner_user_id {
-        Some(owner_user_id) => {
-            sqlx::query_as::<_, TrackDeletionPlan>(
-                "SELECT t.file_path, t.album_art_path, t.track_hash,
-                    NOT EXISTS(
-                        SELECT 1 FROM tracks other
-                        WHERE other.id <> t.id AND other.file_path = t.file_path
-                    ) AS delete_audio,
-                    CASE WHEN t.album_art_path IS NULL THEN 0 ELSE NOT EXISTS(
-                        SELECT 1 FROM tracks other
-                        WHERE other.id <> t.id
-                          AND other.album_art_path = t.album_art_path
-                    ) END AS delete_album_art,
-                    NOT EXISTS(
-                        SELECT 1 FROM tracks other
-                        WHERE other.id <> t.id AND other.track_hash = t.track_hash
-                    ) AS delete_hash_artifacts
-                 FROM tracks t WHERE t.id = ? AND t.uid = ?",
-            )
-            .bind(track_id)
-            .bind(owner_user_id)
-            .fetch_optional(&mut *connection)
-            .await
-        }
-        None => {
-            sqlx::query_as::<_, TrackDeletionPlan>(
-                "SELECT t.file_path, t.album_art_path, t.track_hash,
-                    NOT EXISTS(
-                        SELECT 1 FROM tracks other
-                        WHERE other.id <> t.id AND other.file_path = t.file_path
-                    ) AS delete_audio,
-                    CASE WHEN t.album_art_path IS NULL THEN 0 ELSE NOT EXISTS(
-                        SELECT 1 FROM tracks other
-                        WHERE other.id <> t.id
-                          AND other.album_art_path = t.album_art_path
-                    ) END AS delete_album_art,
-                    NOT EXISTS(
-                        SELECT 1 FROM tracks other
-                        WHERE other.id <> t.id AND other.track_hash = t.track_hash
-                    ) AS delete_hash_artifacts
-                 FROM tracks t WHERE t.id = ? AND t.uid IS NULL",
-            )
-            .bind(track_id)
-            .fetch_optional(&mut *connection)
-            .await
-        }
-    }
+    let row = sqlx::query_as::<_, TrackDeletionPlan>(
+        "SELECT t.file_path, t.album_art_path, t.track_hash,
+            NOT EXISTS(
+                SELECT 1 FROM tracks other
+                WHERE other.id <> t.id AND other.file_path = t.file_path
+            ) AS delete_audio,
+            CASE WHEN t.album_art_path IS NULL THEN 0 ELSE NOT EXISTS(
+                SELECT 1 FROM tracks other
+                WHERE other.id <> t.id
+                  AND other.album_art_path = t.album_art_path
+            ) END AS delete_album_art,
+            NOT EXISTS(
+                SELECT 1 FROM tracks other
+                WHERE other.id <> t.id AND other.track_hash = t.track_hash
+            ) AS delete_hash_artifacts
+         FROM tracks t WHERE t.id = ? AND t.uid = ?",
+    )
+    .bind(track_id)
+    .bind(owner_user_id)
+    .fetch_optional(&mut *connection)
+    .await
     .map_err(|e| format!("Failed to fetch track info: {e}"))?;
     let Some(row) = row else {
         return Ok(None);
@@ -427,22 +357,15 @@ pub async fn prepare_track_deletion(
 pub async fn delete_prepared_track_record(
     connection: &mut SqliteConnection,
     track_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<u64, String> {
-    let deleted = match owner_user_id {
-        Some(owner_user_id) => {
-            deletes::delete_where(
-                connection,
-                "tracks",
-                "id = ? AND uid = ?",
-                &[track_id, owner_user_id],
-            )
-            .await
-        }
-        None => {
-            deletes::delete_where(connection, "tracks", "id = ? AND uid IS NULL", &[track_id]).await
-        }
-    }
+    let deleted = deletes::delete_where(
+        connection,
+        "tracks",
+        "id = ? AND uid = ?",
+        &[track_id, owner_user_id],
+    )
+    .await
     .map_err(|e| format!("Failed to delete prepared track: {e}"))?;
     Ok(deleted as u64)
 }
@@ -1087,10 +1010,10 @@ mod tests {
             BeatValidation, BeatValidationReason as Reason, BeatValidationVerdict as Verdict,
         };
         let (_directory, pool) = test_pool().await;
-        crate::database::local::auth::arm_write_admission(&pool, None)
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
             .unwrap();
-        sqlx::query("INSERT INTO tracks (id, track_hash, file_path) VALUES ('reviewed', 'audio-hash', '/audio.ogg')")
+        sqlx::query("INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('reviewed', 'alice', 'audio-hash', '/audio.ogg')")
             .execute(&pool).await.unwrap();
         upsert_track_beats(
             &pool,
@@ -1212,7 +1135,7 @@ mod tests {
         }
 
         let mut first = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
-        let plan = prepare_track_deletion(&mut first, "one", Some("alice"))
+        let plan = prepare_track_deletion(&mut first, "one", "alice")
             .await
             .unwrap()
             .unwrap();
@@ -1220,7 +1143,7 @@ mod tests {
         assert!(!plan.delete_album_art);
         assert!(!plan.delete_hash_artifacts);
         assert_eq!(
-            delete_prepared_track_record(&mut first, "one", Some("alice"))
+            delete_prepared_track_record(&mut first, "one", "alice")
                 .await
                 .unwrap(),
             1
@@ -1228,7 +1151,7 @@ mod tests {
         first.commit().await.unwrap();
 
         let mut last = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
-        let plan = prepare_track_deletion(&mut last, "two", Some("bob"))
+        let plan = prepare_track_deletion(&mut last, "two", "bob")
             .await
             .unwrap()
             .unwrap();
@@ -1241,42 +1164,29 @@ mod tests {
     #[tokio::test]
     async fn an_empty_score_is_durable_venue_membership() {
         let (_directory, pool) = test_pool().await;
-        crate::database::local::auth::arm_write_admission(&pool, None)
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
             .unwrap();
-        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', NULL, 'Venue')")
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', 'alice', 'Venue')")
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query(
             "INSERT INTO tracks (id, uid, track_hash, file_path)
-             VALUES ('track', NULL, 'hash', '/track.mp3')",
+             VALUES ('track', 'alice', 'hash', '/track.mp3')",
         )
         .execute(&pool)
         .await
         .unwrap();
         sqlx::query(
             "INSERT INTO scores (id, uid, track_id, venue_id, name)
-             VALUES ('empty-score', NULL, 'track', 'venue', 'Score')",
+             VALUES ('empty-score', 'alice', 'track', 'venue', 'Score')",
         )
         .execute(&pool)
         .await
         .unwrap();
 
-        let rows = list_tracks_enriched(
-            &pool,
-            Some("venue"),
-            ArtifactVersions {
-                beats: 0,
-                stems: 0,
-                roots: 0,
-                drum_onsets: 0,
-                bar_classifications: 0,
-                genres: 0,
-            },
-        )
-        .await
-        .unwrap();
+        let rows = list_tracks_enriched(&pool, Some("venue")).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].venue_annotation_count, 0);
         assert_eq!(rows[0].venue_score_count, 1);
@@ -1284,25 +1194,12 @@ mod tests {
 
         sqlx::query(
             "INSERT INTO scores (id, uid, track_id, venue_id, name)
-             VALUES ('duplicate', NULL, 'track', 'venue', 'Duplicate')",
+             VALUES ('duplicate', 'alice', 'track', 'venue', 'Duplicate')",
         )
         .execute(&pool)
         .await
         .unwrap();
-        let rows = list_tracks_enriched(
-            &pool,
-            Some("venue"),
-            ArtifactVersions {
-                beats: 0,
-                stems: 0,
-                roots: 0,
-                drum_onsets: 0,
-                bar_classifications: 0,
-                genres: 0,
-            },
-        )
-        .await
-        .unwrap();
+        let rows = list_tracks_enriched(&pool, Some("venue")).await.unwrap();
         assert_eq!(rows[0].venue_score_count, 2);
         assert!(rows[0].is_in_venue);
     }
@@ -1347,20 +1244,9 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = list_tracks_enriched(
-            &pool,
-            Some("bob-venue"),
-            ArtifactVersions {
-                beats: 0,
-                stems: 0,
-                roots: 0,
-                drum_onsets: 0,
-                bar_classifications: 0,
-                genres: 0,
-            },
-        )
-        .await
-        .unwrap();
+        let rows = list_tracks_enriched(&pool, Some("bob-venue"))
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1, "Alice's own track remains visible");
         assert_eq!(rows[0].venue_score_count, 0);
         assert_eq!(rows[0].venue_annotation_count, 0);

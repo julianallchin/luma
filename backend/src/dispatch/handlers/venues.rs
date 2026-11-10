@@ -8,10 +8,11 @@ use crate::models::venues::{Venue, VenueMember};
 use crate::services::venue_sharing;
 use luma_scene::environment::{VenueEnvironment, VenueHaze};
 
-/// Every venue in the local library, owned and joined alike. Read-only and
-/// unscoped — the per-venue authorization gate (`VenueAccess`) guards the
-/// *contents* of a venue, not its existence in this list.
+/// Every venue in the signed-in account's library, owned and joined alike.
+/// Read-only and unscoped — the per-venue authorization gate (`VenueAccess`)
+/// guards the *contents* of a venue, not its existence in this list.
 pub async fn list_venues(services: &AppServices) -> Result<Vec<Venue>, CommandError> {
+    services.require_session().await?;
     Ok(venues_db::list_venues(&services.db.0).await?)
 }
 

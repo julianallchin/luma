@@ -262,7 +262,7 @@ impl Fixture {
                 score_id: Some(ANALYSIS_SCORE_ID.to_string()),
                 ..Default::default()
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .expect("create thread")
@@ -279,7 +279,7 @@ impl Fixture {
                     parts: json!([{ "type": "text", "text": "Session opened." }]),
                 }],
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .expect("open the thread's session");
@@ -320,7 +320,7 @@ impl Fixture {
                 score_id: Some(SCORE_ID.into()),
                 ..Default::default()
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .unwrap()
@@ -376,7 +376,7 @@ impl Fixture {
             code.to_string(),
             scope,
             turn,
-            Some("owner".into()),
+            "owner",
             None,
             None,
             waiting,
@@ -559,7 +559,7 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
         "1 + 1".into(),
         scope,
         None,
-        Some("another-user".into()),
+        "another-user",
         None,
         None,
         &|_| {},
@@ -595,7 +595,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
                 parts: json!([{ "type": "text", "text": "Done." }]),
             }],
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("an assistant row appends like any other");
@@ -613,7 +613,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
             "1 + 1".into(),
             scope.clone(),
             Some(turn_message_id.into()),
-            Some("owner".into()),
+            "owner",
             None,
             None,
             &|_| {},
@@ -635,7 +635,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         "1 + 1".into(),
         scope,
         Some("assistant-turn".into()),
-        Some("owner".into()),
+        "owner",
         None,
         None,
         &|_| {},
@@ -666,7 +666,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
                 parts: json!([{ "type": "text", "text": "Session opened on Aurora." }]),
             }],
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("a session turn appends like any other row — no trigger gates it");
@@ -682,7 +682,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         "1 + 1".into(),
         session_scope,
         Some("session-turn".into()),
-        Some("owner".into()),
+        "owner",
         None,
         None,
         &|_| {},
@@ -804,7 +804,7 @@ impl Fixture {
                 venue_id: Some(venue_id.clone()),
                 ..Default::default()
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .expect("create venue thread")
@@ -1118,7 +1118,7 @@ async fn a_perform_thread_changes_the_set_and_a_venue_thread_cannot() {
             venue_id: Some(venue_id.clone()),
             ..Default::default()
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("create Perform thread")
@@ -1183,91 +1183,6 @@ except luma.PerformRefused as error:
         "{:?}",
         elsewhere.repr
     );
-    f.service.shutdown_all();
-}
-
-// ---------------------------------------------------------------------------
-// B6 — the usability run
-// ---------------------------------------------------------------------------
-
-/// Run an outside agent's program against an empty venue, cell by cell.
-///
-/// Not an assertion: the gauntlet's §8 usability run is evidence, not a
-/// contract, so this drives the same facade the tests above do and writes down
-/// what the room said. Inert unless `LUMA_USABILITY_IN` names a directory of
-/// `cell_*.py`; results land beside them in `LUMA_USABILITY_OUT`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn venue_usability_run() {
-    let Ok(input) = std::env::var("LUMA_USABILITY_IN") else {
-        return;
-    };
-    let out_dir =
-        std::path::PathBuf::from(std::env::var("LUMA_USABILITY_OUT").expect("LUMA_USABILITY_OUT"));
-    std::fs::create_dir_all(&out_dir).unwrap();
-    let Some(f) = Fixture::new("venue usability").await else {
-        panic!("the cell service would not start");
-    };
-    let (venue_id, thread) = f.empty_venue().await;
-
-    let mut cells: Vec<_> = std::fs::read_dir(&input)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "py"))
-        .collect();
-    cells.sort();
-
-    let mut transcript = String::new();
-    for cell in &cells {
-        let code = std::fs::read_to_string(cell).unwrap();
-        let name = cell.file_name().unwrap().to_string_lossy().to_string();
-        let out = f.run_in_venue(&thread, &venue_id, &code).await;
-        for figure in &out.figures {
-            let file = std::path::Path::new(&figure.artifact_rel)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "figure.png".into());
-            std::fs::write(out_dir.join(format!("{file}.b64")), &figure.base64_png).unwrap();
-        }
-        transcript.push_str(&format!(
-            "===== {name} =====\n{code}\n----- status: {} -----\nstdout:\n{}\n\
-             stderr:\n{}\nrepr: {:?}\ntraceback: {:?}\nnotices: {:?}\nfigures: {:?}\n\n",
-            out.status,
-            out.stdout,
-            out.stderr,
-            out.repr,
-            out.traceback,
-            out.notices,
-            out.figures
-                .iter()
-                .map(|fig| fig.artifact_rel.clone())
-                .collect::<Vec<_>>()
-        ));
-    }
-
-    let tail = f
-        .run_in_venue(
-            &thread,
-            &venue_id,
-            "shot = luma.venue.render(view='front', width=1280, height=720)\n\
-             top = luma.venue.render(view='overhead', width=1280, height=720)\n\
-             print(luma.venue.describe(detail=True))\n\
-             print(luma.venue.tiles())\n\
-             (str(shot.path), str(top.path))",
-        )
-        .await;
-    transcript.push_str(&format!(
-        "===== final =====\nstatus: {}\n{}\nrepr: {:?}\ntraceback: {:?}\n",
-        tail.status, tail.stdout, tail.repr, tail.traceback
-    ));
-    std::fs::write(out_dir.join("transcript.txt"), &transcript).unwrap();
-    for figure in &tail.figures {
-        let name = std::path::Path::new(&figure.artifact_rel)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "figure.png".into());
-        std::fs::write(out_dir.join(format!("{name}.b64")), &figure.base64_png).unwrap();
-    }
     f.service.shutdown_all();
 }
 
@@ -1385,7 +1300,7 @@ async fn a_python_laser_clip_draws_beams_on_the_stage() {
             venue_id: Some(f.venue_id.clone()),
             ..Default::default()
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("create venue thread")
@@ -1424,7 +1339,7 @@ projector.path
                 parts: json!([{ "type": "text", "text": "Session opened." }]),
             }],
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .unwrap();
@@ -1452,7 +1367,7 @@ lit, dark = light(v.render(edit=edit, t=1.0)), light(v.render(t=1.0))
         .into(),
         scope,
         Some("laser-session".into()),
-        Some("owner".into()),
+        "owner",
         None,
         None,
         &|_| {},

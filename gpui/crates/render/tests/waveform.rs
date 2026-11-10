@@ -75,52 +75,6 @@ fn gpu_waveform_matches_half_precision_sample_intervals() {
     }
 }
 
-#[test]
-#[ignore = "GPU timing diagnostic"]
-fn gpu_waveform_timings() {
-    use std::time::Instant;
-    let context = context();
-    eprintln!("adapter: {:?}", context.adapter_info());
-    let count = 206 * 48000;
-    let bands: [Vec<f32>; 3] = std::array::from_fn(|band| {
-        (0..count)
-            .map(|i| ((i * (band + 1) % 1000) as f32 / 1000.) - 0.5)
-            .collect()
-    });
-    let started = Instant::now();
-    let gpu = Waveform::new(context, &bands, [1.; 3], [0.95, 0.8, 0.6], 48000).unwrap();
-    eprintln!("resident hierarchy: {} bytes", gpu.hierarchy_bytes());
-    assert!(gpu.hierarchy_bytes() < 21_000_000);
-    // First render waits for the hierarchy as well as pipelines and uploads.
-    gpu.render(view(0., 206. / 1200., 1200)).unwrap();
-    eprintln!(
-        "upload + hierarchy + pipelines + first render: {:.3}ms",
-        started.elapsed().as_secs_f64() * 1000.
-    );
-    for (label, step, width) in [
-        ("deep", 1. / 500., 1200),
-        ("normal", 1. / 50., 1200),
-        ("minimap", 206. / 1200., 1200),
-        ("4k minimap", 206. / 4000., 4000),
-    ] {
-        let mut times = Vec::new();
-        for i in 0..53 {
-            let start = Instant::now();
-            let frame = gpu.render(view(0., step, width)).unwrap();
-            std::hint::black_box(&frame);
-            let ms = start.elapsed().as_secs_f64() * 1000.;
-            if i >= 3 {
-                times.push(ms);
-            }
-        }
-        times.sort_by(f64::total_cmp);
-        eprintln!(
-            "{label}: submit-through-completion median={:.3}ms p95={:.3}ms",
-            times[25], times[47]
-        );
-    }
-}
-
 fn context() -> std::sync::Arc<DeviceContext> {
     static CONTEXT: std::sync::OnceLock<std::sync::Arc<DeviceContext>> = std::sync::OnceLock::new();
     CONTEXT

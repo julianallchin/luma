@@ -113,6 +113,7 @@ pub async fn list_scores_across_venues(
     services: &AppServices,
     track_id: String,
 ) -> Result<Vec<ScoreSummary>, CommandError> {
+    services.require_session().await?;
     Ok(db::list_accessible_scores_for_track(&services.db.0, &track_id).await?)
 }
 

@@ -149,15 +149,6 @@ impl Score {
         }
         changed
     }
-    pub fn to_json(&self, base: &Library) -> Result<String> {
-        self.validate(base)?;
-        serde_json::to_string_pretty(self).map_err(|error| Error(error.to_string()))
-    }
-    pub fn from_json(base: &Library, json: &str) -> Result<Self> {
-        let score: Self = serde_json::from_str(json).map_err(|error| Error(error.to_string()))?;
-        score.validate(base)?;
-        Ok(score)
-    }
 }
 
 /// One writer's changes to a score, against the copy it read: each clip it

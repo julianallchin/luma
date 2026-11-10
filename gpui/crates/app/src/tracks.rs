@@ -75,15 +75,11 @@ impl Ownership {
         }
     }
 
-    /// A track with no `uid` is in the guest namespace, which every host reads
-    /// as its own.
-    fn admits(self, track: &TrackBrowserRow, user: Option<&str>) -> bool {
+    /// `user` is the signed-in account; `Mine` is the tracks it owns.
+    fn admits(self, track: &TrackBrowserRow, user: &str) -> bool {
         match self {
             Ownership::All => true,
-            Ownership::Mine => match &track.uid {
-                None => true,
-                Some(uid) => Some(uid.as_str()) == user,
-            },
+            Ownership::Mine => track.uid.as_deref() == Some(user),
         }
     }
 }
@@ -166,9 +162,9 @@ pub struct Tracks {
     query: String,
     search: Entity<luma_ui::text_input::TextInput>,
     _search_subscription: Subscription,
-    /// The signed-in principal, snapshotted when the venue was selected. The
-    /// ownership filter reads it.
-    user: Option<String>,
+    /// The signed-in account, snapshotted when the venue was opened. The
+    /// ownership filter reads it, and a score's row is written for it.
+    user: String,
     search_focus: FocusHandle,
     /// A score chosen from another venue's menu, to open here once this
     /// venue's catalogue has landed — it needs its track's row. Taken in
@@ -197,6 +193,11 @@ impl Tracks {
     /// The venue a score opens in.
     pub(crate) fn venue_id(&self) -> &str {
         &self.venue_id
+    }
+
+    /// The account the venue was opened for.
+    pub(crate) fn user(&self) -> &str {
+        &self.user
     }
 
     pub(crate) fn load_generation(&self) -> u64 {
@@ -251,9 +252,7 @@ impl Tracks {
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                row.is_in_venue
-                    && self.ownership.admits(row, self.user.as_deref())
-                    && matches(row, &query)
+                row.is_in_venue && self.ownership.admits(row, &self.user) && matches(row, &query)
             })
             .map(|(index, _)| index)
             .collect()
@@ -362,6 +361,11 @@ impl Luma {
     /// it was saved at the last quit. The venue being left keeps its state,
     /// parked.
     pub(crate) fn open_venue(&mut self, venue: Venue, cx: &mut Context<Self>) {
+        // A venue opens for whoever is signed in. While nobody is, the
+        // sign-in screen is the whole app and nothing opens behind it.
+        let Some(user) = self.library.user_id() else {
+            return;
+        };
         self.venue_selection_generation = self.venue_selection_generation.wrapping_add(1);
         let generation = self.venue_selection_generation;
         let venue_id = venue.id.clone();
@@ -414,7 +418,7 @@ impl Luma {
             query: String::new(),
             search,
             _search_subscription: search_subscription,
-            user: self.library.user_id(),
+            user,
             search_focus,
             arrival: None,
             landing: None,

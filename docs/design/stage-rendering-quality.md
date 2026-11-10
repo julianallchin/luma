@@ -1,14 +1,20 @@
 # Stage rendering quality and performance
 
-Status: implementation direction, 2026-09-05. The user sets the target at Depence visual quality and Unreal-class realism while retaining high interactive performance. This is not a claim that the current renderer meets that target.
+The target is Depence visual quality and Unreal-class realism at interactive
+frame rates. This doc holds that target, what the renderer does toward it, and
+what is not built. It is not a claim that the renderer meets the target.
 
-The `profile-volumetrics` profiler this doc's measurements and reproductions use was removed on 2026-11-05. Its commands are kept as the record of how the numbers were taken; the tool is in git history before that date.
+The haze path has its own doc, [haze-lit-interval-cache.md](haze-lit-interval-cache.md).
 
-## Acceptance before algorithms
+## Acceptance
 
-The user clarified that this pass should have minimal performance impact on the current non-Mac machine; a substantial Mac performance/approximation pass comes later. Hardware, output resolution, fixture count, and frame-rate target must be stated together for that pass. The available development GPU is an RTX 5090 running Vulkan; timings here cannot establish Apple Silicon performance. Treat 1080p, 60 Hz, and 512 moving fixtures as a provisional workload, not an agreed specification.
+Hardware, output resolution, fixture count and frame-rate target must be stated
+together for any performance claim. A timing on one GPU says nothing about
+another.
 
-Review a complete venue with materials and geometry, not just cones against black. Pin camera, light output, exposure, medium density and source state. Explicitly enable surface lighting and fixture shadows. Do not use old comparison fixtures to assess the app's lighting quality.
+Review a complete venue with materials and geometry, not just cones against
+black. Pin camera, light output, exposure, medium density and source state.
+Explicitly enable surface lighting and fixture shadows.
 
 The acceptance suite needs:
 
@@ -19,32 +25,23 @@ The acceptance suite needs:
 - Blackout, strobes and fast RGB changes in motion. Reuse must not leave glowing history after a light turns off.
 - Locked deterministic stills and a higher-sample reference render, plus live recordings of the same scene. A pleasing still does not prove correct motion or frame pacing.
 
-Measure GPU stages separately, CPU submission, memory, and end-to-end presentation p50/p95/max. Report the light-index dispatch separately without adding it twice: it overlaps the scene span in the current renderer. Never describe correctness at 512 fixtures as a performance measurement. Existing profiler acceptance budgets are historical regression ceilings, not a 60 Hz specification.
+Measure GPU stages separately, CPU submission, memory, and end-to-end
+presentation p50/p95/max. Never describe correctness at 512 fixtures as a
+performance measurement.
 
-## Current gaps verified in code
+## What is not built
 
-- The emitter-summed ambient fill has been removed after venue review: it lit surfaces even when beams hit nothing. There is currently no fixture-driven indirect lighting. Geometry-aware GI remains unimplemented.
-- `luminaire.rs` uses relative per-kind lumen budgets and a shared beam gain. Fixture calibration is incomplete. Quoted zoom ranges are represented by a midpoint rather than live optics.
-- Fixture shadow maps are 256-square. The default mode retains a map for every active emitter, up to 512 layers (see "Gasworks retained shadows" below). `MAX_FIXTURE_SHADOWS = 16` in `shadow.rs` is only the legacy comparison budget. The profiler must report actual residency.
-- Haze uses per-pixel, per-candidate-light integration with analytic cone intersections and equiangular/uniform sampling. Preserve this useful estimator while reducing repeated work.
-- Venue review demonstrated that preserving the old 3–18 m integration bounds preserved the visible cutoff. Bounds are now 24–60 m depending on concentration, with the same quartic support taper used for surface lights. This is still an approximation, not calibrated physical throw. It increases candidate coverage; the older unchanged-range performance results below do not describe this revision.
-- The density field has two independent baked-texture lookups per sample and live time independent of playback. Source-to-sample extinction now supplements camera-path extinction. Its transport still uses a mean extinction and finite support taper; that is not yet a calibrated participating medium.
-
-## Architecture to evaluate
-
-1. **Shared physical lighting inputs.** Use one source spectrum/output, beam distribution, aperture/gobo, and live optics for surface shading, haze, shadows and indirect lighting. Calibrate against fixture photometry where available and clearly identify fallback estimates. Consistent scene units, exposure, color management and material reflectance come before cosmetic bloom.
-
-2. **Geometry-aware indirect lighting.** Evaluate a world-space irradiance/radiance cache with visibility-aware probes and actual surface-hit lighting. Cache stable venue geometry, update changing direct illumination, and reuse a bounded amount of indirect work. The first milestone is one diffuse bounce with reflected material color and wall occlusion. Trace through a shared geometry representation; choose software traversal or hardware acceleration after platform capability and cost are verified. Do not assume that wgpu support or a powerful development GPU makes hardware tracing available on the target.
-
-3. **Many-light visibility.** Keep all relevant fixtures eligible for surface illumination. Evaluate cached/variable-resolution shadowing and sampled visibility against a fully evaluated reference. Budget samples and updates, not arbitrary missing lights. Resampling or temporal reuse needs explicit strobe and blackout handling. A larger fixed shadow cap is not the design.
-
-4. **Participating media.** Preserve sharp beam integration while amortizing low-frequency haze lighting in a spatial volume. Source-to-sample and sample-to-camera extinction must agree with surface composition. Fog should not emit arbitrary ambient light. World-space wisps and sparse density gaps should remain subtle under exposure. Separate numerical integration bounds from authored throw; any energy truncation needs a measured error bound.
-
-5. **Temporal reconstruction.** Reproject with depth/geometry rejection and reactive handling of changing light output. Use retained information to lower sample cost without widening beam edges, smearing gobos, delaying shadows or extending strobes. Static captures remain deterministic.
-
-6. **Materials and reflections.** Validate normals, linear material inputs and exposure. Diffuse GI and rough reflections may share cached lighting; sharper reflections need their own visibility/quality evaluation. A constant specular fill is not a reflection model.
-
-Do not implement every subsystem simultaneously. First fix truthful measurement and reference scenes, then prove a geometry-aware diffuse-bounce slice against both an error reference and the agreed frame budget. The temporary ambient fill is already removed; do not restore it to hide the missing indirect transport. Profile dense/close-up cases before choosing the final volumetric and many-light algorithms.
+- **Geometry-aware indirect lighting.** There is no pass that bounces fixture
+  light off surfaces with wall occlusion. Surfaces get their surroundings from
+  the relit reflection probes (`probes.rs`) and the haze's glow (below). Do not
+  add an emitter-summed ambient fill to stand in for it: it lights surfaces
+  even when beams hit nothing.
+- **Fixture photometry.** `gpui/crates/scene/src/luminaire.rs` uses relative
+  lumen outputs (1 is a stock moving-head lamp) and a shared beam gain. A
+  quoted zoom range is represented by its midpoint, not by live optics.
+- **Calibrated throw.** A cone's integration range is 24–60 m depending on
+  concentration (`luminaire.rs`), with a soft range taper. This is an
+  approximation, not a calibrated physical throw.
 
 ## External calibration
 
@@ -54,258 +51,93 @@ https://dev.epicgames.com/documentation/en-us/unreal-engine/lumen-performance-gu
 Syncronorm describes physically based light beams and PBR materials as part of Depence's lighting renderer. Use the rendered result as a quality reference without assuming its proprietary implementation:
 https://www.syncronorm.com/products/depence2/visualization/lighting/page
 
-## Earlier-pass measurements (superseded by the longer-range revision)
+## Fixture shadows
 
-Release Vulkan on RTX 5090, 1920×1080 output, half-resolution haze, 8 samples, 120 warmup + 600 measured frames per run. Reference uses the previous committed haze/surface shaders and disables the temporary bounce estimate in an isolated copy. Current uses the two independent density samples, unchanged cull ranges and smooth polynomial tail. These are controlled renderer comparisons, not whole-app FPS. Shadows are the existing capped implementation, not a claim of accurate visibility for all lights.
+`RenderSettings::fixture_shadows` turns on shadows from opaque venue geometry
+in fixture light and haze. `RenderSettings::geometry_shadows` keeps a retained
+shadow map for every fixture instead of a 16-map budget
+(`MAX_FIXTURE_SHADOWS` in `shadow.rs`). The constructors in `scene_desc.rs`
+start with it off; the stage (`visualizer/render_controls.rs`), a recording's
+show scene (`backend/src/stage_render.rs`) and `luma-cli profile` all set it
+on. The app has no control for it.
 
-| Case | Previous GPU p95 | Current GPU p95 |
-|---|---:|---:|
-| 512 overlapping lights | 8.67 ms | 8.10 ms |
-| Close-up 128 lights | 5.67 ms | 4.72 ms |
-| 120 lights, 2,057 opaque draws, 16 shadow maps (two runs) | 6.12–6.43 ms | 5.94–6.87 ms |
+With it on:
 
-The dense case varies between runs; there is no consistent measured regression or established speedup there. No claim is made about other GPUs, actual venue datasets, or higher-resolution output. The extra third density lookup and the tripled light bounds were removed.
+- Each active emitter keeps a 256-square depth map (`FIXTURE_SHADOW_SIZE`).
+  The allocation grows in powers of two with the cone count, up to 512 layers
+  (`MAX_FIXTURE_CONES`). 512 layers cost 128 MiB; small rigs allocate less.
+- A map's identity is its projection plus the opaque geometry that casts into
+  it (`ShadowCacheKey`). Colour, intensity, blackout and light-list reordering
+  do not redraw maps. A stage edit invalidates the maps it affects.
+- Fixture housings do not cast into fixture shadows. Transparent objects do
+  not cast.
+- A moved head keeps its slot and its last map. At most 64 moved maps
+  (Medium: 16) are redrawn per frame, ranked by priority times frames waited
+  (`budget_redraws`). A slot holding another light's map is always drawn.
+- Dark cones (intensity times brightest channel at most 1e-4) get no shadow
+  map and no beam work.
+- Surfaces and haze share the maps.
 
-## Longer-range correction after venue review
+Low quality draws no fixture shadows at all (see "Quality levels").
 
-The 3 m minimum integration radius was the source of the short wash blobs. The revised 24–60 m bounds preserve distant light and share the surface pass's quartic taper. Haze now attenuates along the source-to-sample path as well as the camera path. Neither this finite bound nor the relative source intensities constitute calibrated photometry.
+`visibility.rs` holds a software triangle BVH over the opaque stage geometry.
+It is a reference path that only renderer tests turn on
+(`visibility_reference`). It is too slow for interactive use: it traces a
+world-triangle query for every contributing light and integration sample.
 
-With the live app suspended during both measurements, the original shader/reference at 8 m synthetic range measured 8.610 ms GPU p95; the revised transport at 24 m measured 9.386 ms (+9.0%). Same RTX 5090, Vulkan, 1080p, half-resolution haze, 8 samples, 512 overlapping lights, 120 warmup/600 measured frames. The longer-range run fails the existing mean-lights-per-tile ceiling (502.5 versus 360); GPU timing ceilings pass. Do not weaken that occupancy budget to hide the increased coverage. This synthetic comparison does not cover every new 60 m fixture bound or prove live-venue performance. Raw runs: `/tmp/luma-tail-baseline-512-isolated.json` and `/tmp/luma-tail-perf-512-isolated.json`.
+Sun cascades are keyed by every opaque draw they rasterise, fixture bodies
+included, so a moved head does not leave its old sun shadow. The cascade
+normal offset follows each surface's N·L, `0.002 + (r + 1.5) · texel · sin θ`,
+and the depth bias is in metres along the light, `0.002 + texel / 2`. Limit: in
+the second cascade (from 12 m, about 4 cm texels), the 3×3 filter still lets a
+little sun into the first 10 cm under a flat occluder.
 
-Validation: 117 renderer unit tests and 7 transport integration tests pass. Deterministic image baselines updated for source extinction and taper changes; overlap energy, gobo attenuation, occlusion, invalid-input and temporal-history checks remain. The six-fixture reference was inspected at `/tmp/luma-tail-review/stage-review-1.370.png`. Actual venue visual acceptance and real indirect transport remain outstanding.
+## Haze
 
-## Experimental shared geometry visibility
+At High and Medium the haze is marched by compute kernels, and every live
+frame and capture is deterministic. `Renderer::render_reference` is the
+exhaustive per-ray reference.
 
-`RenderSettings::geometry_shadows` (default off) enables **experimental geometry shadows**. The app has no control for it. `profile-volumetrics` turns it on with `LUMA_GEOMETRY_SHADOWS=1`. Fixture shadows must also be enabled. This is a software visibility prototype, not MegaLights, hardware ray tracing, or GI.
+- **Shared far field.** Each beam's light past its handover is shared in a
+  camera-relative radial grid (`fog_grid.rs`, `shaders/haze_grid.wgsl`,
+  `shaders/haze_integrate.wgsl`): 8-pixel cells at High and 16 at Medium, and
+  128 quadratic distance slices. Every contributing light is evaluated in each
+  cell; there is no light selection. A parallel prefix scan integrates density
+  and camera extinction along each column, and a haze pixel reads its
+  integrated lighting at scene depth.
+- **Source region.** A beam stays per-pixel from its source to its handover
+  (`fog_grid::handover`) and is the grid's past 10/7 of that. The two weights
+  sum to one; this is not a shorter beam range. The light index carries a
+  second mask plane for these source regions.
+- **Handover.** The grid blurs a beam by about a cell, so it takes a beam
+  where the steepest part of its profile would need 0.55 m to fall from the
+  peak to nothing: the softness of a 60° cell at 1.75 m (`SOURCE_INNER`), the
+  case the distances were measured on. A 50° bar or par is handed over at
+  1.75 m like a wash, a 20° spot at about 8 m and an 8° beam at about 21 m.
+  There is no beam angle at which a light changes path: a rule by angle sent
+  a 50° ten-lamp bar down the per-pixel path whole, at over ten times the
+  cost of a 60° one.
+- **Gobos, and beams still sharp at their range,** are integrated per ray.
+- **Plain-beam piece cap.** Below cloudiness 0.5, `lit_interval` uses at most
+  8 pieces (Medium: 4), never fewer than the equiangular criterion needs
+  (`quadrature_pieces`).
+- **Memory.** Grid textures are allocated on first use and retained across
+  blackouts.
 
-`visibility.rs` builds a median-split, stackless triangle BVH over opaque stage geometry. It is retained across light/camera changes and rebuilt when stage mesh identities or transforms change. Fixture housings are excluded, matching the existing fixture shadow caster policy; transparent objects do not cast. The surface and haze shaders share the same buffer and ray/triangle traversal. Existing atlas residents keep their shadow maps; other lights query the BVH instead of being assumed unoccluded. Shadow mode changes invalidate temporal history.
+The grid is a quality and performance tradeoff, not exact transport: grid
+interpolation and finite depth quadrature are approximations. Near-source
+detail, gobo transport, surface lights and shadow-map resolution are
+preserved.
 
-The initial full-sample prototype cost 21.47 ms GPU p95 in a 20-frame dense-scene smoke run. The bounded version uses up to two MIS integration samples per fallback beam, with existing temporal reconstruction; map-backed beams retain their normal sampling. An eight-sample comparison, capped by the scene's haze step count, was selectable then (the switch was removed on 2026-10-24). Lower sampling introduces visibly more volume grain. Surface visibility remains evaluated for each contributing light; there is no stochastic light selection or surface denoiser yet. The next performance work must address that repeated visibility cost, not shorten the accepted beam reach.
-
-Release RTX 5090 / Vulkan, 1080p, half-resolution haze, 120 lights, 2,057 opaque draws, 120 warmup and 600 measured frames, live app suspended:
-
-| Mode | GPU total p95 | Surface pass p95 | Volume pass p95 |
-|---|---:|---:|---:|
-| Atlas only | 7.20 ms | 4.89 ms | 2.71 ms |
-| Atlas + BVH, two fallback samples | 11.71 ms | 6.19 ms | 6.14 ms |
-
-Pass percentiles are not additive. Raw results: `/tmp/luma-bvh-dense-off.json`, `/tmp/luma-bvh-dense-on.json`. This standard case uses synthetic 8 m bounds. A separate 24 m smoke run (20 measured frames) gave 12.39 ms GPU p95 but failed the existing occupancy ceiling: 111.6 mean lights/tile versus 100. It is not a full venue-performance claim. Raw: `/tmp/luma-bvh-dense-24m-smoke.json`.
-
-The rendered regression puts 16 brighter lights facing away from the stage and a seventeenth aimed through a blocker. It verifies the seventeenth has no atlas slot, loses surface and haze energy with BVH enabled, and updates after moving the blocker. Existing deterministic transport baselines remain unchanged when the experiment is disabled. The 24-fixture visual comparison is at `/tmp/luma-visibility-on.png` and `/tmp/luma-visibility-review/visibility-review-1.370.png` (off). Neither image represents the user's actual venue.
-
-Remaining: hardware/software traversal comparison, scalable sampling of lights, bounded shared volume lighting, geometry-aware indirect lighting, memory/build budgets for very large stage meshes, and strobe/blackout visual acceptance in the real venue. This prototype does not claim to meet the minimal-impact goal; it is switchable for evaluation.
-
-## Gasworks harness rejection
-
-The user reported about 5 FPS with the experiment enabled. The desktop app is now closed; renderer investigations use the offscreen harness. The live telemetry recorded a sampled 180.34 ms GPU frame (130.84 ms volume, 49.48 ms scene), 450 lit cones, and 389.9 mean lights/tile at 1146×1051. CPU submission was about 1.03 ms. This is a GPU visibility cost failure, not evidence of a CPU BVH rebuild bottleneck.
-
-The read-only `luma-cli render` CLI can now export `--format catalogue`. It uses the same solved venue graph and fixture definitions as GPUI, with no session startup, migrations, or library writes. `profile-volumetrics --catalogue=PATH` loads that snapshot and renders a fixed full-output red rig with a fitted quarter-right camera. Live resolution settings are pinned to half-resolution haze, eight normal samples and two experimental fallback samples. This deliberately does not claim to replay the user's score or camera.
-
-Gasworks Park contains 92 patched fixtures and 83 resolved stage pieces. Full output resolves to 470 cones and 215,059 opaque triangles. Release Vulkan / RTX 5090, 1146×1051, 30 warmup + 120 measured frames per mode:
-
-| Mode | GPU total p95 |
-|---|---:|
-| Experiment off | 24.30 ms |
-| Experiment on | 413.69 ms |
-| Experiment on, surface lighting only | 127.09 ms |
-| Experiment on, haze lighting only | 294.37 ms |
-
-The full mode is 17.0× slower. Isolation controls retain geometry/depth and environment rendering; they disable fixture surface contribution or the haze pass respectively. Percentiles from separate runs are not additive. The generic 450-light dense scene measured 35.63→45.15 ms and the zoomed generic scene 19.88→23.42 ms, despite having 776,699 triangles: those synthetic shapes and light distributions did not predict Gasworks traversal cost. Their longer-range runs also exceeded existing occupancy budgets; those limits were not relaxed.
-
-**Reject the current exhaustive software visibility approach for interactive use.** It still traces a separate world-triangle query for every contributing fallback light and integration sample. Sharing the acceleration structure alone does not bound that workload. Next experiments need bounded many-light visibility sampling/shared volumetric queries, a traversal strategy evaluated against this venue, and motion/blackout validation before any desktop relaunch. Lowering the fallback beam sample count alone did not meet the goal. GI remains unimplemented.
-
-Reproduction (from the repository root; app remains closed):
-
-```sh
-cargo run --manifest-path backend/Cargo.toml --bin luma-cli -- render --venue-id 346ce3ae-84e9-4c4f-916b-03bf4d115365 --output /tmp/gasworks.json --format catalogue --width 1146 --height 1051
-LUMA_GEOMETRY_SHADOWS=0 cargo run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
-LUMA_GEOMETRY_SHADOWS=1 cargo run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
-```
-
-Add `--surface-only` or `--haze-only` for isolation; `--image=/tmp/capture.png` captures the measured setup after the timing loop. Synthetic modes also accept `--cones=450`, so shadow workloads are no longer accidentally fixed at 120 emitters. Raw JSON, the saved catalogue, and inspected images are under `/tmp/luma-harness-visibility/`.
-
-
-## Gasworks retained shadows and sampled fog
-
-The rejected per-sample software BVH is now a reference path, enabled only by
-renderer tests, with geometry shadows. Fixture shadows are on by
-default (`fixture_shadows: true`). Production retains a 256-square depth map for every active emitter,
-growing in powers of two to 512 layers across two 256-layer texture arrays.
-Cache identity is projection plus opaque geometry; colour, intensity, blackout,
-and light-list reordering do not redraw maps. A stage edit invalidates affected
-cache identity. The complete 512-layer allocation costs 128 MiB; small rigs
-allocate less. Surface lights continue evaluating all indexed contributors.
-
-Caching alone left Gasworks around 28.8 ms GPU p95 with eight fog samples, or
-19.5 ms after reducing broad washes to four samples. Neither met the requested
-budget. The reduced integration budget was removed. Dense rigs now use weighted
-reservoir selection in groups of eight broad, open-wash candidates. An analytic,
-unshadowed equiangular estimate determines selection probability; the selected
-light retains all eight integration samples and its own cached visibility. The
-inverse probability preserves expected radiance before reconstruction. Narrow
-beams and gobos remain exhaustively integrated. A switch disabled
-selection for an exhaustive comparison; rigs with at most 128 emitters bypass it.
-(Superseded 2026-10-24: reservoir selection, its sampled target and the temporal
-resolve are gone; every live frame and capture is deterministic compute haze, see
-`haze-lit-interval-cache.md`.)
-
-A separate fog render target carries sampled washes. A depth-guided 3×3 resolve
-filters this target only, leaving narrow beams, gobos and ambient wisps outside
-spatial reconstruction. This is a small amount of spatial smoothing, not exact
-integration. It substantially reduces fresh-frame grain without relying on a
-long history. Colour/dimmer cues and caster edits now reject stale history as
-well as changes in optics and camera. Individual shadow maps retain their
-existing resolution; this is not ray-traced GI, and GI is still unimplemented.
-
-RTX 5090 / Vulkan, saved Gasworks Park, 470 emitters, 215,059 opaque triangles,
-1146×1051, half-resolution fog, eight integration samples, 60 warmup + 600
-measured frames, app closed:
-
-| Workload | GPU total p95 | CPU encode/submit p95 | Maximum maps redrawn |
-|---|---:|---:|---:|
-| Fixed rig | 12.47 ms | 0.98 ms | 0 |
-| 32 directions moving | 12.84 ms | 1.89 ms | 32 |
-| All 470 directions moving (stress) | 15.91 ms | 13.07 ms | 470 |
-| Alternating blackout | 12.49 ms | see JSON | 0 |
-
-These are renderer timings, not application FPS. The fixed and 32-moving runs
-leave about 4 ms of the 16.67 ms / 60 FPS budget for other GPU work. The forced
-all-moving case does not have that headroom and still has a substantial CPU
-shadow-submission cost. Initial allocation/preparation of all 470 maps costs
-about 242 ms CPU: steady-state numbers do not describe venue-load latency.
-
-At time zero, a 16-subframe capture differs from exhaustive cached lighting by
-mean absolute RGB [0.372, 0.184, 0.161] / 255, and from the eight-sample triangle
-visibility reference by [0.492, 0.208, 0.178] / 255. These global means cannot
-certify individual shadow edges or animation. Fresh one-subframe moving-light
-images were inspected too; some grain remains. Surface shadow resolution and
-spatial reconstruction remain approximations. No claim of Depence/Unreal parity.
-
-Reproduce after exporting the same read-only catalogue described above:
-
-```sh
-cargo build --manifest-path gpui/Cargo.toml -p luma-render --release --bin profile-volumetrics
-cd gpui
-LUMA_GEOMETRY_SHADOWS=1 ./target/release/profile-volumetrics --catalogue=/tmp/luma-harness-visibility/gasworks.json --warmup-frames=60 --measured-frames=600
-```
-
-Add `--moving-cones=32`, `--moving-cones=470`, or `--blackout` for the stress cases.
-`--image=PATH` writes a standalone 16-subframe image after timing;
-`--image-subframes=1` checks fresh-frame quality instead of hiding it behind
-accumulation. These cases rotate cone directions only, not fixture housing,
-and do not replay a score.
-
-Validation: 121 renderer unit tests and seven volumetric transport tests pass,
-including reservoir colour/energy, partial groups, cue history reset, cache
-blackout/reordering, and visibility beyond layer 256. Workspace all-targets
-check and native app build pass; the app was not launched. Broader checks retain
-two environment hash failures documented on 2026-08-31, a textured-PBR capture
-mismatch, and a venue portal-builder refusal. Those expected images and the
-unrelated builder were not changed to make the suite green.
-
-
-## Shared broad-wash grid (current GPUI live default)
-
-Dense shadowed live rigs now share distant broad-wash lighting in a camera-relative
-radial grid. Gasworks uses 72×66×128 cells: 16 full-resolution pixels across each
-column, quadratic distance slices, and independently jittered lighting samples.
-Each 64-lane workgroup evaluates lights with adjacent lanes reading adjacent
-records. Four disjoint weighted reservoirs select visibility queries; inverse
-selection probability preserves expected incident radiance at the sampled point.
-A parallel prefix scan integrates advected density and camera extinction along
-each column. A haze pixel then reads its integrated lighting at scene depth.
-
-The source region remains analytic: full contribution inside two metres, smoothly
-handing off to the grid between two and four metres. These weights sum to one;
-this is not a shorter beam range. Narrow beams and gobos keep their full per-ray,
-eight-sample integration. The unified light index now has a second mask plane
-for analytic source regions, using the same tiles and sorted ids. Rejecting these
-candidates once per tile removed a large amount of repeated per-pixel work.
-
-The two grid textures cost about 9.32 MiB at 1146×1051; the additional mask plane
-costs 1.16 MiB. Grid textures are allocated only when first used and retained
-across blackouts. Small rigs, haze-off frames, and frames without all-fixture
-shadows bypass grid computation. A switch selected the previous per-ray
-live method for A/B measurements. Standalone captures accumulating multiple
-subframes retain that method for converged spatial detail. The wide-group switch
-remained the exhaustive per-ray reference and disabled the grid too.
-(Superseded 2026-10-24: the grid runs on every hazy frame, captures included,
-with 8-pixel cells on every platform (16 at medium quality); the switches are gone and the per-ray
-method is `Renderer::render_reference` alone.)
-
-Which beams the grid takes, and from where, follows how soft each beam is
-(`fog_grid::handover`), not a beam-angle cut-off. The grid blurs a beam by about
-a cell, so it takes a beam where the steepest part of its profile would need
-0.55 m to fall from the peak to nothing: the softness of a 60° cell at 1.75 m,
-the case the source distances were measured on. A 50° bar or par is handed over
-at 1.75 m like a wash, a 20° spot at about 8 m, an 8° beam at about 21 m, and a
-gobo never. The earlier rule sent every beam under about 56° down the per-pixel
-path whole: a 50° ten-lamp bar cost over ten times a 60° one.
-
-This is a live quality/performance tradeoff, not exact transport: fresh frames
-have less grain, but settled distant fog can be slightly softer than the per-ray
-reference. Grid interpolation, finite depth quadrature, and shadow reservoirs
-remain approximations. Near-source detail, gobo transport, surface lights and
-shadow-map resolution are preserved. **GI is still unimplemented.** Camera and
-moving-light history currently reset wholesale; motion-aware reprojection and
-CPU submission for hundreds of moving shadow maps remain separate bottlenecks.
-
-Validation adds a conservative near-mask comparison, shared-volume caster-motion
-coverage, and colour/blackout/restore history checks. All 122 renderer unit tests
-and eight transport tests pass; the existing transport goldens remain unchanged.
-Workspace all-targets checking passes. Broader unrelated failures listed in the
-previous section were not addressed by this change.
-
-The harness now accepts `--image-live --image-subframes=1` to save a frame with
-live history retained; `--image-subframes=1` alone still captures a fresh frame.
-Performance figures below use sequential release runs with the app and game
-closed, 60 warmup + 600 measured frames, the same exported Gasworks catalogue,
-1146×1051, half-resolution haze, and eight analytic integration samples. Moving
-cases rotate emitter directions, not fixture housings, and are not score replays.
-GPU timings are renderer timings, not application FPS.
-
-
-Quality checks use a fresh time-zero frame and the same 16-subframe exhaustive
-cached-shadow reference. Mean absolute display RGB error (averaged across RGB,
-in 8-bit values) is 0.886→0.758 for the fixed rig and 0.884→0.755 with 32 directions
-moving, about 15% lower. These global metrics do not certify local shadow edges.
-With live history settled at 149/60 seconds, the mean is 0.323→0.468: the grid is
-not an improvement in converged accuracy. The default 16-subframe standalone
-capture remains byte-identical to the previous accepted capture (RGBA SHA-256
-`de0bebe56604ac668eb44ffabf305b19899a62d1325cbaf810ee9e0ef11ccf98`).
-
-The review images were fresh frames from the full-red harness cue, not a
-score replay or automatic hash goldens.
-
-
-Final rebuilt-binary comparison (RTX 5090 / Vulkan, driver 595.84):
-
-| Workload | Previous GPU p95 | Shared-grid GPU p95 | Shared-grid CPU p95 |
-|---|---:|---:|---:|
-| Fixed rig | 12.50 ms | 8.60 ms | 0.98 ms |
-| 32 directions moving | 12.86 ms | 9.04 ms | 2.06 ms |
-| All 470 directions moving | 15.76 ms | 11.91 ms | 12.22 ms |
-| Alternating blackout | 12.40 ms | 8.59 ms | 0.92 ms |
-
-Fixed-rig GPU time fell 31.2%, with the volumetric span falling 45.3%
-(8.56→4.68 ms). All fixture shadow maps remain resident; static and blackout
-runs redrew zero maps, moving cases redrew at most 32/470. The all-moving case
-still spends 12.22 ms CPU p95 submitting shadows, which limits application
-headroom independently of the faster GPU work.
-
-Both native debug and release apps were rebuilt on `agent-code-execution-linux`;
-neither was launched.
+Low marches nothing and draws each beam in closed form (see "Quality levels").
 
 ## Sky visibility and ambient occlusion
 
-Status: implemented 2026-09-23, not yet accepted on a real venue.
-
-The sky probe used to light every surface as if it stood in the open over sunlit
-ground. Under a deck, the legs and the underside got the full sky and the full
-ground bounce. The ambient terms (house ambient, probe diffuse and probe
-specular) are now scaled by a per-pixel visibility texture
-(`sky_visibility.rs`, `shaders/ambient_occlusion.wgsl`). Sun and fixture light
-are not changed; they have their own shadows.
+The ambient terms (house ambient, probe diffuse and probe specular) are scaled
+by a per-pixel visibility texture (`sky_visibility.rs`,
+`shaders/ambient_occlusion.wgsl`), so the legs and underside of a deck do not
+get the full sky and the full ground bounce. Sun and fixture light are not
+changed; they have their own shadows.
 
 - **Height field (outdoors).** The stage is rendered from straight above and
   from straight below, without the ground plane and without fixture bodies.
@@ -317,9 +149,8 @@ are not changed; they have their own shadows.
   a band of elevations. The rest is weighted by the cosine lobe and scales the
   sky part of the probe irradiance. The point is lifted one texel plus 2 cm
   along its normal before the march; after that the height compares use a
-  5 mm margin that counts a wall touching an overhang as under it. (A 2 cm
-  margin the other way lit the top of every beam under a deck as open sky.)
-  A surface facing straight down has no sky lobe and gets zero.
+  5 mm margin that counts a wall touching an overhang as under it. A surface
+  facing straight down has no sky lobe and gets zero.
 - **Ground bounce (outdoors).** The probe's lower hemisphere is split off as
   `E(-Z) (1 - n.z) / 2`. It is scaled by the sun and sky visibility of the
   ground under the point. That comes from a map at twice the field texel
@@ -354,22 +185,14 @@ Limits:
   is evaluated per pixel, so MSAA edge samples get their pixel's value.
 - Indoors only GTAO applies. A roof is not a reason to darken house ambient.
 
-The sun cascade normal offset now follows each surface's N·L, not the sun's
-elevation: `0.002 + (r + 1.5) · texel · sin θ`. At high sun this removed the
-acne bands on lit walls (shadow factor 0.6–0.95 before, 1.0 after). Sun
-cascades are keyed by every opaque draw they rasterise, including fixture
-bodies, so a moved head no longer leaves its old sun shadow.
-
 ## Camera look: exposure, tone curve, glare
-
-Status: implemented 2026-09-23 on `agent/bright`, awaiting sign-off.
 
 `RenderSettings::look` (`scene_desc::Look`) holds the tone curve, the
 exposure and the glare. `Look::NEUTRAL` (fixed exposure, AgX, no glare) keeps
-the single composite pass, so every tracked image is unchanged: the 19
-contract frames render byte-identical to the commit before this work. The
-live stage defaults to `Look::STAGE` and persists the look as the device
-setting `stage_look`. Any other look runs `post.rs`:
+the single composite pass, and is the look the tracked images are captured
+with. The live stage defaults to `Look::STAGE` and persists the look as the
+device setting `stage_look`. Any look that needs more than the composite pass
+runs `post.rs`:
 
 - **Metering.** 128-bin log histogram of a quarter of the pixels,
   centre-weighted. The mean of the 60th–98th percentile of lit pixels is
@@ -377,24 +200,24 @@ setting `stage_look`. Any other look runs `post.rs`:
   compensation is added. Near-black pixels are not metered and a frame with
   almost nothing lit holds the previous exposure. Adaptation: 3 /s closing,
   1.2 /s opening; a standalone capture snaps.
-- **Glare** (reworked 2026-09-24 on `agent/glare-real`). Exposed light above
-  2× diffuse white (soft knee) is area-averaged into a padded FFT grid and
-  convolved with a glare kernel by FFT (`post_glare.wgsl`, wgpu compute), as
-  Unreal's convolution bloom does. The whole frame is convolved, so an
-  extended or oddly shaped bright area glares as its shape does (Ritschel et
-  al. 2009); there is no sprite per lens and no bloom pyramid. The grid is
-  1024 × 512 at High and 512 × 256 at Low; the frame fills at most half of
-  each side (455 × 256 texels for 16:9 at High, about 4 px each at 1080p and
-  5.6 px at 1440p), so the kernel reaches across the whole frame without the
-  cyclic convolution folding it back. 1024 complex texels is also the most
-  one row transform holds in the default 16 KiB of workgroup memory. Both
-  inputs are real, so rows keep only their non-negative frequencies; red and
-  green share one complex transform. A frame is three dispatches (hot pixels
-  + row FFT, column FFT × kernel spectrum × inverse column FFT, inverse row
-  FFT into the glare texture). The kernel's spectrum is built again only when
-  the style, the diffraction amount, or the grid's focal length or padding
-  (field of view, aspect) change by more than 1%: 15 ms of CPU on 32 cores,
-  about 85 ms on one, plus two dispatches.
+- **Glare.** Exposed light above 2× diffuse white (soft knee) is
+  area-averaged into a padded FFT grid and convolved with a glare kernel by
+  FFT (`post_glare.wgsl`, wgpu compute), as Unreal's convolution bloom does.
+  The whole frame is convolved, so an extended or oddly shaped bright area
+  glares as its shape does (Ritschel et al. 2009); there is no sprite per
+  lens and no bloom pyramid. The grid is 1024 × 512 at High and 512 × 256 at
+  Medium and Low; the frame fills at most half of each side (455 × 256 texels
+  for 16:9 at High, about 4 px each at 1080p and 5.6 px at 1440p), so the
+  kernel reaches across the whole frame without the cyclic convolution
+  folding it back. 1024 complex texels is also the most one row transform
+  holds in the default 16 KiB of workgroup memory. Both inputs are real, so
+  rows keep only their non-negative frequencies; red and green share one
+  complex transform. A frame is three dispatches (hot pixels + row FFT,
+  column FFT × kernel spectrum × inverse column FFT, inverse row FFT into the
+  glare texture). The kernel's spectrum is built again only when the style,
+  the diffraction amount, or the grid's focal length or padding (field of
+  view, aspect) change by more than 1%: 15 ms of CPU on 32 cores, about 85 ms
+  on one, plus two dispatches.
 
   The kernel (`psf.rs`) is energy per texel as a fraction of the source's
   light, converted from angle by the camera's field of view:
@@ -430,166 +253,81 @@ setting `stage_look`. Any other look runs `post.rs`:
   `strength` scales the glare, which is otherwise physical. The lens is
   drawn at about 600× diffuse white (`LENS_GAIN`), nearer a real lamp's
   thousands, so lenses glare and reflections on truss, a few times white, do
-  not. An earlier gain of 10 on the glare itself made every such reflection
-  bloom like a lens. `star` weights the pattern; 0.5 is physical. The Kawase star
-  streaks are gone: star is now a hexagonal aperture's six diffraction rays.
-  Added after the tone curve, saturating at the display's white.
+  not. `star` weights the pattern; 0.5 is physical. Star is a hexagonal
+  aperture's six diffraction rays. The glare is added after the tone curve,
+  saturating at the display's white.
 
   Bake: 85 ms on 32 cores (190 ms on 4, 650 ms on 1), off the startup
   thread; the first frame with glare waits for it. GPU cost, RTX 5090 /
   Vulkan, Get Lucky at Gasworks at 146 s, min of five alternating 150-frame
-  p50s, against glare off: 1920×1080 +0.11 ms (the old pyramid and sprites
-  +0.03–0.05); 2560×1440 +0.12–0.13 ms (old +0.03–0.12); Low +0.05 ms (old
-  +0.08). The cost is set by the grid, not the frame, apart from the
-  hot-pixel average.
-- **Tone curves.** AgX (three's), AgX with Blender's Punchy look (default),
-  and Narkowicz's ACES fit. HDR expansion above the 0.6 knee applies to each.
+  p50s, against glare off: 1920×1080 +0.11 ms; 2560×1440 +0.12–0.13 ms; the
+  half-size grid +0.05 ms. The cost is set by the grid, not the frame, apart
+  from the hot-pixel average.
+- **Tone curves.** AgX (three's), AgX with Blender's Punchy look (the stage
+  default), and Narkowicz's ACES fit. HDR expansion above the 0.6 knee applies
+  to each.
 
-Cost, 1920×1080, RTX 5090, Get Lucky at Gasworks (140 cones), min of three
-100-frame p50s, another GPU process running (so indicative only): neutral
-5.137 ms; tonemap chain +0.02 ms; metering +0.02 ms; bloom +0.10 ms; full
-stage look with lens glow and star +0.19 ms (measured before the lens glow
-was removed: a fixture's glowing emitters are its source, and a disc drawn
-over them was a second one).
+## Quality levels
 
-Glare styles before the 2026-09-24 rework, same setup at 146 s with 162
-cones, no other GPU load, min of three 100-frame p50s: neutral 8.381 ms;
-bloom +0.07; iris +0.12; eye +0.14; star +0.11.
+`RenderSettings::quality` is `High`, `Medium` or `Low`. The View popover's
+Viewport section sets it; it is the `stage_quality` device setting
+(`"high" | "medium" | "low"`). A machine that had set the older
+`stage_low_quality` flag reads as `Medium` until a level is written. The
+renderer turns the level into a `QualityBudget` (`quality.rs`), the one table
+every pass reads.
 
-`profile-volumetrics --catalogue` now renders at the venue's own haze
-density (as the stage does). Every measurement above was taken at a fixed
-0.8; add `--haze=0.8` to the reproduction commands to compare against them.
-
-## Quality levels and beam cost (2026-09-23)
-
-`RenderSettings::quality` is `High` (the reference) or `Low` (a laptop GPU).
-The View popover's Viewport section sets it; it is the `stage_low_quality`
-device setting. The renderer turns it into a `QualityBudget` (`quality.rs`, since 2026-11-08 the one table every pass reads; before, `gpu/encode.rs`).
-(Since 2026-11-08 that `Low` is `Medium`, and a new `Low` marches nothing; see
-"Three levels" below.)
-
-Both levels:
-
-- **Wide beams at half resolution.** On the live fragment grid path at native
-  haze resolution, beams wider than 35° (no gobo) run in a half-resolution
-  pass and are added into the native haze target with the composite's
-  depth-aware bilateral upsample (`shaders/haze_wide.wgsl`). The route is a
-  pipeline constant: as a uniform branch it cost the unsplit pass 25%.
-  A switch kept every beam native. Not on the Metal compute path.
-  (Removed 2026-10-24 with the fragment grid path.)
-- **Plain-beam piece cap.** Below cloudiness 0.5, `lit_interval` uses at most
-  8 pieces (Low: 4), never fewer than the equiangular criterion needs.
-- **Shadow redraw budget.** A moved head keeps its slot and its last map; at
-  most 64 moved maps (Low: 16) are redrawn per frame, by priority × frames
-  waited. New maps always draw.
-- **Dark cones** (intensity × brightest channel ≤ 1e-4) get no shadow map,
-  light-index entry or beam work.
-
-Low also: haze at 0.5, 4 gobo samples, 1 MP pixel budget (with a
-frame-time-driven share of it, floor a quarter), MSAA 1×, 16 px fog cells,
-twice the shadow-walk footprint and half its steps, and twice again while the
-camera moves.
-
-Saved Get Lucky at Gasworks, t = 30 s, RTX 5090 / Vulkan, 1920×1080 output
-(Low renders 1333×750), 7 static poses plus a 1.5°/frame orbit, per-pose
-minimum of 2–3 alternating runs of 24-frame medians:
-
-| | GPU mean (static) | GPU max | orbit GPU | CPU submit |
-|---|---:|---:|---:|---:|
-| High before | 15.7 ms | 24.9 ms | 14.3 ms | 1.4 ms |
-| High after | 11.8 ms | 15.9 ms | 11.5 ms | 1.4 ms |
-| Low | 6.1 ms | 8.3 ms | 4.4 ms | 1.3 ms |
-| All 418 heads moving, before | 18.6 ms | 31.0 ms | 16.7 ms | 7.6 ms |
-| All heads moving, High after | 12.1 ms | 17.3 ms | 11.7 ms | 3.1 ms |
-
-High after differs from before by a mean of 0.03–0.06 / 255, up to 67 on
-under 0.05% of pixels, at wide washes' hot cores and silhouettes. The
-`truss-shadow-near` transport case measures RMSE 3.5 with wide routing
-against 0.9 without: a truss member across the lens leaves a one-pixel halo.
-`volumetric_transport` now measures routing separately from the integrator.
-The cascade depth bias is in metres along the light, `0.002 + texel / 2`, not
-a fixed 0.0015 in NDC. The cascade depth range runs 25 m past each side of the
-view slice, so the NDC bias was 10–30 cm of light leak. The sun lit beam sides
-deep under a deck, with a stepped edge where the leak ran out, and props on a
-table had no sun shadow under them. The sky-visibility work made this visible,
-because it darkened everything else under the deck. Limit: in the second
-cascade (from 12 m, about 4 cm texels), the 3×3 filter still lets a little sun
-into the first 10 cm under a flat occluder (sun visibility 0.23 at 5 cm under a
-plate from 14 m, 40° sun).
-
-## Three levels (2026-11-08)
-
-`Quality` is `High`, `Medium` or `Low`, stored as the `stage_quality` device
-setting (`"high" | "medium" | "low"`). A machine that had set the old
-`stage_low_quality` flag reads as `Medium` until a level is written.
-
-- **Medium** is the old `Low`, unchanged: every budget above.
-- **Low** keeps Medium's budgets and marches no haze
-  (`QualityBudget::marched`). No fog grid, medium
-  cache, lit-interval cache, compaction or haze kernel runs, and no sun
-  shafts or haze glow. One compute pass, `shaders/haze_analytic.wgsl`, writes
-  the haze target the composite already reads, at a quarter of the output
-  resolution. For each light in the pixel's light-index list it integrates
-  single scattering through uniform haze in closed form: in the equiangular
-  angle about the cone's virtual apex, `dt / d²` is exactly `dθ / h`, so the
-  inverse-square term integrates to `(θ₁ − θ₀) / h` over the span
-  `beam_span` clips to the cone, and a fixed three-point Gauss rule in `θ`
-  carries the slowly varying rest (angular profile, phase, range taper,
-  camera and light transmittance at the mean extinction, the medium's
-  envelope). Low draws no haze shadows, no gobos in the beam and no cloud
-  density; the medium uniform's cloudiness is zero, so surfaces and the sky
-  see the same uniform haze. Surface lighting, fixture shadow maps on
-  surfaces and their hierarchy are unchanged. (Changed the same day; see
-  "Low without fixture shadows" below.)
-
-Gasworks Park rig with its 34 movers lit over 300 dimmed strip cells (344
-cones), outdoor at night, haze 0.12, 2227×1391 output at every level (the
-app's 1 MP pixel budget for Medium and Low is not applied here), M-series
-Mac, median GPU frame time of 280 frames per level, levels interleaved in
-one run:
-
-| | static wide | static side | orbiting wide | orbiting side |
-|---|---:|---:|---:|---:|
-| High | 36.5 ms | 35.9 ms | 42.0 ms | 46.7 ms |
-| Medium | 18.6 ms | 20.6 ms | 22.5 ms | 22.6 ms |
-| Low | 14.9 ms | 17.0 ms | 17.8 ms | 17.0 ms |
-| Low, no haze | 10.4 ms | 13.2 ms | 13.5 ms | 12.4 ms |
-
-The analytic pass costs about 4.3 ms of Low's frame here; its cost is per
-(pixel, light) pair whose ray crosses the cone, so a rig of many wide washes
-seen face-on is its worst case. At half resolution it cost about 15 ms on
-the same frame, which is why Low draws it at a quarter.
-
-### Low without fixture shadows (2026-11-08)
-
-After the march, most of Low's frame was surface lighting, the fixture
-shadow maps and ambient visibility. Low now also:
-
-- **Draws no fixture shadows** (`QualityBudget::fixture_shadows`). No shadow
-  slot is assigned, so no map is drawn, redrawn or reduced into its
-  hierarchy, the shadow atlas is not allocated, and surfaces take every
-  fixture's light unshadowed. A beam aimed into a deck lights the floor under
-  it. `Frame::fixture_shadows` can still turn them off at any level; the
-  budget can only turn them off too.
-- **Estimates ambient visibility at half resolution**
-  (`QualityBudget::ambient_divisor`). GTAO, the outdoor sky and ground
-  visibility and the 5×5 denoise run once per 2×2 block, at the block's
-  first pixel; the scene pass reads the texel covering its pixel. Full
-  resolution it cost about 3 ms of Low's 12 ms here; at half, under 1 ms.
+- **High** is the reference picture. Its live viewport renders fewer pixels,
+  never under the reduced levels' 1 MP, when the GPU's time keeps its frames
+  from 30 a second (`DynamicBudget` in the app's `render_scale.rs`); the
+  reduced levels hold 60 and 120 and have no pixels to give.
+- **Medium** is a laptop GPU's budget: haze at half resolution at most, 4 gobo
+  samples at most, a 1 MP pixel budget, MSAA 1×, 16 px fog cells, a plain-beam cap of 4 pieces, 16
+  shadow redraws a frame, twice the shadow-walk footprint and half its steps,
+  and twice again while the camera moves. It also runs no local reflection
+  probes, coarser sun shafts, clouds and haze glow, the half-size glare grid,
+  and no floor detail.
+- **Low** keeps Medium's budgets and:
+  - **Marches no haze** (`QualityBudget::marched`). No fog grid, medium
+    cache, lit-interval cache, compaction or haze kernel runs, and there are
+    no sun shafts and no haze glow. One compute pass,
+    `shaders/haze_analytic.wgsl`, writes the haze target the composite
+    already reads, at a quarter of the output resolution. For each light in
+    the pixel's light-index list it integrates single scattering through
+    uniform haze in closed form: in the equiangular angle about the cone's
+    virtual apex, `dt / d²` is exactly `dθ / h`, so the inverse-square term
+    integrates to `(θ₁ − θ₀) / h` over the span `beam_span` clips to the
+    cone, and a fixed three-point Gauss rule in `θ` carries the slowly
+    varying rest (angular profile, phase, range taper, camera and light
+    transmittance at the mean extinction, the medium's envelope). Low draws
+    no haze shadows, no gobos in the beam and no cloud density; the medium
+    uniform's cloudiness is zero, so surfaces and the sky see the same
+    uniform haze.
+  - **Draws no fixture shadows** (`QualityBudget::fixture_shadows`). No shadow
+    slot is assigned, so no map is drawn, redrawn or reduced into its
+    hierarchy, the shadow atlas is not allocated, and surfaces take every
+    fixture's light unshadowed. A beam aimed into a deck lights the floor
+    under it. `Frame::fixture_shadows` can still turn them off at any level;
+    the budget can only turn them off too.
+  - **Estimates ambient visibility at half resolution**
+    (`QualityBudget::ambient_divisor`). GTAO, the outdoor sky and ground
+    visibility and the 5×5 denoise run once per 2×2 block, at the block's
+    first pixel; the scene pass reads the texel covering its pixel.
 
 The atmosphere's sky tables and the cloud history are keyed by the cloud
 `Budget` they use, not by `Quality`, so a switch between Medium and Low (same
 cloud budget) rebuilds nothing.
 
-Same rig, setup and method as the table above (levels interleaved in one
-run, "Low before" is the previous Low). Other GPU work on the machine made
-the static wide case noisy; its numbers are the cleanest of three runs:
+Gasworks Park rig with its 34 movers lit over 300 dimmed strip cells (344
+cones), outdoor at night, haze 0.12, 2227×1391 output at every level (the
+app's 1 MP pixel budget for Medium and Low is not applied here), M-series
+Mac, median GPU frame time of 280 frames per level, levels interleaved in
+one run. Other GPU work on the machine made the static wide case noisy; its
+numbers are the cleanest of three runs:
 
 | | static wide | static side | orbiting wide | orbiting side |
 |---|---:|---:|---:|---:|
 | High | 41.7 ms | 40.7 ms | 40.6 ms | 46.8 ms |
 | Medium | 20.6 ms | 23.0 ms | 21.0 ms | 21.5 ms |
-| Low before | 16.0 ms | 18.2 ms | 16.7 ms | 16.7 ms |
 | Low | 11.7 ms | 11.2 ms | 10.1 ms | 10.7 ms |
 
 Low's frame by pass (`LUMA_PROFILE_DETAIL=1`, brackets overlap, static):
@@ -599,29 +337,22 @@ haze-analytic about 4.7 ms (the frame with haze 0.12 against haze 0:
 0.7 ms, light index 0.6 ms, and the scene pass the rest, about 2 to 3 ms.
 Post passes are each under 0.2 ms.
 
-The analytic pass is now close to half of Low's frame, and most of it is the
-300 strip cells, which in this scene emit about 1/50 000 of a mover. Not
-drawing beams more than twelve stops under the frame's brightest cone took
-it to almost nothing, but rejected: the wide cells overlap everywhere, and
-together they are the haze's visible tone and the glow under the truss that
-Medium shows. A cull has to bound a cone's radiance along the pixel's ray,
-not compare emitted intensities, and one that keeps every visible
-contribution would keep these.
+The analytic pass's cost is per (pixel, light) pair whose ray crosses the
+cone, so a rig of many wide washes seen face-on is its worst case. At half
+resolution it cost about 15 ms on the same frame, which is why Low draws it
+at a quarter.
 
-## Haze glow (2026-10-25)
-
-Status: built on `agent/lasers`, not yet accepted on a real venue.
+## Haze glow
 
 A beam in haze is seen because the haze scatters some of its light toward the
-camera. It scatters the rest every other way, and that light lit nothing. Now
-it lights the room and the haze round the beam, for every source alike:
-fixture cones and laser beams and sheets (`haze_glow.rs`,
-`shaders/haze_glow*.wgsl`). This is not the removed ambient fill: with no
-haze there is no glow, and its light comes from where the beams actually
-scatter, not from the emitters' sum.
+camera. It scatters the rest every other way, and that light lights the room
+and the haze round the beam, for every source alike: fixture cones and laser
+beams and sheets (`haze_glow.rs`, `shaders/haze_glow*.wgsl`). With no haze
+there is no glow, and its light comes from where the beams actually scatter,
+not from the emitters' sum. It runs at High and Medium.
 
 - **Inject.** A world grid over the medium's bounds (64×64×32 at High,
-  32×32×16 at Low). Each cell holds `σ · density · E`, the power its haze
+  32×32×16 at Medium). Each cell holds `σ · density · E`, the power its haze
   scatters per cubic metre, from every cone (one shadow-map tap at the cell,
   so a cone's light stops at what it hits) and every laser beam and sheet. A
   source narrower than a cell is spread over a cell's width keeping its power,
@@ -631,21 +362,19 @@ scatter, not from the emitters' sum.
   fluence from scattering haze falls as `e^(−σr)/4πr²`; over a shell r..2r
   that is `S̄ r e^(−σr)`. Each cell steps six cones, one each way along each
   axis, out through shells r..2r, each read from the level as wide as the
-  shell is deep, out to 16 cells. One fluence grid comes out, and every
-  reader takes it in one place.
+  shell is deep. One fluence grid comes out, and every reader takes it in one
+  place.
 - **Occlusion** (`glow_occupancy.rs`). Every opaque surface but the
-  fixtures' marks 4³ sub-cells per glow cell, rasterised down the axis each
-  triangle faces most, on the CPU and only when the geometry or the grid
-  changes (about 10 ms for the laser test room). Each cell stores the share
-  of its lines along x, y and z that a marked sub-cell stops; a coarser
-  level joins two cells along the axis (stopped by either) and averages the
-  pairs beside each other, so a thin wall blocks all of a coarse cell's
-  lines across it and a deck lying flat blocks none along it. A cone takes
-  the blocking along its own axis from the cells between its cell and the
-  shell, a level finer than the shell and never its own cell, so a surface
-  does not shade its open side. A laser beam's injection stops at the first
-  marked sub-cell on its line, once it has been clear of whatever the
-  projector stands in; a merged sheet stops where its middle does.
+  fixtures' marks 4³ sub-cells per glow cell, on the CPU and only when the
+  geometry or the grid changes. Each cell stores the share of its lines along
+  x, y and z that a marked sub-cell stops; a coarser level joins two cells
+  along the axis (stopped by either) and averages the pairs beside each
+  other, so a thin wall blocks all of a coarse cell's lines across it and a
+  deck lying flat blocks none along it. A cone takes the blocking along its
+  own axis from the cells between its cell and the shell, a level finer than
+  the shell and never its own cell, so a surface does not shade its open
+  side. A laser beam's injection stops at the first marked sub-cell on its
+  line; a merged sheet stops where its middle does.
 - **Use.** Surfaces take a quarter of the fluence as irradiance, read as a
   cubic B-spline in eight filtered taps, so the cells do not show as
   creases where the glow fades; the composite marches 12 steps of the
@@ -660,10 +389,9 @@ as much (`laser::haze_lit_by_lasers_lights_the_room`). For a fixture beam the
 glow sits about `σw/2` under the beam's own radiance, eight stops at density
 0.3, so it shows in thick haze and in a dark room, and barely otherwise.
 
-The meter counted everything above 2⁻¹⁴ as lit, so that glow, black in the
-picture, outweighed the beams and sent every hazy room to the top clamp. It
-now ignores light more than six stops under the top of its band
-(`SHOWN_STOPS` in `post_exposure.wgsl`).
+The exposure meter ignores light more than six stops under the top of its
+band (`SHOWN_STOPS` in `post_exposure.wgsl`), so the glow, black in the
+picture, does not outweigh the beams.
 
 Limits: six cones see in six directions, so geometry at 45° blocks less
 cleanly than a wall along an axis, and an object narrower than a cone (a
@@ -673,20 +401,4 @@ would. The visible laser beam itself is depth-tested, not stopped: seen from
 beyond a wall, it still shows past it. Indoors the haze ends at the room.
 
 Under a 6 m deck below a fan of laser beams the haze glows a third as much
-as with no deck (`laser::a_deck_shades_the_glow_under_it`; 0.96 before).
-The glow reaches further than the mips did (16 cells against 8), so open
-haze round a beam is a little brighter: the contract goldens' mean
-brightness rose 1 to 7%.
-
-Cost of the occlusion pass, RTX 5090 / Vulkan, `profile-volumetrics
---cones=450 --warmup-frames=60 --measured-frames=300`, best p50 of two
-alternating runs each: composite −0.07 ms (0.28 → 0.21 ms, one read a step
-instead of five), scene pass with the gather −0.04 to +0.01 ms, GPU total
-−0.03 to −0.15 ms across the eleven cases. The budgets failed before and
-still do.
-
-Cost of the first build, RTX 5090 / Vulkan, `profile-volumetrics
---cones=450`, two alternating runs of 300 frames: GPU total p50 +0.5 ms
-(17.23 → 17.76 ms on transport-32), of which the scene pass +0.25 ms (inject and surface sampling) and the
-composite +0.26 ms (the glow march). The contract and volumetric-stress
-goldens were regenerated for the glow and inspected.
+as with no deck (`laser::a_deck_shades_the_glow_under_it`).

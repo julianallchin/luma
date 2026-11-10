@@ -35,7 +35,7 @@ pub(crate) async fn ensure_track_waveform(
 ) -> Result<(TrackWaveform, BandGains), String> {
     analysis.checkpoint()?;
     let mut initial = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
-    let initial_principal = initial.principal().map(str::to_owned);
+    let initial_principal = initial.principal().to_owned();
     let (file_path, track_hash): (String, String) =
         sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
             .bind(track_id)
@@ -52,7 +52,7 @@ pub(crate) async fn ensure_track_waveform(
     // Once this guard is admitted, the payload either commits for the exact
     // principal/source hash or the transition wins and nothing is written.
     let mut publication = VisibleTrackAccess::<Operate>::operate(pool, track_id).await?;
-    if publication.principal() != initial_principal.as_deref() {
+    if publication.principal() != initial_principal {
         return Err("Authenticated identity changed while processing waveform".into());
     }
     let (uid, current_hash): (Option<String>, String) =

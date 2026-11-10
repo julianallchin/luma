@@ -1,6 +1,6 @@
 //! Ported from zeron (MIT, © 2026 Wing) — crates/ui/src/motion.rs
 //!
-//! Animation kit — one spring, five durations, and the helpers that ride them
+//! Animation kit — one spring, four durations, and the helpers that ride them
 //! over gpui [`Animation`]/[`AnimationExt`].
 //!
 //! # One curve
@@ -10,7 +10,7 @@
 //! only thing that distinguishes a menu pop from a panel slide is how far and
 //! for how long, never *how*.
 //!
-//! Durations come from the ladder — [`SNAP`], [`QUICK`], [`BASE`], [`SWEEP`], [`SLOW`] —
+//! Durations come from the ladder — [`SNAP`], [`QUICK`], [`BASE`], [`SWEEP`] —
 //! for the same reason the greys do: a new animation picks a rung rather than
 //! inventing a number, and another rung is a design decision, not a literal.
 //! Loader *periods* ([`PULSE`], [`BREATHE`], [`GRADIENT_SPIN`]) are not on the
@@ -230,8 +230,6 @@ pub const BASE: u64 = 360;
 /// Panels, dialogs, and navigation pushes (500ms), matching the desktop
 /// ChatGPT sidebar's duration as well as its spring shape.
 pub const SWEEP: u64 = 500;
-/// Entrances, the splash, and viewport-crossing scrolls (700ms).
-pub const SLOW: u64 = 700;
 
 // -- the catalog --------------------------------------------------------------
 
@@ -245,16 +243,6 @@ pub const MENU_OUT: MotionSpec = MENU_IN;
 pub const SURFACE: MotionSpec = MotionSpec::new(SWEEP, ROOT);
 /// Dialogs open more quickly while retaining the same spring shape.
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(BASE, ROOT);
-/// A navigation *push*: one level of a column leaving to the left while the
-/// next arrives from the right, over the column's own width.
-///
-/// [`SWEEP`], the same rung [`SURFACE`] takes, and for the same reason — the
-/// travel is a whole region's width and the eye tracks the moving edge across
-/// it. A rung of its own name rather than reusing `SURFACE` because the two are
-/// different gestures that merely agree on a duration today: a surface changing
-/// shape and a region changing *subject*. Retuning one must not silently retune
-/// the other.
-pub const PUSH: MotionSpec = MotionSpec::new(SWEEP, ROOT);
 /// Tab drag-reorder sliding transforms.
 pub const TAB_SLIDE: MotionSpec = MotionSpec::new(QUICK, ROOT);
 /// Per-row collapse (height).
@@ -543,18 +531,18 @@ mod tests {
         // and a duration off the ladder. Loader periods are loop lengths, not
         // transitions, so they carry their own numbers (module docs).
         let transitions = [
-            FADE_QUICK, MENU_IN, MENU_OUT, SURFACE, PUSH, TAB_SLIDE, COLLAPSE, HOVER_FADE,
+            FADE_QUICK, MENU_IN, MENU_OUT, SURFACE, TAB_SLIDE, COLLAPSE, HOVER_FADE,
         ];
         for spec in transitions {
             assert_eq!(spec.curve, ROOT, "{spec:?} rides a second curve");
             assert!(
-                [SNAP, QUICK, BASE, SWEEP, SLOW].contains(&spec.duration_ms),
+                [SNAP, QUICK, BASE, SWEEP].contains(&spec.duration_ms),
                 "{spec:?} invents a duration"
             );
         }
         // Strictly increasing, so "a rung below" is a statement about speed and
         // no two rungs are the same number wearing two names.
-        let ladder = [SNAP, QUICK, BASE, SWEEP, SLOW];
+        let ladder = [SNAP, QUICK, BASE, SWEEP];
         assert!(
             ladder.windows(2).all(|pair| pair[0] < pair[1]),
             "the ladder is not strictly increasing: {ladder:?}"

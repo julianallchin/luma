@@ -15,7 +15,6 @@ use luma_scene::mesh::Material;
 use luma_scene::{
     environment::{CloudCover, Floor, VenueEnvironment, VenueHaze},
     luminaire::Lens,
-    truss::Procedural,
 };
 
 use crate::common::library;
@@ -103,68 +102,6 @@ fn piece(id: String, geometry: Geometry, pos: [f32; 3], rot: [f32; 3]) -> Piece 
         rot,
         scale: 1.0,
     }
-}
-
-/// A stage like the one in `images/33.png`: a 12 by 6 m deck a metre high,
-/// a row of subs in front, a flown truss rectangle on four towers.
-fn stage() -> Vec<Piece> {
-    let mut pieces = Vec::new();
-    for column in 0..12 {
-        for row in 0..3 {
-            pieces.push(piece(
-                format!("deck-{column}-{row}"),
-                Geometry::mesh("stage_lab/stage_praticavel_2x1x1.glb"),
-                [-6.0 + column as f32, row as f32 * 2.0, 0.0],
-                [0.0; 3],
-            ));
-        }
-    }
-    for i in 0..10 {
-        pieces.push(piece(
-            format!("sub-{i}"),
-            Geometry::mesh("stage_lab/speaker_dual18sub.glb"),
-            [-5.4 + i as f32 * 1.1, -1.6, 0.0],
-            [0.0; 3],
-        ));
-    }
-    for (i, y) in [0.3, 5.7].into_iter().enumerate() {
-        pieces.push(piece(
-            format!("span-{i}"),
-            Geometry::Procedural(Procedural::Truss { span: 12.0 }),
-            [0.0, y, 7.0],
-            [0.0; 3],
-        ));
-        for (j, x) in [-6.2, 6.2].into_iter().enumerate() {
-            pieces.push(piece(
-                format!("tower-{i}-{j}"),
-                Geometry::Procedural(Procedural::Truss { span: 7.0 }),
-                [x, y, 3.5],
-                [0.0, std::f32::consts::FRAC_PI_2, 0.0],
-            ));
-        }
-    }
-    pieces
-}
-
-/// The orbit view of `images/33.png`: from 24 m up and 30 m in front of the
-/// stage, under a grey sky, with a row of washes pooling on the ground in
-/// front of it.
-fn orbit(floor: Floor) -> Frame {
-    let environment = VenueEnvironment::outdoor(35.0)
-        .with_sun_azimuth(200.0)
-        .with_clouds(CloudCover::Overcast)
-        .with_floor(floor);
-    let mut frame = frame_with(
-        environment,
-        Vec3::new(4.0, -32.0, 24.0),
-        Vec3::new(0.0, 2.0, 0.0),
-        Quality::High,
-        stage(),
-    );
-    for x in [-8.0, -4.0, 0.0, 4.0, 8.0] {
-        frame.fixture_cones.push(wash(Vec3::new(x, -4.0, 0.0), 7.0));
-    }
-    frame
 }
 
 /// Standing on the floor, looking across it.
@@ -409,35 +346,6 @@ fn reduced_quality_draws_no_parallax() {
     );
 }
 
-/// The frame as it was before the floors had a least roughness, tints or
-/// softer patches: for the before-and-after pictures only.
-fn as_before(frame: &mut Frame) {
-    if std::env::var_os("LUMA_FLOOR_AS_BEFORE").is_some() {
-        let floor = frame.floor.as_mut().unwrap();
-        floor.min_roughness = 0.0;
-        floor.tints = [[1.0; 3]; 2];
-        floor.hex = true;
-        floor.max_rotation = 1.0;
-        floor.transition_share = match floor.floor {
-            Floor::Grass => 0.2,
-            Floor::Dirt => 0.15,
-            _ => floor.transition_share,
-        };
-    }
-}
-
-#[test]
-#[ignore = "capture, not a gate: set LUMA_RENDER_CAPTURE_DIR to save the orbit view of every floor"]
-fn the_orbit_view_shows_the_ground() {
-    let mut renderer = Renderer::new().unwrap();
-    for floor in [Floor::Grass, Floor::Dirt, Floor::Concrete, Floor::Beach] {
-        let mut frame = orbit(floor);
-        as_before(&mut frame);
-        let pixels = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
-        capture(&format!("orbit-{}", floor.set()), &pixels, WIDTH, HEIGHT);
-    }
-}
-
 /// Mean linear luminance of a block of an sRGB frame.
 fn luminance(pixels: &[u8], x: std::ops::Range<u32>, y: std::ops::Range<u32>) -> f32 {
     let linear = |v: u8| {
@@ -480,7 +388,6 @@ fn every_floor_is_as_rough_as_its_set_says() {
         .with_floor(*floor);
         // What the shader was given.
         let mut view = frame_in(dark, eye, Vec3::ZERO, Quality::High);
-        as_before(&mut view);
         let least = luma_render::floor::Surface::of(*floor, Quality::High).min_roughness;
         view.debug_view = luma_render::scene_desc::DebugView::Roughness;
         let rough = renderer.render(&view, WIDTH, HEIGHT, 1).unwrap();
@@ -489,7 +396,6 @@ fn every_floor_is_as_rough_as_its_set_says() {
         // the same distance and angle: the diffuse light is the same.
         let lit = |renderer: &mut Renderer, from: Vec3| {
             let mut frame = frame_in(dark, eye, Vec3::ZERO, Quality::High);
-            as_before(&mut frame);
             let mut cone = wash(Vec3::ZERO, 0.0);
             cone.position = from;
             cone.direction = -from.normalize();

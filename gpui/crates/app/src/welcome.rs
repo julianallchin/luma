@@ -242,7 +242,7 @@ impl VenuePicker {
             loaded: false,
             load_failed: false,
             query: String::new(),
-            morph: MorphDialog::new(Route::Browse.descriptor(), PICKER_SIZE),
+            morph: MorphDialog::new(Route::Browse.descriptor()),
             create_name: String::new(),
             create_failed: false,
             creating: false,
@@ -1337,7 +1337,7 @@ fn venue_menu(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement>
                         match act {
                             Act::Dialog(entry) => this.show_venue_dialog(Some(entry), cx),
                             Act::Settings => this.open_settings(cx),
-                            Act::Identity => this.switch_identity(cx),
+                            Act::SignOut => this.sign_out(cx),
                         }
                     })
                 })
@@ -1375,16 +1375,14 @@ fn venue_menu(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement>
             Act::Settings,
         ))
         .child(act(
-            "venue-menu-identity",
+            "venue-menu-sign-out",
             if app.account_action.signing_out {
                 "Signing out…".into()
-            } else if app.library.user_id().is_some() {
-                "Sign out".into()
             } else {
-                "Sign in".into()
+                "Sign out".into()
             },
             None,
-            Act::Identity,
+            Act::SignOut,
         ));
     let card = card.into_any_element();
     Some(match closing {
@@ -1413,7 +1411,7 @@ fn venue_menu(app: &Luma, entity: &Entity<Luma>, cx: &App) -> Option<AnyElement>
 enum Act {
     Dialog(Entry),
     Settings,
-    Identity,
+    SignOut,
 }
 
 /// The small heading over the menu's list.

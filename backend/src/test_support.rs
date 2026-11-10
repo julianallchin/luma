@@ -21,7 +21,8 @@ pub(crate) async fn signed_in(directory: &Path, fixtures_root: PathBuf) -> AppSe
     open(directory, fixtures_root).await
 }
 
-/// A library in `directory` nobody has signed in to: the guest namespace.
+/// A library in `directory` nobody has signed in to, as a windowless host
+/// finds one before the app has: its commands refuse.
 pub(crate) async fn signed_out(directory: &Path, fixtures_root: PathBuf) -> AppServices {
     open(directory, fixtures_root).await
 }

@@ -9,7 +9,7 @@ use gpui::prelude::*;
 use gpui::{actions, div, px, AnyView, App, Context, FocusHandle, Render, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use luma_ui::dialog::morph::{
-    self, ContentMode, LayerPose, LayerRole, MorphDialog, MorphSample, MorphSize, MorphTransition,
+    self, ContentMode, LayerPose, LayerRole, MorphDialog, MorphSample, MorphTransition,
     RouteDescriptor,
 };
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
@@ -17,22 +17,12 @@ use serde_json::Value;
 
 const A_WIDTH: f32 = 340.0;
 const A_HEIGHT: f32 = 220.0;
+const B_WIDTH: f32 = 520.0;
+const B_HEIGHT: f32 = 320.0;
 
 actions!(
     dialog_morph_proof,
-    [
-        GoA,
-        GoB,
-        GoC,
-        GoBScale,
-        GoBCrossFade,
-        GoBCustom,
-        ReduceMotion,
-        HoldMeasurements,
-        GoCIntrinsic,
-        ResolveStaleB,
-        ReleaseMeasurements
-    ]
+    [GoA, GoC, GoBScale, GoBCrossFade, GoBCustom, ReduceMotion]
 );
 
 fn custom_transition(role: LayerRole, progress: f32) -> LayerPose {
@@ -55,35 +45,24 @@ struct Proof {
     trap: FocusHandle,
     a_focus: FocusHandle,
     b_focus: FocusHandle,
-    measurements_held: bool,
-    held_measurement: Option<luma_ui::dialog::morph::MeasurementToken>,
 }
 
 impl Proof {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            morph: MorphDialog::new(
-                RouteDescriptor::exact("a", A_WIDTH, A_HEIGHT),
-                MorphSize::new(A_WIDTH, A_HEIGHT),
-            ),
+            morph: MorphDialog::new(RouteDescriptor::exact("a", A_WIDTH, A_HEIGHT)),
             trap: cx.focus_handle(),
             a_focus: cx.focus_handle().tab_stop(true),
             b_focus: cx.focus_handle().tab_stop(true),
-            measurements_held: false,
-            held_measurement: None,
         }
     }
 
     fn request_b(&mut self, transition: MorphTransition, cx: &mut Context<Self>) {
         self.morph.request(
-            RouteDescriptor::intrinsic("b", MorphSize::new(560.0, 400.0))
-                .with_transition(transition),
+            RouteDescriptor::exact("b", B_WIDTH, B_HEIGHT).with_transition(transition),
             Instant::now(),
             luma_ui::motion::reduced_motion(cx),
         );
-        if self.measurements_held {
-            self.held_measurement = self.morph.pending_measure().map(|pending| pending.token);
-        }
         cx.notify();
     }
 
@@ -99,15 +78,6 @@ impl Proof {
     fn request_c(&mut self, cx: &mut Context<Self>) {
         self.morph.request(
             RouteDescriptor::exact("c", 460.0, 280.0),
-            Instant::now(),
-            luma_ui::motion::reduced_motion(cx),
-        );
-        cx.notify();
-    }
-
-    fn request_c_intrinsic(&mut self, cx: &mut Context<Self>) {
-        self.morph.request(
-            RouteDescriptor::intrinsic("c", MorphSize::new(500.0, 320.0)),
             Instant::now(),
             luma_ui::motion::reduced_motion(cx),
         );
@@ -204,7 +174,7 @@ fn route_b(
 ) -> gpui::AnyElement {
     let requested = app.clone();
     div()
-        .w(px(520.0))
+        .w(px(B_WIDTH))
         .flex()
         .flex_col()
         .bg(gpui::rgb(0x20252c))
@@ -216,7 +186,7 @@ fn route_b(
                 .flex()
                 .items_center()
                 .text_color(gpui::white())
-                .child("Measured route B"),
+                .child("Route B"),
         )
         .child(
             div()
@@ -315,8 +285,7 @@ impl Render for Proof {
             };
             window.focus(focus, cx);
         }
-        let app = cx.entity();
-        let card_app = app.clone();
+        let card_app = cx.entity();
         let a_focus = self.a_focus.clone();
         let b_focus = self.b_focus.clone();
         let a_focused = self.a_focus.is_focused(window);
@@ -337,13 +306,6 @@ impl Render for Proof {
         }
         .render(card);
 
-        let pending = (!self.measurements_held)
-            .then(|| {
-                self.morph
-                    .pending_measure()
-                    .map(|pending| (pending.key, pending.token))
-            })
-            .flatten();
         div()
             .size_full()
             .relative()
@@ -353,9 +315,6 @@ impl Render for Proof {
             .track_focus(&self.trap)
             .bg(gpui::rgb(0x111318))
             .on_action(cx.listener(|this, _: &GoA, _, cx| this.request_a(cx)))
-            .on_action(
-                cx.listener(|this, _: &GoB, _, cx| this.request_b(MorphTransition::Forward, cx)),
-            )
             .on_action(cx.listener(|this, _: &GoC, _, cx| this.request_c(cx)))
             .on_action(
                 cx.listener(|this, _: &GoBScale, _, cx| this.request_b(MorphTransition::Scale, cx)),
@@ -370,50 +329,8 @@ impl Render for Proof {
                 luma_ui::motion::set_reduced_motion(cx, true);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &HoldMeasurements, _, cx| {
-                this.measurements_held = true;
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &GoCIntrinsic, _, cx| this.request_c_intrinsic(cx)))
-            .on_action(cx.listener(|this, _: &ResolveStaleB, _, cx| {
-                if let Some(token) = this.held_measurement.take() {
-                    this.morph.resolve_intrinsic(
-                        token,
-                        MorphSize::new(520.0, 320.0),
-                        Instant::now(),
-                        luma_ui::motion::reduced_motion(cx),
-                    );
-                }
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &ReleaseMeasurements, _, cx| {
-                this.measurements_held = false;
-                cx.notify();
-            }))
             .child(stripes())
             .child(host)
-            .when_some(pending, |root, (key, token)| {
-                let measured_app = app.clone();
-                let measured_route = if key == "b" {
-                    route_b(ContentMode::PaintOnly, &app, &self.b_focus, false)
-                } else {
-                    route_c()
-                };
-                root.child(morph::premeasure(
-                    div().absolute().top_0().left_0().child(measured_route),
-                    move |size, _, cx| {
-                        measured_app.update(cx, |proof, cx| {
-                            proof.morph.resolve_intrinsic(
-                                token,
-                                MorphSize::new(f32::from(size.width), f32::from(size.height)),
-                                Instant::now(),
-                                luma_ui::motion::reduced_motion(cx),
-                            );
-                            cx.notify();
-                        });
-                    },
-                ))
-            })
     }
 }
 
@@ -479,7 +396,7 @@ fn crop(path: &PathBuf, bounds: &Value) -> image::RgbaImage {
 }
 
 #[test]
-fn intrinsic_target_morphs_both_axes_while_outgoing_content_fades() {
+fn the_card_morphs_both_axes_while_outgoing_content_fades() {
     let mut harness = harness();
     let out = harness.run(
         &format!(
@@ -641,7 +558,7 @@ fn production_card_reversal_and_replacement_preserve_the_visible_rect_then_prune
 }
 
 #[test]
-fn production_card_reduced_motion_toggle_snaps_the_active_intrinsic_target() {
+fn production_card_reduced_motion_toggle_snaps_the_active_target() {
     let mut harness = harness();
     let out = harness.run(
         &format!(
@@ -674,62 +591,6 @@ fn production_card_reduced_motion_toggle_snaps_the_active_intrinsic_target() {
     assert!(out["routeA"].is_null(), "{out:#}");
     assert!(!out["routeB"].is_null(), "{out:#}");
     assert_eq!(out["back"]["focused"], true, "{out:#}");
-}
-
-#[test]
-fn production_card_ignores_a_stale_intrinsic_result_after_target_replacement() {
-    let mut harness = harness();
-    let out = harness.run(
-        &format!(
-            "{SETTLE}\n{}",
-            r#"
-        settle();
-        app.action("dialog_morph_proof::HoldMeasurements");
-        app.action("dialog_morph_proof::GoB");
-        app.action("dialog_morph_proof::GoCIntrinsic");
-        app.action("dialog_morph_proof::ResolveStaleB");
-        app.frames(2);
-        const held = app.snapshot();
-        app.action("dialog_morph_proof::ReleaseMeasurements");
-        app.frames(3, { waitMs: 70 });
-        const middle = app.snapshot();
-        settle();
-        const settled = app.snapshot();
-        ({ heldContainer: held.find({ role: "card", label: "Morph container" }).bounds,
-           heldA: held.find({ role: "card", label: "Route A" }),
-           heldB: held.find({ role: "card", label: "Route B" }),
-           middleB: middle.find({ role: "card", label: "Route B" }),
-           middleC: middle.find({ role: "card", label: "Route C" }),
-           settledContainer: settled.find({ role: "card", label: "Morph container" }).bounds,
-           settledA: settled.find({ role: "card", label: "Route A" }),
-           settledB: settled.find({ role: "card", label: "Route B" }),
-           settledC: settled.find({ role: "card", label: "Route C" }) })
-        "#
-        ),
-        GPU_LIVENESS_TIMEOUT,
-    );
-    assert_eq!(
-        (
-            out["heldContainer"]["width"].as_f64().unwrap(),
-            out["heldContainer"]["height"].as_f64().unwrap(),
-        ),
-        (340.0, 220.0),
-        "stale B committed while C still awaited measurement: {out:#}"
-    );
-    assert!(!out["heldA"].is_null(), "{out:#}");
-    assert!(out["heldB"].is_null(), "{out:#}");
-    assert!(out["middleB"].is_null(), "{out:#}");
-    assert!(!out["middleC"].is_null(), "{out:#}");
-    assert_eq!(
-        (
-            out["settledContainer"]["width"].as_f64().unwrap(),
-            out["settledContainer"]["height"].as_f64().unwrap(),
-        ),
-        (460.0, 280.0)
-    );
-    assert!(out["settledA"].is_null(), "{out:#}");
-    assert!(out["settledB"].is_null(), "{out:#}");
-    assert!(!out["settledC"].is_null(), "{out:#}");
 }
 
 #[test]
@@ -781,77 +642,4 @@ fn scale_crossfade_and_custom_transitions_render_through_the_production_card() {
             "{action}: {out:#}"
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// Frame cost
-// ---------------------------------------------------------------------------
-
-/// The morph proof at production pacing, for measuring rather than asserting.
-///
-/// [`harness`] runs at 10x so a screenshot burst can sample the curve; that is
-/// the wrong clock for a cost measurement, because it stretches the moving
-/// stretch of the flight over ten times as many frames and flatters the
-/// average. This one runs the timeline a person actually sees.
-fn paced_harness() -> Harness {
-    let root: gpui_agent::RootFactory = Arc::new(|window: &mut Window, cx: &mut App| -> AnyView {
-        gpui_component::init(cx);
-        luma_ui::motion::set_reduced_motion(cx, false);
-        let proof = cx.new(Proof::new);
-        cx.new(|cx| gpui_component::Root::new(proof, window, cx).bordered(false))
-            .into()
-    });
-    Harness::headless(
-        Config {
-            mode: Mode::Pixel,
-            window_size: gpui::size(px(1280.0), px(800.0)),
-            call_timeout: GPU_LIVENESS_TIMEOUT,
-            runtime: luma_ui::runtime::Runtime {
-                reduced_motion: false,
-                motion_scale: 1.0,
-                ..luma_ui::runtime::Runtime::default()
-            },
-            ..Config::default()
-        },
-        root,
-    )
-    .expect("failed to start paced morph harness")
-}
-
-/// Per-frame CPU cost of a morph, split from the idle cost of the same card.
-///
-/// `#[ignore]` because it is an instrument, not a gate: the numbers are the
-/// output and the machine decides them. The difference between the two rows is
-/// what the animation itself costs — everything the settled card already pays
-/// for (its fill, its rim, the backdrop behind it) is in both.
-#[test]
-#[ignore = "measurement, not a gate"]
-fn morph_frame_cost() {
-    let mut harness = paced_harness();
-    let out = harness.run(
-        &format!(
-            "{SETTLE}\n{}",
-            r#"
-        // 16ms a frame, so the samples walk the real timeline rather than
-        // bunching at the start of a flight that has barely progressed.
-        app.frames(6, { waitMs: 40 });
-        const idleFrom = app.frames(1).frame;
-        app.frames(24, { waitMs: 16 });
-        const idleTo = app.frames(1).frame;
-        app.click(app.snapshot().find({ role: "button", label: "Next" }));
-        app.frames(24, { waitMs: 16 });
-        const morphTo = app.frames(1).frame;
-        ({ idleFrom, idleTo, morphTo, frames: app.timings().frames })
-        "#
-        ),
-        GPU_LIVENESS_TIMEOUT,
-    );
-    let frames = out["frames"].as_array().unwrap();
-    let idle_from = out["idleFrom"].as_u64().unwrap();
-    let idle_to = out["idleTo"].as_u64().unwrap();
-    let morph_to = out["morphTo"].as_u64().unwrap();
-    println!("\n--- morph frame cost (pixel, motion_scale 1) ---");
-    let idle = super::support::cost::summarize(frames, idle_from, idle_to, "settled card");
-    let morphing = super::support::cost::summarize(frames, idle_to, morph_to, "morphing card");
-    println!("morph adds {:.2} ms/frame at p50\n", morphing - idle);
 }

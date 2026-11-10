@@ -87,7 +87,7 @@ pub async fn verify_login_code(
 }
 
 /// Who this library belongs to: the admitted principal and the address to name
-/// it by, or `None` for the guest namespace.
+/// it by, or `None` when nobody is signed in.
 ///
 /// Offline by construction — see
 /// [`crate::database::local::auth::load_current_account`]. A host reads this at
@@ -514,8 +514,7 @@ async fn wipe_signed_in_projection(
 ) -> Result<(), String> {
     // Venue rows are a sealed local cache, not an ephemeral session
     // projection, and they survive logout. Remove only catalog leaves nothing
-    // else depends on; another cached principal and guest state are never
-    // touched.
+    // else depends on; another cached principal's rows are never touched.
     sqlx::query(
         "DELETE FROM tracks
          WHERE uid = ?
@@ -623,8 +622,8 @@ mod tests {
             Some("alice")
         );
 
-        // Nobody signed in. The library still reads; a command that writes a
-        // synced row asks `require_session` and is refused.
+        // Nobody signed in. A command that reads or writes the library asks
+        // `require_session` and is refused.
         crate::database::local::auth::arm_write_admission(&pool, None)
             .await
             .unwrap();

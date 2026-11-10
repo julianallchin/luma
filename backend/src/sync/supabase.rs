@@ -22,7 +22,7 @@ impl Storage {
     pub fn from_config() -> Self {
         Self::new(
             crate::config::SUPABASE_URL.to_owned(),
-            crate::config::supabase_anon_key(),
+            crate::config::SUPABASE_ANON_KEY.to_owned(),
         )
     }
 
@@ -117,7 +117,7 @@ impl Postgrest {
     pub fn from_config() -> Self {
         Self::new(
             crate::config::postgrest_url(),
-            crate::config::supabase_anon_key(),
+            crate::config::SUPABASE_ANON_KEY.to_owned(),
         )
     }
 

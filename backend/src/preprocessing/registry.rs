@@ -89,9 +89,8 @@ pub fn dag() -> &'static Dag {
 }
 
 /// Current `version()` keyed by `artifact_table()` for every registered
-/// preprocessor. Callers (e.g., the track browser query) use this to gate
-/// "is this artifact up-to-date?" checks against the version a row was
-/// produced at, so a version bump correctly invalidates stale rows in the UI.
+/// preprocessor. The agent's feature bindings stamp it on the artifacts they
+/// hand out, as provenance.
 pub fn current_artifact_versions() -> HashMap<&'static str, u32> {
     dag()
         .preprocessors()

@@ -338,46 +338,6 @@ fn outdoor_haze_has_no_venue_box_and_is_uniform_across_the_horizon() {
 }
 
 #[test]
-#[ignore = "GPU benchmark; run explicitly on an otherwise idle device"]
-fn profile_global_haze() {
-    let mut renderer = Renderer::new_profiled().unwrap();
-    let mut frame = venue(30.0);
-    frame.haze_density = 0.24;
-    println!(
-        "GPU: {}",
-        luma_render::device::DeviceContext::shared()
-            .unwrap()
-            .adapter_info()
-            .name
-    );
-    for (label, offset, density) in [
-        ("clear", 0.0, 0.0),
-        ("global", 0.0, 0.24),
-        ("global-5km-away", 5000.0, 0.24),
-    ] {
-        frame.camera.eye.x = offset;
-        frame.camera.target.x = offset;
-        frame.haze_density = density;
-        for _ in 0..8 {
-            renderer.profile_live_frame(&frame, 1280, 720, 1).unwrap();
-        }
-        let mut samples: Vec<_> = (0..40)
-            .map(|_| {
-                renderer
-                    .profile_live_frame(&frame, 1280, 720, 1)
-                    .unwrap()
-                    .gpu_composite_ms
-            })
-            .collect();
-        samples.sort_by(f64::total_cmp);
-        println!(
-            "{label}: 1280x720 composite median {:.3} ms",
-            samples[samples.len() / 2]
-        );
-    }
-}
-
-#[test]
 fn fixture_lighting_grid_includes_air_before_its_work_bounds() {
     let mut renderer = Renderer::new().unwrap();
     let mut frame = venue(30.0);

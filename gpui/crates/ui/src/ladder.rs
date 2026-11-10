@@ -152,24 +152,21 @@ pub fn border() -> Rgba {
 /// # The step is counted once, and lands one under
 ///
 /// `72 − 38 − 19 = 15` against a step of `38 − 14 = 14`, so the exact fit is
-/// fifteen-fourteenths of a step. [`rule`] counts the step **once** and
-/// [`seam_plane`] therefore comes out `#474747`, one value under the reference's
-/// `#484848`. That is a choice, not a rounding nobody noticed: two measured
-/// points fitted with two free parameters is a lookup table wearing an
-/// equation's clothes — it would predict nothing about a third seam — and
-/// 1/255 of grey is beneath what the eyedropper that produced these numbers can
-/// resolve. `seam_hint` is exact. The tests assert against the *measured*
-/// greys with that one value of slack named, so neither the fit nor its cost
-/// can drift unnoticed.
+/// fifteen-fourteenths of a step. [`rule`] counts the step **once** and the
+/// seam between those two planes therefore comes out `#474747`, one value
+/// under the reference's `#484848`. That is a choice, not a rounding nobody
+/// noticed: two measured points fitted with two free parameters is a lookup
+/// table wearing an equation's clothes — it would predict nothing about a
+/// third seam — and 1/255 of grey is beneath what the eyedropper that produced
+/// these numbers can resolve. The seam of a plane against itself is exact. The
+/// tests assert against the *measured* greys with that one value of slack
+/// named, so neither the fit nor its cost can drift unnoticed.
 const SEAM_LIFT: u8 = 0x13;
 
 /// The rule between two planes, *as a function of what it separates* — which is
 /// the whole point: a seam is not a colour anyone picks. Move a plane and every
 /// seam touching it moves too, so no seam can go stale the way a hand-copied
 /// constant would.
-///
-/// The pair below are the shell's two, named for their roles; anything else
-/// that divides two planes derives its own line the same way.
 pub fn seam(a: Rgba, b: Rgba) -> Rgba {
     rule(value_of(a), value_of(b))
 }
@@ -188,24 +185,6 @@ fn rule(a: u8, b: u8) -> Rgba {
             .saturating_add(bright - dark)
             .saturating_add(SEAM_LIFT),
     )
-}
-
-/// The full-height rule between two regions of the shell that are *different
-/// planes* — [`chrome_plane`] (the sidebar) and [`background`] (the thread
-/// column). Brighter than [`seam_hint`] because it has to out-read both sides;
-/// see [`seam`], which derives both from the planes they touch.
-///
-/// `#474747` — one value under the reference's `#484848`, deliberately, for the
-/// reason the `SEAM_LIFT` constant gives.
-pub fn seam_plane() -> Rgba {
-    rule(CHROME_PLANE, GROUND)
-}
-
-/// The full-height rule between two regions that are the same plane — the
-/// thread column and the workspace panel, both [`background`]. A hint that the
-/// boundary is there, not a division; see [`seam`].
-pub fn seam_hint() -> Rgba {
-    rule(GROUND, GROUND)
 }
 
 /// The accent, used here for a waveform the analysis gave no per-bucket colors
@@ -413,16 +392,6 @@ mod tests {
         }
     }
 
-    /// Where the slack is spent, pinned. Counting the planes' step once puts
-    /// [`seam_plane`] one under the reference and leaves [`seam_hint`] exact;
-    /// if that ever stops being true it is a decision, and it should have to be
-    /// made here rather than absorbed.
-    #[test]
-    fn only_the_plane_seam_is_short_and_only_by_one() {
-        assert_eq!(value_of(seam_plane()), 0x48 - 1);
-        assert_eq!(value_of(seam_hint()), 0x2b);
-    }
-
     /// A seam is a function of what it separates, in both directions: the rule
     /// between two planes cannot depend on which one the caller names first.
     #[test]
@@ -431,7 +400,6 @@ mod tests {
             seam(chrome_plane(), background()),
             seam(background(), chrome_plane())
         );
-        assert_eq!(seam(chrome_plane(), background()), seam_plane());
     }
 
     /// The model in one assertion: the ground is the floor and every plane is

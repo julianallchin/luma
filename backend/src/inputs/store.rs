@@ -107,10 +107,7 @@ async fn insert_controller(
         port: port.to_owned(),
         profile: Profile::default(),
     };
-    let (uid, venue_id) = (
-        access.principal().map(str::to_owned),
-        access.venue_id().to_owned(),
-    );
+    let (uid, venue_id) = (access.principal().to_owned(), access.venue_id().to_owned());
     sqlx::query(
         "INSERT INTO perform_controllers (id, uid, venue_id, name, port, profile_json)
          VALUES (?, ?, ?, ?, ?, '{}')",
@@ -138,10 +135,7 @@ async fn upsert(
     invert: bool,
 ) -> Result<Binding, String> {
     let json = serde_json::to_string(address).map_err(|error| error.to_string())?;
-    let (uid, venue_id) = (
-        access.principal().map(str::to_owned),
-        access.venue_id().to_owned(),
-    );
+    let (uid, venue_id) = (access.principal().to_owned(), access.venue_id().to_owned());
     let row = sqlx::query(
         "INSERT INTO control_bindings
              (id, uid, venue_id, controller_id, control, address_json, mode, invert)

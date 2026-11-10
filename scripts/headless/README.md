@@ -30,6 +30,10 @@ gives a new library. Startup applies the persisted settings and writes agent
 rows a quit left in progress to their threads, as the app's does; a row a turn
 in the running app is still writing is left alone.
 
+A library belongs to the account signed in with the Luma app on this machine.
+With nobody signed in the host still starts, and every command that reads or
+writes the library answers `Sign in to Luma first`.
+
 `--fixture-principal` sets a trusted owner without a Supabase session. It
 requires `--config-dir`. Use it only with a disposable library.
 `scratch-library.ts` re-homes the rows of a copied library to such an owner.
@@ -118,7 +122,6 @@ The quota comes from these modules:
 | `skill {name}` | Return one playbook. |
 
 The server also answers `prompts/list` and `prompts/get` with the skills.
-`luma-cli mcp record-usage --json '<AgentThreadUsage>'` stores usage for a thread.
 
 Before `open` and `python`, the server checks whether its executable was
 rebuilt. If it was, the client must restart the MCP connection.

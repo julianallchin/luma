@@ -215,23 +215,19 @@ pub(crate) struct AuthStateBackup {
 /// Whether installing a host-validated session merely rotates credentials for
 /// the already-admitted principal or crosses a runtime capability boundary.
 /// Legacy sessions intentionally count as an identity transition: without a
-/// host proof their app-database authority is the guest namespace.
+/// host proof they admit nobody to the app database.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SessionReplacementKind {
     CredentialRefresh,
     IdentityTransition,
 }
 
-/// The durable namespace a row belongs to. Distinct from the bare id so keys
-/// are stable in logs, hashes and cross-table associations.
-///
-/// `None` is the namespace of a row written before sign-in was required — a
-/// `uid` of SQL `NULL`, which `agent_thread_messages`' CHECK still admits
-/// because those rows are still in the library. A command that would write a
-/// new one is refused by `AppServices::require_session`.
+/// The durable namespace a signed-in account's rows belong to. Distinct from
+/// the bare id so keys are stable in logs, hashes and cross-table
+/// associations.
 #[must_use]
-pub fn principal_key(principal: Option<&str>) -> String {
-    principal.map_or_else(|| "signed-out".to_owned(), |id| format!("signed-in:{id}"))
+pub fn principal_key(principal: &str) -> String {
+    format!("signed-in:{principal}")
 }
 
 /// Host-only snapshot of the app database's authenticated-write gate. Auth
@@ -460,11 +456,11 @@ fn refresh_refusal_is_final(status: u16, body: &str) -> bool {
 /// principal, because nothing headless presents a token — the principal only
 /// scopes the local library.
 ///
-/// `Ok(None)` is the guest namespace: either no one has signed in on this
-/// machine (identical to what the app arms when signed out), or a sign-out
-/// committed and is waiting for the app's renderer to consume it, in which
-/// case admission stays closed and every write fails loudly rather than
-/// landing in the wrong namespace.
+/// `Ok(None)` is nobody: either no one has signed in on this machine
+/// (identical to what the app arms when signed out — the library's commands
+/// then refuse with a request to sign in), or a sign-out committed and is
+/// waiting for the app's renderer to consume it, in which case admission
+/// stays closed and every command fails loudly.
 ///
 /// # Errors
 ///
@@ -493,10 +489,12 @@ pub async fn bootstrap_headless_admission(
     Ok(principal)
 }
 
-/// Open the app-database admission invariant for a host-verified principal or
-/// for the guest namespace. Closed lifecycle states use
-/// [`suspend_write_admission`] or the committed-wipe journal; `None` is not a
-/// synonym for closed.
+/// Open the app-database admission invariant for a host-verified principal,
+/// or — `None` — record that nobody is signed in. Signed out is an armed
+/// state, the one a sign-in starts from, and admits no one: every row has an
+/// owner, so there is nothing for it to read or write. Closed lifecycle states
+/// use [`suspend_write_admission`] or the committed-wipe journal; `None` is
+/// not a synonym for closed.
 pub async fn arm_write_admission(pool: &SqlitePool, principal: Option<&str>) -> Result<(), String> {
     arm_write_admission_for_identity_switch(pool, principal)
         .await
@@ -540,8 +538,8 @@ pub(crate) async fn arm_write_admission_for_identity_switch(
 
 /// Return the principal currently admitted by the app database. Credentials
 /// in `StateDb` establish who may be admitted, but this row is the sole live
-/// authority used by app-data operations. `None` is the active guest
-/// namespace; a closed/suspended admission is an error, not a guest fallback.
+/// authority used by app-data operations. `None` is nobody signed in; a
+/// closed/suspended admission is an error, not a signed-out answer.
 pub(crate) async fn admitted_principal(pool: &SqlitePool) -> Result<Option<String>, String> {
     sqlx::query_scalar::<_, Option<String>>(
         "SELECT active_uid FROM auth_write_admission
@@ -552,6 +550,32 @@ pub(crate) async fn admitted_principal(pool: &SqlitePool) -> Result<Option<Strin
     .await
     .map_err(|error| format!("Failed to read active app principal: {error}"))?
     .ok_or_else(|| "App database admission is closed".to_owned())
+}
+
+/// What a command answers when nobody is signed in. Every row has an owner,
+/// so there is no library to read or change until someone is.
+pub const SIGN_IN_REQUIRED: &str = "Sign in to Luma first";
+
+/// The signed-in principal, read on `connection` so that an access guard's
+/// proof and its principal are one snapshot. `Ok(None)` is a closed or
+/// suspended admission, through which nothing is reachable.
+///
+/// # Errors
+///
+/// [`SIGN_IN_REQUIRED`] when admission is open and nobody is signed in.
+pub(crate) async fn signed_in_principal(
+    connection: &mut SqliteConnection,
+) -> Result<Option<String>, String> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT active_uid FROM auth_write_admission
+         WHERE singleton = 1 AND armed = 1 AND accepting = 1
+           AND maintenance = 0 AND remote_writes = 0",
+    )
+    .fetch_optional(connection)
+    .await
+    .map_err(|error| format!("Failed to read active app principal: {error}"))?
+    .map(|principal| principal.ok_or_else(|| SIGN_IN_REQUIRED.to_owned()))
+    .transpose()
 }
 
 /// Capture a quiescent admission mode before an identity transition. The sync
@@ -653,7 +677,7 @@ async fn validate_admission_matches_auth_state(
         (None, _, _) => Err("Authenticated auth state has no matching session".into()),
         (Some(session_json), None, None) => {
             // A legacy session carries no host authority. It may be upgraded
-            // online, but until then the app database must remain guest-only.
+            // online, but until then the app database admits nobody.
             let envelope = parse_session(&session_json)?;
             let claims = parse_and_validate_claims(&envelope.access_token, unix_now(), true)?;
             validate_user_hint(&envelope, &claims.sub)?;
@@ -2233,7 +2257,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unverified_legacy_session_is_not_read_as_guest_or_principal() {
+    async fn unverified_legacy_session_is_not_read_as_signed_out_or_principal() {
         let pool = test_pool().await;
         let token = jwt("forged", NOW + 600);
         set_raw_session_item(
@@ -2929,10 +2953,10 @@ mod tests {
             .is_none());
     }
 
-    /// Nobody signed in on this machine is the guest namespace, exactly as the
-    /// app arms it — not a hard failure.
+    /// Nobody signed in on this machine is signed out, exactly as the app arms
+    /// it — not a hard failure.
     #[tokio::test]
-    async fn headless_admission_without_a_session_is_the_guest_namespace() {
+    async fn headless_admission_without_a_session_is_signed_out() {
         let state_pool = test_pool().await;
         let app_pool = app_admission_pool("stale", true).await;
         assert_eq!(

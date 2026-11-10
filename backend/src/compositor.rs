@@ -10,26 +10,17 @@ use std::path::Path;
 use crate::controls::ControlBanks;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
 use crate::eval::Scene;
-use crate::render_engine::{Built, RenderEngine, SceneTarget};
+use crate::render_engine::{Built, RenderEngine};
 use crate::storage::StorageRoot;
 
-/// Cancel compositing, clear the render engine's active scene, and unload audio.
-/// Called when navigating away from the track editor.
+/// Stop showing a score: drop its scene from the render engine, and any
+/// composite of it still compiling. Called when the score is closed.
 ///
-/// Takes the *score* id, not the track id: the track is resolved under the
-/// score's venue read authorization, so this must run before the score row is
-/// deleted.
-pub(crate) async fn leave_track(
-    pool: &sqlx::SqlitePool,
-    render_engine: &RenderEngine,
-    host_audio: &crate::host_audio::HostAudioState,
-    score_id: &str,
-) -> Result<(), String> {
-    score_scope(pool, score_id).await?;
-    let update = render_engine.begin_scene_update(SceneTarget::Active);
-    render_engine.finish_update(update, Built::Scene(crate::eval::Scene::default()));
-    host_audio.unload();
-    Ok(())
+/// A no-op unless `score_id` is the score the engine was last asked to show,
+/// so it is safe after the score's row is gone and after another score opened.
+/// The closed editor's audio is its session's to release.
+pub(crate) fn leave_track(render_engine: &RenderEngine, score_id: &str) {
+    render_engine.leave_score(score_id);
 }
 
 /// Open a score for reading and say which track it annotates.
@@ -70,7 +61,7 @@ pub(crate) async fn install_score_scene(
     score_id: &str,
     graph_score: Option<luma_patterns::Score>,
 ) -> Result<(), String> {
-    let update = render_engine.begin_scene_update(SceneTarget::Active);
+    let update = render_engine.begin_score_update(score_id);
     let scene = build_score_scene(
         pool,
         storage,

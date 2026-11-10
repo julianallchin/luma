@@ -6,7 +6,8 @@
 //! already_used`). A session that proves a principal offline opens the app
 //! without asking the network anything; one that does not is asked online,
 //! behind a splash, and lands at the gate when the answer is no. Nothing
-//! opens without a principal — there is no guest door.
+//! opens without a principal: a session that only claims one shows none of
+//! that account's library.
 
 use super::support;
 use gpui_agent::fixture::session::{self, Stored};
@@ -23,12 +24,12 @@ async fn seed(dir: &Path, stored: Stored) {
     let db = luma_lib::database::local::database::init_app_db_at(dir)
         .await
         .expect("failed to open fixture app database");
-    // Owned by whoever this launch will admit: `auth_visible_venues` shows the
-    // admitted principal's rows, so seeing this venue is itself proof that
-    // admission was armed for the right identity.
-    //
+    // Owned by the account every session here names. A venue is shown only
+    // to a principal admitted to it, so seeing this one is proof that
+    // admission was armed for that account — and a session without proof
+    // must not see it.
     sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', ?, 'Sign-in Venue')")
-        .bind(session::owner(stored))
+        .bind(session::PRINCIPAL)
         .execute(&db.0)
         .await
         .expect("failed to seed venue");
@@ -82,13 +83,17 @@ fn a_failed_session_refresh_offers_retry_and_a_sign_in_route() {
         if (failure.find(n => n.role === "text" && n.label.startsWith("Your session expired"))) {
             throw new Error("A refresh error was mislabeled as expiry");
         }
+        // The session names the venue's owner without proving it. Nothing of
+        // that account's library is shown on the strength of the claim.
+        const library = (s) => s.find((n) => (n.label || "").includes("Sign-in Venue")) !== undefined;
+        const claimed = library(failure);
         app.click(failure.find({ role: "button", label: "Sign in again" }));
         const gate = until("the sign-in screen", (s) =>
             s.find({ role: "text", label: "Sign in to Luma" }) !== undefined);
         ({
             field: gate.find({ role: "input", label: "Email" }) !== undefined,
             submit: gate.find({ role: "button", label: "Continue" }) !== undefined,
-            offline: gate.find({ role: "button", label: "Work offline" }) !== undefined,
+            library: claimed || library(gate),
             venues: gate.find({ role: "card", label: "Venue dialog" }) !== undefined,
             // A state, not a plane: the shell is not behind it, so neither
             // corner control is there to be pressed through it.
@@ -124,7 +129,10 @@ fn a_failed_session_refresh_offers_retry_and_a_sign_in_route() {
         "the screen carries the window's own controls"
     );
     assert_eq!(out["failure"], false, "nothing is reported as a failure");
-    assert_eq!(out["offline"], false, "there is no guest door");
+    assert_eq!(
+        out["library"], false,
+        "an unproven session shows none of the library it names"
+    );
     assert_eq!(
         out["expired"], false,
         "a refresh error does not prove expiry"
@@ -164,13 +172,12 @@ fn signing_out_from_the_venue_menu_lands_at_the_gate() {
     let dir = fixture_dir("signout", Stored::Proven { expires_in: 3600 });
     let mut harness = harness(&dir);
     let out = harness.run(
-        &support::script(r#"
+        &support::script(
+            r#"
         nav.venue("Sign-in Venue");
         until("the shell", (s) =>
             s.find({ role: "card", label: "Title bar" }) !== undefined
                 && s.find({ role: "card", label: "Venue dialog" }) === undefined);
-        // Signed in, so nothing names the guest namespace yet.
-        const before = app.snapshot().find({ role: "text", label: "Working locally" }) === undefined;
         nav.venueMenu();
         nav.step("the sign-out row", "row", "Sign out");
         // Either the gesture lands — the gate is the next screen — or it
@@ -182,17 +189,16 @@ fn signing_out_from_the_venue_menu_lands_at_the_gate() {
                     && n.label.startsWith("Could not sign out")) !== undefined
                 ? s : undefined);
         ({
-            before,
             gate: settled.find({ role: "text", label: "Sign in to Luma" }) !== undefined,
             failure: (settled.find((n) => n.role === "text"
                 && n.label.startsWith("Could not sign out")) || {}).label || null,
             // The menu went with the gesture rather than sitting open over it.
             menu: settled.find({ role: "row", label: "Sign out" }) !== undefined,
         })
-    "#),
+    "#,
+        ),
         Duration::from_secs(90),
     );
-    assert_eq!(out["before"], true, "the fixture launched signed in");
     assert_eq!(
         out["failure"],
         Value::Null,

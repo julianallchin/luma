@@ -126,6 +126,4 @@ Live has a chat of its own (`perform_set` threads, apart from the venue's). Its 
 
 1. **Audio features are offline only.** They are analysed per track and normalised over the whole track. For unscripted tracks, a live audio band-energy input is the "autoloop" fallback SoundSwitch users expect.
 2. **The docs have drifted.** The www architecture docs describe forms and say a pattern never holds its own graph, which is the opposite of the code. The node reference names a generator that doesn't exist.
-3. **Dead code:**
-   - The kernel's `Binding::Input` is unused: patterns copy rather than share, so nothing exposes inputs.
-   - The `clips.graph` and `inputs_json` columns are unused.
+3. **Dead code:** the `clips.graph` and `inputs_json` columns are unused.

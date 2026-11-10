@@ -1,7 +1,7 @@
 # Venue builder gauntlet
 
 **Status:** B1–B7 have code and goldens (`harness/goldens/patch-allocation.json`,
-`venue-groups.json`, `venue-tiles.json`, `scenes-wgpu/`). This doc is the acceptance
+`venue-groups.json`, `venue-tiles.json`). This doc is the acceptance
 contract for `docs/design/venue-graph.md` phases 3b–6. That doc decides; this one says
 what evidence proves each decision.
 **Meta-goal:** a rig is *built*, never typed — the human places structure on the
@@ -210,7 +210,8 @@ AF10.
 `render(view=fixture.pov)`, in that order of preference, front render last.
 **Evidence.** Golden tile maps per canonical venue in
 `harness/goldens/venue-tiles.json` (text, diffable); POV captures under
-`harness/goldens/scenes-wgpu/` via `render-goldens`, each with its descriptor.
+`gpui/crates/render/goldens/contracts/` via `render-contract-goldens`, each
+with its descriptor.
 **Acceptance.** The tile map tells the two canonical venues apart at a glance,
 and its diff localises a one-piece move to one tile row. A fixture POV shows
 what its mount normal points at — changing `aim` changes the frame, compared as
@@ -227,7 +228,6 @@ cargo check -p gpui-agent --all-targets        # headless tree; no --features
 cargo clippy --workspace --all-targets
 cargo test -p luma-scene -p luma-render
 cargo test -p gpui-agent --test headless       # append a name to filter a file
-cargo run -p luma-render --release --bin render-goldens -- --check
 cargo test --manifest-path ../backend/Cargo.toml
 # Pixel rounds get the second tree — never flip features in the headless one.
 export PIXEL_TARGET="$(git rev-parse --show-toplevel)/gpui/target-pixel"
@@ -236,6 +236,5 @@ CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel \
 ```
 
 `headless` is intermittently red for unrelated reasons; run a red test alone
-before believing it (`gpui/BUILD.md`); `render-goldens --check` writes nothing
-and exits non-zero on drift. The harness is the authority for every UI claim:
+before believing it (`gpui/BUILD.md`). The harness is the authority for every UI claim:
 extend it with observable roles/actions, never a parallel driver.

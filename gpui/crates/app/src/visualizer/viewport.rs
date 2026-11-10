@@ -320,9 +320,7 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
             // The render size, not the element's: past the pixel budget the
             // stage renders smaller and the compositor upscales it. Everything
             // downstream — the idle key, the renderer, the trace — sees this.
-            // `from_env` caches in a `OnceLock`, so the live percent cannot go
-            // through it and is threaded in instead.
-            let (width, height) = RenderScale::from_env().size(
+            let (width, height) = render_size(
                 key_controls.render_scale_percent,
                 key_controls.quality.pixel_budget(),
                 stage.borrow().dynamic.factor(),

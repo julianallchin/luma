@@ -80,7 +80,9 @@ pub use account::Account;
 #[cfg(feature = "agent")]
 use fixtures::FixtureTrackSources;
 #[cfg(feature = "agent")]
-pub use fixtures::{NavigationFixture, SourceAdapterFixture, SourceSearchFixtureResponse};
+pub use fixtures::{
+    NavigationFixture, SignInFixture, SourceAdapterFixture, SourceSearchFixtureResponse,
+};
 pub use patch::Patch;
 pub(crate) use scores::ScoreContents;
 pub use sources::{SourceLibrary, SourcePlaylist, SourceTrack, TrackSource};
@@ -182,8 +184,9 @@ impl std::error::Error for LibraryError {}
 /// A connection to the real Luma library.
 pub struct Library {
     services: SharedServices,
-    /// Who the app database admitted. `None` is the guest namespace, which is
-    /// also what an un-signed-in host gets.
+    /// Who the app database admitted. `None` is nobody signed in: the
+    /// interval the sign-in screen covers, in which the library's commands
+    /// refuse.
     ///
     /// Shared and mutable because identity is no longer fixed for the life of
     /// the process: signing in and signing out both move it, and every row a
@@ -199,7 +202,7 @@ pub struct Library {
     /// [`Library::search_fixtures`], which is the only reader and the only
     /// writer.
     fixtures_indexed: Arc<std::sync::atomic::AtomicBool>,
-    /// Why boot admitted the guest namespace despite finding credentials —
+    /// Why boot opened signed out despite finding credentials —
     /// see [`Library::lapsed`]. Fixed at open: it is a fact about how this
     /// process started, and signing in afterwards does not rewrite it.
     lapsed: Option<String>,
@@ -216,6 +219,9 @@ pub struct Library {
     sync_status_fixture: Option<Arc<Mutex<luma_lib::models::sync::SyncStatus>>>,
     #[cfg(feature = "agent")]
     background_work_fixture: Option<Arc<Mutex<luma_lib::models::background::BackgroundWork>>>,
+    /// Redeems login codes in Supabase's place — see [`SignInFixture`].
+    #[cfg(feature = "agent")]
+    sign_in_fixture: Option<SignInFixture>,
     /// Fires when the backend learns the session is revoked; see
     /// [`Library::session_revoked`].
     session_revoked: tokio::sync::broadcast::Sender<()>,
@@ -323,9 +329,9 @@ impl Library {
         });
         let (services, account, lapsed) = runtime.block_on(async {
             // Auth is never a reason not to open: anything short of a proven
-            // principal is the guest namespace, a working library, and the
-            // shell shows sign-in over it (see `crate::signin`). Boot is
-            // offline — a dead token or an airport is not a launch failure.
+            // principal opens signed out, and the app shows sign-in (see
+            // `crate::signin`). Boot is offline — a dead token or an airport
+            // is not a launch failure.
             //
             // This host runs the agent, whose only tool is Python, so it
             // resolves the managed environment the way backend tools do.
@@ -338,7 +344,7 @@ impl Library {
                 fixtures_root,
                 cache_dir: Some(luma_lib::storage::cache_dir()?),
                 events: events.clone(),
-                identity: Identity::StoredOrGuest,
+                identity: Identity::StoredOrSignedOut,
                 sync: syncing,
                 output: desktop,
                 // A window to play to. The harness's fixtures turn the
@@ -460,6 +466,8 @@ impl Library {
             sync_status_fixture: None,
             #[cfg(feature = "agent")]
             background_work_fixture: None,
+            #[cfg(feature = "agent")]
+            sign_in_fixture: None,
             session_revoked,
             replica_changed,
             sync_shutdown,

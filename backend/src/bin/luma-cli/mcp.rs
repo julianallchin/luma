@@ -34,15 +34,6 @@
 //! mints no score — a score is a track's membership in a room, and there is no
 //! track to have one.
 //!
-//! One subcommand sits beside the server, sharing its host and its admission:
-//!
-//! ```text
-//! luma-cli mcp record-usage --json '<AgentThreadUsage>'
-//! ```
-//!
-//! It exists because a session's *price* is known only after the session ends —
-//! see [`record_usage`].
-//!
 //! stdout is the protocol. Everything diagnostic goes to stderr.
 
 use std::sync::Arc;
@@ -397,10 +388,6 @@ async fn open(
     // `open` is this server's system prompt: it is the first call every client
     // makes, and the only place a listing reaches a model that has no Luma
     // prompt of its own.
-    // The thread is named as well as the score because it is the only handle a
-    // caller outside this process has on what the session *cost*: the harness
-    // that spawned the client learns the price after the client hangs up, by
-    // which time this server is gone, and `record-usage` needs an id.
     let Subject::Track { track_id, score_id } = &opened.subject else {
         unreachable!("this path binds a track");
     };
@@ -947,52 +934,9 @@ async fn invoke(services: &AppServices, cmd: &str, args: Value) -> Result<Value,
 // Main loop
 // -----------------------------------------------------------------------------
 
-/// `luma-cli mcp record-usage --json '<AgentThreadUsage>' [host flags]`.
-///
-/// The session that spent the money is over by the time anyone knows what it
-/// cost: `open` retires its thread when the client disconnects, and the harness
-/// only reads the price out of the CLI's final event after that. So the record
-/// arrives through a second, short-lived process against the same library,
-/// through the same dispatcher and the same write admission.
-///
-/// It takes the *record*, not the harness's own result event. Two harnesses now
-/// feed this — Claude Code and Codex — and their result events agree about
-/// nothing; the ledger row is the contract they share, and teaching this binary
-/// to parse each CLI's JSON would put the harness's knowledge in the app.
-async fn record_usage(args: impl Iterator<Item = String>) -> Result<(), String> {
-    let mut json: Option<String> = None;
-    let mut rest: Vec<String> = Vec::new();
-    let mut args = args;
-    while let Some(arg) = args.next() {
-        if arg == "--json" {
-            json = Some(args.next().ok_or("--json requires a value")?);
-        } else {
-            rest.push(arg);
-        }
-    }
-    let json = json.ok_or("record-usage requires --json '<usage record>'")?;
-    let usage: Value =
-        serde_json::from_str(&json).map_err(|error| format!("--json is not JSON: {error}"))?;
-    let config = HostConfig::parse_args(rest.into_iter())?;
-    let services = boot(&config).await?.into_shared();
-    invoke(
-        &services,
-        "agent_thread_record_usage",
-        json!({ "usage": usage }),
-    )
-    .await?;
-    println!("recorded usage for thread {}", string(&usage, "threadId"));
-    Ok(())
-}
-
 pub async fn run(args: super::Args) -> Result<(), String> {
     if let Some(message) = stale_binary() {
         eprintln!("[luma-cli mcp] {message}");
-    }
-    let mut args = args.peekable();
-    if args.peek().is_some_and(|arg| arg == "record-usage") {
-        args.next();
-        return record_usage(args).await;
     }
     let config = HostConfig::parse_args(args)?;
     let services = boot(&config).await?.into_shared();

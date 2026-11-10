@@ -2,20 +2,12 @@
 //!
 //! Route content owns only a [`RouteDescriptor`]. This reducer owns the live
 //! container size and every painted content pose, so rebuilding the element
-//! tree cannot restart a transition. Intrinsic routes remain pending while a
-//! hidden copy is measured; only [`MorphDialog::resolve_intrinsic`] commits the
-//! new target.
+//! tree cannot restart a transition.
 
 use std::time::Instant;
 
-use std::ops::Deref;
-use std::rc::Rc;
-
 use gpui::prelude::*;
-use gpui::{
-    px, AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, SharedString, Window,
-};
+use gpui::{px, AnyElement, SharedString};
 
 use crate::motion::{self, SURFACE};
 use crate::node::{Instrument as _, Role};
@@ -41,29 +33,12 @@ impl MorphSize {
         }
     }
 
-    fn min(self, maximum: Self) -> Self {
-        Self {
-            width: self.width.min(maximum.width),
-            height: self.height.min(maximum.height),
-        }
-        .normalized()
-    }
-
     fn interpolate(self, to: Self, progress: f32) -> Self {
         Self {
             width: motion::lerp(self.width, to.width, progress),
             height: motion::lerp(self.height, to.height, progress),
         }
     }
-}
-
-/// How a child declares the size it wants the shared container to become.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum RouteSize {
-    /// Both axes are known before the route is requested.
-    Exact(MorphSize),
-    /// Lay the target out invisibly, then clamp its measured size to this cap.
-    Intrinsic { maximum: MorphSize },
 }
 
 /// Which side of a two-content choreography is being evaluated.
@@ -199,7 +174,8 @@ pub fn direction(child: bool) -> MorphTransition {
 #[derive(Clone, Debug)]
 pub struct RouteDescriptor<K> {
     pub key: K,
-    pub size: RouteSize,
+    /// The size the shared container becomes for this route.
+    pub size: MorphSize,
     pub transition: MorphTransition,
 }
 
@@ -208,16 +184,7 @@ impl<K> RouteDescriptor<K> {
     pub fn exact(key: K, width: f32, height: f32) -> Self {
         Self {
             key,
-            size: RouteSize::Exact(MorphSize::new(width, height)),
-            transition: MorphTransition::Forward,
-        }
-    }
-
-    #[must_use]
-    pub fn intrinsic(key: K, maximum: MorphSize) -> Self {
-        Self {
-            key,
-            size: RouteSize::Intrinsic { maximum },
+            size: MorphSize::new(width, height),
             transition: MorphTransition::Forward,
         }
     }
@@ -227,17 +194,17 @@ impl<K> RouteDescriptor<K> {
         self.transition = transition;
         self
     }
-}
 
-#[derive(Clone, Debug)]
-struct ResolvedRoute<K> {
-    descriptor: RouteDescriptor<K>,
-    size: MorphSize,
+    /// The route at a size a card can be painted at.
+    fn normalized(mut self) -> Self {
+        self.size = self.size.normalized();
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
 struct AnimatedLayer<K> {
-    route: ResolvedRoute<K>,
+    route: RouteDescriptor<K>,
     from: LayerPose,
     to: LayerPose,
     /// Whether this is the route the flight is settling on, as opposed to one
@@ -251,16 +218,16 @@ struct AnimatedLayer<K> {
 struct Flight<K> {
     layers: Vec<AnimatedLayer<K>>,
     from_size: MorphSize,
-    target: ResolvedRoute<K>,
+    target: RouteDescriptor<K>,
     started: Instant,
 }
 
 /// An immutable layer sample for the current frame.
 #[derive(Clone, Debug)]
 pub struct SampledLayer<K> {
-    route: ResolvedRoute<K>,
+    route: RouteDescriptor<K>,
     pub key: K,
-    /// Stable resolved layout size for this route. It never follows the live
+    /// Stable layout size for this route. It never follows the live
     /// container interpolation, so responsive children cannot reflow in flight.
     pub size: MorphSize,
     pub pose: LayerPose,
@@ -292,13 +259,10 @@ impl<K: Clone> MorphSample<K> {
     /// it builds the sample directly instead of growing a second painter.
     #[must_use]
     pub fn fixed(key: K, size: MorphSize) -> Self {
-        let route = ResolvedRoute {
-            descriptor: RouteDescriptor {
-                key: key.clone(),
-                size: RouteSize::Exact(size),
-                transition: MorphTransition::CrossFade,
-            },
+        let route = RouteDescriptor {
+            key: key.clone(),
             size: size.normalized(),
+            transition: MorphTransition::CrossFade,
         };
         Self {
             size: route.size,
@@ -342,7 +306,8 @@ const MIN_VISIBLE_OPACITY: f32 = 0.01;
 /// else. Routes supply content; they do not describe the box around it.
 ///
 /// The child callback owns route content; this function owns the card's
-/// surface, geometry and clipping, and [`layers`] the rest.
+/// surface, geometry and clipping, and [`layers`] the layer order, the
+/// filtered poses and the target's input plane.
 pub fn card<K>(
     sample: &MorphSample<K>,
     semantic_label: impl Into<SharedString>,
@@ -363,13 +328,8 @@ pub fn card<K>(
 }
 
 /// The sample's route layers, each posed and placed in a box of
-/// `sample.size`. [`card`] lays them on the dialog surface; a host with a
-/// surface of its own (a popover whose body changes level) lays them in a
-/// relative box of that size that clips.
-///
-/// The child callback owns route content; this owns the layer order, the
-/// filtered poses and the target's input plane.
-pub fn layers<K>(
+/// `sample.size`, for [`card`] to lay on the dialog surface.
+fn layers<K>(
     sample: &MorphSample<K>,
     mut content: impl FnMut(&K, ContentMode) -> AnyElement,
 ) -> Vec<AnyElement> {
@@ -466,276 +426,82 @@ pub fn fixed_card(label: impl Into<SharedString>, size: MorphSize, body: AnyElem
     })
 }
 
-type MeasureCallback = Rc<dyn Fn(gpui::Size<Pixels>, &mut Window, &mut App)>;
-
-/// Lay `child` out without prepainting or painting it, then defer its measured
-/// size to `on_measure`. Skipping child prepaint is what makes the hidden copy
-/// incapable of registering focus, hitboxes or event listeners.
-pub fn premeasure(
-    child: impl IntoElement,
-    on_measure: impl Fn(gpui::Size<Pixels>, &mut Window, &mut App) + 'static,
-) -> Premeasure {
-    Premeasure {
-        child: child.into_any_element(),
-        on_measure: Rc::new(on_measure),
-    }
-}
-
-pub struct Premeasure {
-    child: AnyElement,
-    on_measure: MeasureCallback,
-}
-
-impl Element for Premeasure {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        (self.child.request_layout(window, cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self::PrepaintState {
-        let measured = bounds.size;
-        let on_measure = Rc::clone(&self.on_measure);
-        window.defer(cx, move |window, cx| on_measure(measured, window, cx));
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        _prepaint: &mut Self::PrepaintState,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) {
-    }
-}
-
-impl IntoElement for Premeasure {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteRequest {
     Unchanged,
-    NeedsMeasure,
     Transitioning,
     Settled,
-}
-
-/// Identifies one hidden layout request. Intrinsic content can request another
-/// measurement without changing route identity, so a route key alone cannot
-/// distinguish a late callback from the measurement currently in flight.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MeasurementToken(u64);
-
-#[derive(Clone, Debug)]
-pub struct PendingMeasurement<K> {
-    pub token: MeasurementToken,
-    route: RouteDescriptor<K>,
-}
-
-impl<K> Deref for PendingMeasurement<K> {
-    type Target = RouteDescriptor<K>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.route
-    }
 }
 
 /// The one durable reducer for a morphing dialog instance.
 #[derive(Clone, Debug)]
 pub struct MorphDialog<K> {
-    settled: ResolvedRoute<K>,
-    pending_measure: Option<PendingMeasurement<K>>,
-    next_measurement: u64,
+    settled: RouteDescriptor<K>,
     flight: Option<Flight<K>>,
     focus_after_commit: Option<K>,
 }
 
 impl<K: Clone + Eq> MorphDialog<K> {
     #[must_use]
-    pub fn new(route: RouteDescriptor<K>, initial_size: MorphSize) -> Self {
+    pub fn new(route: RouteDescriptor<K>) -> Self {
         Self {
-            settled: ResolvedRoute {
-                descriptor: route,
-                size: initial_size.normalized(),
-            },
-            pending_measure: None,
-            next_measurement: 0,
+            settled: route.normalized(),
             flight: None,
             focus_after_commit: None,
         }
     }
 
     #[must_use]
-    pub fn pending_measure(&self) -> Option<&PendingMeasurement<K>> {
-        self.pending_measure.as_ref()
-    }
-
-    /// Explicitly invalidate an intrinsic route's measured geometry. This is
-    /// the child-owned sizing hook for async/loading content whose route key is
-    /// intentionally stable.
-    pub fn remeasure_intrinsic(&mut self, route: RouteDescriptor<K>) -> RouteRequest {
-        assert!(
-            matches!(route.size, RouteSize::Intrinsic { .. }),
-            "only intrinsic routes can be remeasured"
-        );
-        self.queue_measurement(route)
-    }
-
-    fn queue_measurement(&mut self, route: RouteDescriptor<K>) -> RouteRequest {
-        let token = MeasurementToken(self.next_measurement);
-        self.next_measurement = self.next_measurement.wrapping_add(1);
-        self.pending_measure = Some(PendingMeasurement { token, route });
-        RouteRequest::NeedsMeasure
-    }
-
-    #[must_use]
     pub fn target_key(&self) -> &K {
         self.flight
             .as_ref()
-            .map(|flight| &flight.target.descriptor.key)
-            .unwrap_or(&self.settled.descriptor.key)
+            .map(|flight| &flight.target.key)
+            .unwrap_or(&self.settled.key)
     }
 
-    /// Request a route. Intrinsic routes do not disturb the visible state;
-    /// the host must premeasure them and call [`Self::resolve_intrinsic`].
+    /// Request a route. Asking again for the route a flight is already
+    /// settling on leaves that flight alone, so a caller may request on every
+    /// render.
     pub fn request(
         &mut self,
         route: RouteDescriptor<K>,
         now: Instant,
         reduced_motion: bool,
     ) -> RouteRequest {
-        match route.size {
-            RouteSize::Exact(size) => {
-                let size = size.normalized();
-                if !reduced_motion
-                    && self.pending_measure.is_none()
-                    && self.flight.as_ref().is_some_and(|flight| {
-                        flight.target.descriptor.key == route.key && flight.target.size == size
-                    })
-                {
-                    return RouteRequest::Unchanged;
-                }
-                self.pending_measure = None;
-                self.begin(
-                    ResolvedRoute {
-                        descriptor: route,
-                        size,
-                    },
-                    now,
-                    reduced_motion,
-                )
-            }
-            RouteSize::Intrinsic { .. } => {
-                if reduced_motion {
-                    let active_target = self
-                        .flight
-                        .as_ref()
-                        .filter(|flight| flight.target.descriptor.key == route.key)
-                        .map(|flight| flight.target.clone());
-                    if let Some(target) = active_target {
-                        self.pending_measure = None;
-                        return self.begin(target, now, true);
-                    }
-                }
-                if self
-                    .pending_measure
-                    .as_ref()
-                    .is_some_and(|pending| pending.route.key == route.key)
-                    || (self.target_key() == &route.key && self.pending_measure.is_none())
-                {
-                    RouteRequest::Unchanged
-                } else {
-                    self.queue_measurement(route)
-                }
-            }
-        }
-    }
-
-    /// Commit the hidden intrinsic measurement iff it still belongs to the
-    /// latest pending key. A stale measurement cannot replace a newer route.
-    pub fn resolve_intrinsic(
-        &mut self,
-        token: MeasurementToken,
-        measured: MorphSize,
-        now: Instant,
-        reduced_motion: bool,
-    ) -> RouteRequest {
-        let Some(pending) = self.pending_measure.as_ref() else {
-            return RouteRequest::Unchanged;
-        };
-        if pending.token != token {
+        let target = route.normalized();
+        if !reduced_motion
+            && self.flight.as_ref().is_some_and(|flight| {
+                flight.target.key == target.key && flight.target.size == target.size
+            })
+        {
             return RouteRequest::Unchanged;
         }
-        let route = self.pending_measure.take().unwrap().route;
-        let RouteSize::Intrinsic { maximum } = route.size else {
-            unreachable!("only intrinsic routes enter the measurement slot")
-        };
-        self.begin(
-            ResolvedRoute {
-                descriptor: route,
-                size: measured.min(maximum),
-            },
-            now,
-            reduced_motion,
-        )
+        self.begin(target, now, reduced_motion)
     }
 
     fn begin(
         &mut self,
-        target: ResolvedRoute<K>,
+        target: RouteDescriptor<K>,
         now: Instant,
         reduced_motion: bool,
     ) -> RouteRequest {
         let current = self.sample(now);
-        if !current.animating
-            && self.settled.descriptor.key == target.descriptor.key
-            && self.settled.size == target.size
+        if !current.animating && self.settled.key == target.key && self.settled.size == target.size
         {
             return RouteRequest::Unchanged;
         }
         if reduced_motion {
             self.settled = target;
             self.flight = None;
-            self.focus_after_commit = Some(self.settled.descriptor.key.clone());
+            self.focus_after_commit = Some(self.settled.key.clone());
             return RouteRequest::Settled;
         }
 
-        let transition = target.descriptor.transition;
+        let transition = target.transition;
         let mut layers = Vec::with_capacity(current.layers.len() + 1);
         let mut reused_target = false;
         for layer in current.layers {
-            let is_target = layer.key == target.descriptor.key && layer.size == target.size;
+            let is_target = layer.key == target.key && layer.size == target.size;
             reused_target |= is_target;
             layers.push(AnimatedLayer {
                 route: layer.route,
@@ -772,7 +538,7 @@ impl<K: Clone + Eq> MorphDialog<K> {
                 size: self.settled.size,
                 layers: vec![SampledLayer {
                     route: self.settled.clone(),
-                    key: self.settled.descriptor.key.clone(),
+                    key: self.settled.key.clone(),
                     size: self.settled.size,
                     pose: LayerPose::REST,
                     interactive: true,
@@ -791,7 +557,7 @@ impl<K: Clone + Eq> MorphDialog<K> {
                 .iter()
                 .map(|layer| SampledLayer {
                     route: layer.route.clone(),
-                    key: layer.route.descriptor.key.clone(),
+                    key: layer.route.key.clone(),
                     size: layer.route.size,
                     pose: layer.from.interpolate(layer.to, progress),
                     interactive: false,
@@ -812,7 +578,7 @@ impl<K: Clone + Eq> MorphDialog<K> {
         if reduced_motion {
             let flight = self.flight.take().unwrap();
             self.settled = flight.target;
-            self.focus_after_commit = Some(self.settled.descriptor.key.clone());
+            self.focus_after_commit = Some(self.settled.key.clone());
             return false;
         }
         if self.sample(now).animating {
@@ -820,7 +586,7 @@ impl<K: Clone + Eq> MorphDialog<K> {
         }
         let flight = self.flight.take().unwrap();
         self.settled = flight.target;
-        self.focus_after_commit = Some(self.settled.descriptor.key.clone());
+        self.focus_after_commit = Some(self.settled.key.clone());
         false
     }
 
@@ -869,8 +635,7 @@ mod tests {
     #[test]
     fn a_fixed_sample_is_a_settled_single_route_morph() {
         let fixed = MorphSample::fixed("venues", MorphSize::new(680.0, 460.0));
-        let settled = MorphDialog::new(route("venues", 680.0, 460.0), MorphSize::new(680.0, 460.0))
-            .sample(Instant::now());
+        let settled = MorphDialog::new(route("venues", 680.0, 460.0)).sample(Instant::now());
         assert_eq!(fixed.size, settled.size);
         assert_eq!(fixed.progress, settled.progress);
         assert_eq!(fixed.animating, settled.animating);
@@ -889,7 +654,7 @@ mod tests {
     #[test]
     fn forward_pins_start_mid_and_end_on_both_axes_and_poses() {
         let start = Instant::now();
-        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
+        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0));
         assert_eq!(
             dialog.request(route("b", 600.0, 440.0), start, false),
             RouteRequest::Transitioning
@@ -929,7 +694,7 @@ mod tests {
     #[test]
     fn reversal_and_replacement_anchor_every_visible_pose_and_rect() {
         let start = Instant::now();
-        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
+        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0));
         dialog.request(route("b", 600.0, 440.0), start, false);
         let flip = at(start, 70);
         let before = dialog.sample(flip);
@@ -978,7 +743,7 @@ mod tests {
     #[test]
     fn the_route_a_flight_is_settling_on_is_always_marked_exactly_once() {
         let start = Instant::now();
-        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
+        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0));
         fn targets<'k>(sample: &MorphSample<&'k str>) -> Vec<&'k str> {
             sample
                 .layers
@@ -1012,123 +777,9 @@ mod tests {
     }
 
     #[test]
-    fn intrinsic_waits_for_current_measurement_and_reduced_motion_commits_atomically() {
-        let start = Instant::now();
-        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
-        let intrinsic = RouteDescriptor::intrinsic("b", MorphSize::new(700.0, 500.0));
-        assert_eq!(
-            dialog.request(intrinsic, start, false),
-            RouteRequest::NeedsMeasure
-        );
-        assert_eq!(
-            dialog.sample(at(start, 50)).size,
-            MorphSize::new(400.0, 240.0)
-        );
-        assert_eq!(
-            dialog.resolve_intrinsic(
-                MeasurementToken(u64::MAX),
-                MorphSize::new(10.0, 10.0),
-                at(start, 60),
-                false,
-            ),
-            RouteRequest::Unchanged
-        );
-        let token = dialog.pending_measure().unwrap().token;
-        assert_eq!(
-            dialog.resolve_intrinsic(token, MorphSize::new(760.0, 420.0), at(start, 70), true),
-            RouteRequest::Settled
-        );
-        let settled = dialog.sample(at(start, 70));
-        assert_eq!(settled.size, MorphSize::new(700.0, 420.0));
-        assert!(!settled.animating);
-        assert_eq!(settled.layers.as_slice()[0].key, "b");
-        assert_eq!(dialog.take_focus_after_commit(), Some("b"));
-    }
-
-    #[test]
-    fn stale_intrinsic_replacement_cannot_displace_the_latest_measurement() {
-        let start = Instant::now();
-        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
-        dialog.request(
-            RouteDescriptor::intrinsic("b", MorphSize::new(700.0, 500.0)),
-            start,
-            false,
-        );
-        let stale = dialog.pending_measure().unwrap().token;
-        dialog.request(
-            RouteDescriptor::intrinsic("c", MorphSize::new(640.0, 480.0)),
-            at(start, 10),
-            false,
-        );
-        let current = dialog.pending_measure().unwrap().token;
-        assert_eq!(
-            dialog.resolve_intrinsic(stale, MorphSize::new(620.0, 410.0), at(start, 20), false),
-            RouteRequest::Unchanged
-        );
-        assert_eq!(dialog.pending_measure().unwrap().key, "c");
-        assert_eq!(
-            dialog.resolve_intrinsic(current, MorphSize::new(560.0, 360.0), at(start, 30), false),
-            RouteRequest::Transitioning
-        );
-        // The flight begins when the current measurement commits, at +30ms.
-        let done = settled(at(start, 30));
-        assert!(!dialog.tick(done, false));
-        let settled = dialog.sample(done);
-        assert_eq!(settled.size, MorphSize::new(560.0, 360.0));
-        assert_eq!(settled.layers.len(), 1);
-        assert_eq!(settled.layers[0].key, "c");
-    }
-
-    #[test]
-    fn same_key_intrinsic_content_can_invalidate_its_measurement() {
-        let start = Instant::now();
-        let descriptor = RouteDescriptor::intrinsic("a", MorphSize::new(700.0, 500.0));
-        let mut dialog = MorphDialog::new(descriptor.clone(), MorphSize::new(400.0, 240.0));
-
-        assert_eq!(
-            dialog.request(descriptor.clone(), start, false),
-            RouteRequest::Unchanged,
-            "declarative rebuilds must not continuously remeasure"
-        );
-        assert_eq!(
-            dialog.remeasure_intrinsic(descriptor),
-            RouteRequest::NeedsMeasure
-        );
-        let stale = dialog.pending_measure().unwrap().token;
-        assert_eq!(
-            dialog.remeasure_intrinsic(RouteDescriptor::intrinsic(
-                "a",
-                MorphSize::new(720.0, 520.0),
-            )),
-            RouteRequest::NeedsMeasure
-        );
-        let current = dialog.pending_measure().unwrap().token;
-        assert_ne!(stale, current);
-        assert_eq!(
-            dialog.resolve_intrinsic(stale, MorphSize::new(450.0, 260.0), at(start, 10), false),
-            RouteRequest::Unchanged
-        );
-        assert_eq!(
-            dialog.resolve_intrinsic(current, MorphSize::new(560.0, 360.0), at(start, 20), false,),
-            RouteRequest::Transitioning
-        );
-        let opening = dialog.sample(at(start, 20));
-        assert_eq!(opening.size, MorphSize::new(400.0, 240.0));
-        assert_eq!(
-            opening
-                .layers
-                .iter()
-                .map(|layer| layer.size)
-                .collect::<Vec<_>>(),
-            vec![MorphSize::new(400.0, 240.0), MorphSize::new(560.0, 360.0)],
-            "a resized same-key route needs an old-layout outgoing copy and a new-layout incoming copy"
-        );
-    }
-
-    #[test]
     fn reused_key_with_changed_exact_size_hands_off_before_commit() {
         let start = Instant::now();
-        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
+        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0));
         dialog.request(route("b", 600.0, 440.0), start, false);
         let reverse = at(start, 70);
         let before = dialog.sample(reverse);
@@ -1152,7 +803,7 @@ mod tests {
     #[test]
     fn interrupted_same_key_resize_preserves_each_in_flight_layout() {
         let start = Instant::now();
-        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
+        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0));
         dialog.request(route("a", 560.0, 360.0), start, false);
         let interrupt = at(start, 70);
         let before = dialog.sample(interrupt);
@@ -1212,33 +863,33 @@ mod tests {
         assert!(settled.layers[0].interactive);
     }
 
+    /// Turning reduced motion on mid-flight snaps to the target and hands it
+    /// the focus, whether the next thing to happen is a request or a tick.
     #[test]
-    fn reduced_motion_toggled_mid_flight_snaps_exact_and_intrinsic_targets() {
+    fn reduced_motion_toggled_mid_flight_snaps_to_the_target() {
         let start = Instant::now();
-        let mut exact = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
-        exact.request(route("b", 600.0, 440.0), start, false);
+        let mut requested = MorphDialog::new(route("a", 400.0, 240.0));
+        requested.request(route("b", 600.0, 440.0), start, false);
         assert_eq!(
-            exact.request(route("b", 600.0, 440.0), at(start, 60), true),
+            requested.request(route("b", 600.0, 440.0), at(start, 60), true),
             RouteRequest::Settled
         );
-        let snapped = exact.sample(at(start, 60));
+        let snapped = requested.sample(at(start, 60));
         assert_eq!(snapped.size, MorphSize::new(600.0, 440.0));
         assert_eq!(snapped.layers.len(), 1);
         assert_eq!(snapped.layers[0].key, "b");
         assert!(snapped.layers[0].interactive);
+        assert_eq!(requested.take_focus_after_commit(), Some("b"));
 
-        let mut intrinsic =
-            MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
-        let target = RouteDescriptor::intrinsic("b", MorphSize::new(700.0, 500.0));
-        intrinsic.request(target, start, false);
-        let token = intrinsic.pending_measure().unwrap().token;
-        intrinsic.resolve_intrinsic(token, MorphSize::new(620.0, 420.0), at(start, 10), false);
-        assert!(!intrinsic.tick(at(start, 70), true));
-        let snapped = intrinsic.sample(at(start, 70));
+        let mut ticked = MorphDialog::new(route("a", 400.0, 240.0));
+        ticked.request(route("b", 620.0, 420.0), at(start, 10), false);
+        assert!(!ticked.tick(at(start, 70), true));
+        let snapped = ticked.sample(at(start, 70));
         assert_eq!(snapped.size, MorphSize::new(620.0, 420.0));
         assert_eq!(snapped.layers.len(), 1);
         assert_eq!(snapped.layers[0].key, "b");
-        assert_eq!(intrinsic.take_focus_after_commit(), Some("b"));
+        assert!(snapped.layers[0].interactive);
+        assert_eq!(ticked.take_focus_after_commit(), Some("b"));
     }
 
     #[test]
@@ -1262,8 +913,7 @@ mod tests {
             MorphTransition::Custom(custom),
         ];
         for transition in transitions {
-            let mut dialog =
-                MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
+            let mut dialog = MorphDialog::new(route("a", 400.0, 240.0));
             dialog.request(
                 route("b", 520.0, 320.0).with_transition(transition),
                 start,

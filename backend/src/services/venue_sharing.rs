@@ -270,7 +270,7 @@ pub async fn remove_member(
     uid: &str,
 ) -> Result<(), CommandError> {
     let mut access = owner_write(pool, venue_id).await?;
-    if access.principal() == Some(uid) {
+    if access.principal() == uid {
         return Err(CommandError::Invalid(
             "The owner's access cannot be removed".into(),
         ));

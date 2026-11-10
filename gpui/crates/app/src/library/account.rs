@@ -53,16 +53,16 @@ impl Library {
     /// one to verify.
     ///
     /// Distinct from `user_id().is_none()`, and the distinction is the whole
-    /// point: a library nobody has signed into is a guest library, which is a
-    /// working library and owes the user nothing. A library holding
-    /// credentials that no longer prove anyone has lost something the user
-    /// had, and only signing in again gets it back — so that is the one state
-    /// that raises the sign-in gate unasked.
+    /// point: a library nobody has signed into owes the user nothing but the
+    /// sign-in screen. A library holding credentials that no longer prove
+    /// anyone has lost something the user had, and only signing in again gets
+    /// it back — so that is the one state that is first asked online whether
+    /// the session can be renewed.
     pub fn lapsed(&self) -> Option<&str> {
         self.lapsed.as_deref()
     }
 
-    /// The signed-in principal, or `None` for the guest namespace.
+    /// The signed-in principal, or `None` while nobody is signed in.
     pub fn user_id(&self) -> Option<String> {
         self.account.lock().unwrap().as_ref().map(|a| a.id.clone())
     }
@@ -79,7 +79,13 @@ impl Library {
         email: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         let email = email.to_owned();
-        self.call("send_login_code", |services| async move {
+        #[cfg(feature = "agent")]
+        let fixture = self.sign_in_fixture.is_some();
+        self.call("send_login_code", move |services| async move {
+            #[cfg(feature = "agent")]
+            if fixture {
+                return Ok(());
+            }
             handlers::auth::send_login_code(&services, email).await
         })
     }
@@ -97,7 +103,13 @@ impl Library {
         code: &str,
     ) -> impl Future<Output = Result<String, LibraryError>> + use<> {
         let (asked, code) = (email.to_owned(), code.to_owned());
-        let pending = self.call("verify_login_code", |services| async move {
+        #[cfg(feature = "agent")]
+        let fixture = self.sign_in_fixture.clone();
+        let pending = self.call("verify_login_code", move |services| async move {
+            #[cfg(feature = "agent")]
+            if let Some(fixture) = fixture {
+                return fixture(services, asked).await.map_err(Into::into);
+            }
             handlers::auth::verify_login_code(&services, asked, code).await
         });
         let cache = Arc::clone(&self.account);
