@@ -46,6 +46,7 @@
 pub mod chip;
 pub mod composer;
 mod model_picker;
+pub use model_picker::ModelPicker;
 pub mod python_cell;
 pub mod running;
 mod send_motion;
@@ -413,8 +414,12 @@ pub struct AgentChat {
     /// re-enter a borrow that is already live.
     pub(crate) composer: Composer,
     selection: Option<Selection>,
-    model_picker: model_picker::Picker,
+    model_picker: Entity<model_picker::ModelPicker>,
     selection_saving: bool,
+    /// A choice made while the last was still saving, saved after it.
+    queued_selection: Option<Selection>,
+    /// How many times the panel has rendered, for `Chat renders = N`.
+    renders: u32,
     /// The context gauge's click-open card: open, playing its exit, or closed.
     usage: MenuVisibility,
     /// Live delegation state, newest child last, one entry per subagent this
@@ -502,6 +507,11 @@ impl AgentChat {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.subscribe(&running, |this, _, event, cx| this.on_running(event, cx));
+        let model_picker = model_picker::ModelPicker::new(agent.clone(), cx);
+        // The picker is a view of its own, so it hears of what it shows of
+        // the panel — the selection, whether a change is taken — from here.
+        cx.observe_self(|chat: &mut Self, cx| chat.sync_model_picker(cx))
+            .detach();
         let chat = Self {
             agent,
             subject,
@@ -527,8 +537,10 @@ impl AgentChat {
             pin_footer: 0.0,
             composer: Composer::new(cx),
             selection: None,
-            model_picker: model_picker::Picker::new(cx),
+            model_picker,
             selection_saving: false,
+            queued_selection: None,
+            renders: 0,
             usage: MenuVisibility::Closed,
             subagents: Vec::new(),
             read_only: false,
@@ -609,125 +621,27 @@ impl AgentChat {
         cx.notify();
     }
 
-    fn toggle_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_streaming() || self.selection_saving {
-            return;
-        }
-        self.model_picker.open = !self.model_picker.open;
-        if self.model_picker.open {
-            self.model_picker.models_open = false;
-            self.model_picker.clear_search(cx);
-            window.focus(&self.model_picker.focus, cx);
-            if let Some(selection) = &self.selection {
-                self.browse_models(selection.service, cx);
-            }
-        } else {
-            window.focus(&self.composer.focus_handle(cx), cx);
-        }
-        cx.notify();
-    }
-
-    fn commit_effort(&mut self, cx: &mut Context<Self>) {
-        self.model_picker.dragging = false;
-        let Some(fraction) = self.model_picker.preview else {
-            return;
+    /// Tell the picker what it shows of the panel, when that has changed.
+    fn sync_model_picker(&mut self, cx: &mut Context<Self>) {
+        let seen = model_picker::Seen {
+            selection: self.selection.clone(),
+            streaming: self.is_streaming(),
+            saving: self.selection_saving,
         };
-        let Some(mut selection) = self.selection.clone() else {
-            return;
-        };
-        let levels = self.model_picker.efforts(&selection);
-        selection.effort = levels[model_picker::effort_index(fraction, levels.len())].clone();
-        self.select_model(selection, cx);
-        cx.notify();
-    }
-
-    fn step_effort(&mut self, key: &str, cx: &mut Context<Self>) {
-        if self.model_picker.models_open || self.is_streaming() {
-            return;
-        }
-        let Some(selection) = &self.selection else {
-            return;
-        };
-        let levels = self.model_picker.efforts(selection);
-        if levels.len() < 2 {
-            return;
-        }
-        let index = levels
-            .iter()
-            .position(|effort| effort == &selection.effort)
-            .unwrap_or(0);
-        let index = self
-            .model_picker
-            .preview
-            .map(|fraction| model_picker::effort_index(fraction, levels.len()))
-            .unwrap_or(index);
-        let next = match key {
-            "home" => 0,
-            "end" => levels.len() - 1,
-            "left" => index.saturating_sub(1),
-            _ => (index + 1).min(levels.len() - 1),
-        };
-        self.model_picker.preview = Some(next as f32 / (levels.len() - 1) as f32);
-        self.commit_effort(cx);
-    }
-
-    /// Show `service`'s models, reading them if needed. A gateway's list is
-    /// read again every time — the picker calls this each time it opens — and
-    /// the rows already held, or saved on disk, show while it is on the wire,
-    /// so the list is never blank while it refreshes. A CLI's list is read
-    /// once per session: asking means starting the CLI.
-    fn browse_models(&mut self, service: Service, cx: &mut Context<Self>) {
-        self.model_picker.show(service, cx);
-        let held = matches!(self.model_picker.catalogs.get(&service), Some(Ok(_)));
-        if (held && !service.lists_models()) || !self.model_picker.loading.insert(service) {
-            cx.notify();
-            return;
-        }
-        if !held {
-            // A previous error, cleared so the retry reads as loading.
-            self.model_picker.catalogs.remove(&service);
-        }
-        let saved = (!held).then(|| self.agent.cached_models(service));
-        let pending = self.agent.models(service);
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            // Applied before the fresh read, so the fresh read always wins.
-            let saved = match saved {
-                Some(saved) => saved.await,
-                None => None,
-            };
-            this.update(cx, |this, cx| {
-                this.model_picker.looked_up.insert(service);
-                if let Some(models) = saved {
-                    if !matches!(this.model_picker.catalogs.get(&service), Some(Ok(_))) {
-                        this.model_picker.receive(service, Ok(models), cx);
-                    }
-                }
+        if self.model_picker.read(cx).seen != seen {
+            self.model_picker.update(cx, |picker, cx| {
+                picker.seen = seen;
                 cx.notify();
-            })
-            .ok();
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                this.model_picker.loading.remove(&service);
-                this.model_picker.receive(service, result, cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+            });
+        }
     }
 
-    /// Pick the model under the list's keyboard cursor.
-    fn choose_current_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(selection), Some(model)) = (self.selection.as_ref(), self.model_picker.current())
-        else {
-            return;
-        };
-        let chosen = model.selection(self.model_picker.service, selection);
-        self.select_model(chosen, cx);
-        self.model_picker.models_open = false;
-        window.focus(&self.model_picker.focus, cx);
-        cx.notify();
+    /// The model picker, its own view so that scrolling or typing in it
+    /// redraws only it. The shell mounts it beside the panel; the panel draws
+    /// only its chip.
+    #[must_use]
+    pub fn model_picker(&self) -> &Entity<model_picker::ModelPicker> {
+        &self.model_picker
     }
 
     fn select_model(&mut self, selection: Selection, cx: &mut Context<Self>) {
@@ -735,7 +649,7 @@ impl AgentChat {
             return;
         }
         if self.selection_saving {
-            self.model_picker.queued = Some(selection);
+            self.queued_selection = Some(selection);
             return;
         }
         let Some(thread) = self.thread_id().map(str::to_owned) else {
@@ -752,15 +666,18 @@ impl AgentChat {
                     return;
                 }
                 this.selection_saving = false;
-                let queued = this.model_picker.queued.take();
+                let queued = this.queued_selection.take();
                 if queued.is_none() {
-                    this.model_picker.preview = None;
+                    this.model_picker
+                        .update(cx, |picker, cx| picker.settle_effort(cx));
                 }
                 match result {
                     Ok(thread) => {
                         this.selection = Selection::from_thread(&thread).ok();
                         if let Some(selection) = &this.selection {
-                            this.browse_models(selection.service, cx);
+                            let service = selection.service;
+                            this.model_picker
+                                .update(cx, |picker, cx| picker.browse(service, cx));
                         }
                     }
                     Err(error) => this.error = Some(error),
@@ -797,11 +714,9 @@ impl AgentChat {
         self.reads += 1;
         self.conversation = Conversation::Loading(self.reads);
         self.selection = None;
-        self.model_picker.open = false;
-        self.model_picker.preview = None;
-        self.model_picker.dragging = false;
+        self.model_picker.update(cx, |picker, cx| picker.close(cx));
         self.selection_saving = false;
-        self.model_picker.queued = None;
+        self.queued_selection = None;
         self.error = None;
         self.seat(Transcript::default(), cx);
         self.reads
@@ -1245,7 +1160,9 @@ impl AgentChat {
                     }
 
                     if let Some(selection) = &self.selection {
-                        self.browse_models(selection.service, cx);
+                        let service = selection.service;
+                        self.model_picker
+                            .update(cx, |picker, cx| picker.browse(service, cx));
                     }
                 }
                 Err(error) => self.error = Some(error),
@@ -1297,11 +1214,8 @@ impl AgentChat {
 
     /// Dismiss the model picker first; otherwise stop a running turn.
     pub fn escape(&mut self, cx: &mut Context<Self>) {
-        if self.model_picker.open {
-            self.model_picker.open = false;
-            self.model_picker.preview = None;
-            self.model_picker.dragging = false;
-            cx.notify();
+        if self.model_picker.read(cx).open {
+            self.model_picker.update(cx, |picker, cx| picker.close(cx));
             return;
         }
         if self.is_streaming() {
@@ -1502,9 +1416,7 @@ impl AgentChat {
         if self.selection_saving {
             return;
         }
-        self.model_picker.open = false;
-        self.model_picker.preview = None;
-        self.model_picker.dragging = false;
+        self.model_picker.update(cx, |picker, cx| picker.close(cx));
         let prompt = self.composer.prompt(cx);
         if prompt.is_empty() {
             return;
@@ -1732,6 +1644,7 @@ impl gpui::EventEmitter<ChatEvent> for AgentChat {}
 
 impl Render for AgentChat {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.renders += 1;
         div()
             .size_full()
             .track_focus(&self.focus)
@@ -1752,6 +1665,7 @@ impl Render for AgentChat {
                 }
             })
             .child(self.body(window, cx))
+            .child(luma_ui::node::render_count("Chat", self.renders))
     }
 }
 
@@ -1766,11 +1680,10 @@ impl AgentChat {
         // the plate is painted in one expression, and a live `&self` inside it
         // would collide with that borrow.
         let picker = self.selection.as_ref().map(|selection| {
-            self.model_picker.render(
+            model_picker::chip(
+                &self.model_picker,
                 selection,
                 self.is_streaming() || self.selection_saving,
-                &cx.entity(),
-                window,
                 cx,
             )
         });
@@ -1783,7 +1696,7 @@ impl AgentChat {
                 && self
                     .selection
                     .as_ref()
-                    .is_none_or(|selection| self.model_picker.label_settled(selection)));
+                    .is_none_or(|selection| self.model_picker.read(cx).label_settled(selection)));
         let resumable = self.resumable();
         let this = cx.entity();
         let gauge = self
@@ -1930,15 +1843,13 @@ impl AgentChat {
                                     .min_w_0()
                                     .flex()
                                     .flex_col()
-                                    .child(
-                                        div()
-                                            .opacity(if flying { 0.0 } else { 1.0 })
-                                            .child(transcript::user_bubble(
-                                                &prompt.text,
-                                                &prompt.id,
-                                                &state.theme,
-                                            )),
-                                    )
+                                    .child(div().opacity(if flying { 0.0 } else { 1.0 }).child(
+                                        transcript::user_bubble(
+                                            &prompt.text,
+                                            &prompt.id,
+                                            &state.theme,
+                                        ),
+                                    ))
                                     .children(trailer),
                             )
                             .agent_node(NodeRole::Text, prompt.text.clone())
