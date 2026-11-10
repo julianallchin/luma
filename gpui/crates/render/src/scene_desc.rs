@@ -2,7 +2,7 @@
 //!
 //! The catalogue is frozen data. It describes what each golden frame contains,
 //! and this module is its deserialiser. Edit the JSON directly when a scene
-//! must change, then recapture the goldens with `render-goldens`.
+//! must change, then recapture the goldens with `render-contract-goldens`.
 
 use std::collections::BTreeMap;
 use std::path::Path;

@@ -3,8 +3,8 @@
 Reference data and image tools for native UI and renderer tests.
 
 - `goldens/`: numerical contracts and reference images. Backend, scene and
-  render tests read them. `goldens/scenes-wgpu/` holds renderer reference
-  images.
+  render tests read them. The renderer's reference images are in
+  `gpui/crates/render/goldens/contracts/`.
 - `fixture-specs/`: 50 `luma-fixture/0` specs copied from the fixtures
   library, chosen to cover its templates, bodies, mounts, faces and joints
   (and the fixtures Luma ships). `luma-fixture`'s tests build them and check
@@ -18,9 +18,3 @@ Reference data and image tools for native UI and renderer tests.
   `scripts/screenshots/make_assets.py` and read by
   `scripts/screenshots/showcase.test.js` through the fixture's `assets`.
 - `shots/`: saved captures. Ignored by git.
-
-Render the renderer goldens:
-
-```sh
-cargo run --manifest-path gpui/Cargo.toml -p luma-render --release --bin render-goldens -- single-mover
-```
