@@ -97,14 +97,14 @@ pub const PRESENTATION_SLOTS: usize = 5;
 /// GPU backs up past a frame period — during exactly the hitch someone would be
 /// debugging.
 ///
-/// With `D = 2` in the vendored `gpui_apple/src/metal_renderer.rs`, three is the
+/// With `D = 2` in gpui's `gpui_apple/src/metal_renderer.rs`, three is the
 /// smallest safe value. Change either number and you must recheck the other; the
 /// comment there says the same from its side.
 ///
 /// # The standing invitation to delete this coupling
 ///
 /// A counting argument that two files must agree on is exactly the kind of
-/// invariant a vendored-dependency refresh can silently falsify. Retaining the
+/// invariant a gpui refresh can silently falsify. Retaining the
 /// `CVPixelBuffer` in the window command buffer's completed handler and
 /// releasing the slot from that callback would replace it with a real fence, and
 /// then neither number needs to know about the other.

@@ -61,7 +61,7 @@ gpui already has an external-surface path: `Primitive::Surface` /
 `PaintSurface` / `Window::paint_surface`, with its own pipeline and per-instance
 texture binding. It exists because Zed draws video frames. Upstream it is
 macOS-only and hardcoded to planar YCbCr, because a camera is the only thing
-that had ever fed it. The vendored gpui generalizes it: the surface carries its
+that had ever fed it. Luma's gpui generalizes it: the surface carries its
 own pixel format, which selects a plane layout and a fragment shader, and
 `SurfaceHandle` names the compositor's shareable memory on every platform.
 
@@ -78,8 +78,8 @@ Two alternatives were not taken:
 - **A new external-texture primitive.** It would be a second primitive,
   element, shader and batch kind for a concept gpui already has.
 
-The local edits to the vendored gpui that this relies on are listed in
-`gpui/vendor/zed/README.md`.
+The changes to gpui that this relies on are commits in
+[lumashow/gpui](https://github.com/lumashow/gpui), listed in its `LUMA.md`.
 
 ## 3. How the Metal path works
 
@@ -109,7 +109,7 @@ been read out. The shared path replaces both.
   against being rendered into, out of `PRESENTATION_SLOTS = 5`, which leaves two
   for the renderer. The rule is `RESERVED >= drawables + 1`: the window's
   `CAMetalLayer` allows two drawables (`set_maximum_drawable_count(2)` in the
-  vendored `gpui_apple/src/metal_renderer.rs`), each command buffer samples the
+  `gpui_apple/src/metal_renderer.rs` in lumashow/gpui), each command buffer samples the
   surface that was current when it was encoded, and the slot is released in
   prepaint, one frame before the acquire that would bound it. The doc comment
   on `RESERVED` works the count out. Change either number and the other must be

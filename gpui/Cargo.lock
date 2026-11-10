@@ -38,6 +38,16 @@ dependencies = [
 
 [[package]]
 name = "accesskit_consumer"
+version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f950720ce064757a1b629caad3a408e8d2c63bb01f29b8a3ff8daa331053ffeb"
+dependencies = [
+ "accesskit",
+ "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "accesskit_consumer"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d10a236f96f87d70732e44520046785431ef01d5bcd6b041317bfadd2f88245"
@@ -76,6 +86,20 @@ dependencies = [
  "futures-util",
  "serde",
  "zbus",
+]
+
+[[package]]
+name = "accesskit_windows"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36e93ac7bf50b964f1cbb75f741629a4e950571baa1ef1274457ab5a80d9bcc2"
+dependencies = [
+ "accesskit",
+ "accesskit_consumer 0.37.0",
+ "hashbrown 0.16.1",
+ "static_assertions",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -1200,6 +1224,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "gpui_util",
  "indexmap 2.14.0",
@@ -1260,6 +1285,16 @@ dependencies = [
  "once_cell",
  "unicode-width",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1843,6 +1878,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2927,6 +2963,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3138,6 +3175,7 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "block",
@@ -3163,6 +3201,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3214,6 +3253,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3259,6 +3299,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3269,15 +3310,20 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
+ "console_error_panic_hook",
  "gpui",
  "gpui_linux",
  "gpui_macos",
+ "gpui_web",
+ "gpui_windows",
 ]
 
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -3287,6 +3333,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "log",
@@ -3294,8 +3341,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_web"
+version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
+dependencies = [
+ "anyhow",
+ "console_error_panic_hook",
+ "futures",
+ "gpui",
+ "gpui_wgpu",
+ "http_client",
+ "js-sys",
+ "log",
+ "parking_lot",
+ "raw-window-handle",
+ "scheduler",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm_thread",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3320,6 +3392,34 @@ dependencies = [
  "web-sys",
  "wgpu",
  "zed-font-kit",
+]
+
+[[package]]
+name = "gpui_windows"
+version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
+dependencies = [
+ "accesskit",
+ "accesskit_windows",
+ "anyhow",
+ "collections",
+ "dunce",
+ "etagere",
+ "futures",
+ "gpui",
+ "gpui_util",
+ "image",
+ "itertools 0.14.0",
+ "log",
+ "parking_lot",
+ "rand 0.9.5",
+ "raw-window-handle",
+ "smallvec",
+ "uuid",
+ "windows 0.61.3",
+ "windows-core 0.61.2",
+ "windows-numerics 0.2.0",
+ "windows-registry 0.5.3",
 ]
 
 [[package]]
@@ -3572,6 +3672,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4906,6 +5007,7 @@ dependencies = [
 [[package]]
 name = "media"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "bindgen 0.71.1",
@@ -6135,6 +6237,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "collections",
  "serde",
@@ -7067,6 +7170,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "derive_refineable",
 ]
@@ -7671,6 +7775,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "async-task",
  "backtrace",
@@ -7679,6 +7784,7 @@ dependencies = [
  "futures",
  "parking_lot",
  "rand 0.9.5",
+ "wasm_thread",
  "web-time",
 ]
 
@@ -8567,6 +8673,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "heapless",
  "log",
@@ -9767,6 +9874,7 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 [[package]]
 name = "util_macros"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "perf",
  "quote",
@@ -9998,6 +10106,17 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "wasm_thread"
+version = "0.3.3"
+source = "git+https://github.com/zed-industries/wasm_thread?rev=0cf96c7708dfb97ccf3da50347e25edcf75d6937#0cf96c7708dfb97ccf3da50347e25edcf75d6937"
+dependencies = [
+ "futures",
+ "js-sys",
+ "wasm-bindgen",
  "web-sys",
 ]
 
@@ -11565,6 +11684,7 @@ dependencies = [
 [[package]]
 name = "zlog"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11581,6 +11701,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "ztracing"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -11591,6 +11712,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 
 [[package]]
 name = "zune-core"
