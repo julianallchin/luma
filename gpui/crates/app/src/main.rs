@@ -105,7 +105,8 @@ fn main() {
             // stage reports the progress (see `visualizer::body`).
             luma_app::warm_renderer(window);
             let luma = cx.new(|cx| Luma::new(library, cx));
-            cx.new(|cx| Root::new(luma, window, cx).bordered(false))
+            let smooth = cx.new(|_| luma_ui::smooth_scroll::SmoothRoot(luma.into()));
+            cx.new(|cx| Root::new(smooth, window, cx).bordered(false))
         })
         .expect("failed to open the Luma window");
         cx.activate(true);
