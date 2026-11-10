@@ -1,50 +1,56 @@
 ---
 title: Selection System
-description: Group expressions, cells, positions in a clip graph and rig UV
+description: Group references, cells, positions in a clip graph and rig UV
 ---
 
-The selection system turns a group expression into a list of fixture heads.
-It is the mechanism that lets a score play in different venues.
+The selection system turns a selection into a list of fixture heads. A
+selection names groups of the score's venue, never fixtures.
 
-## Selection expressions
+## Selections
 
-File: `backend/src/services/groups.rs`
+File: `backend/crates/patterns/src/selection.rs`
 
-An expression combines group names with operators. A name matches the fixtures
-in the group with that snake_case name in the current venue. The keyword `all`
-matches every fixture.
+A selection is the whole venue or the union of some of its groups. Each group
+is named by the id of its row:
+
+```json
+{ "all": true }
+{ "groups": ["0b0f…", "9c1e…"] }
+```
+
+A clip, a Perform pattern and a Perform group cell reference groups this way.
+A reference is to the group, not to its name, so renaming a group changes no
+selection. A group that has been deleted is still listed and selects nothing.
+
+A selection always means every head of the groups it lists. For a random share
+of heads, use a `shuffle` node read by an order `space` and a curve, as the
+Sparkle preset does. For any other set, such as the fixtures two groups share
+or a few heads of a fixture, make a group that holds it.
+
+### Resolution
+
+File: `backend/src/services/groups.rs`, function `resolve_selection`.
+
+`resolve_selection` returns the matched fixtures in venue fixture order, each
+with the heads it matched on. A group holds a whole fixture or some of its
+heads. A fixture matched on every head is returned whole.
+
+### Names
+
+People and the agent write groups by name: `all`, one group name, or several
+joined with `|`.
 
 ```
 all                          -- every fixture in the venue
 front_wash                   -- fixtures in the front_wash group
-front_wash & left_truss      -- fixtures in both groups
 left_truss | right_truss     -- fixtures in either group
-floor_ring & ~dj_booth       -- floor_ring fixtures not in dj_booth
-strobes > front_wash         -- strobes; front_wash if strobes matches nothing
 ```
 
-### Operators
-
-The parser gives these operators precedence from lowest to highest:
-
-| Operator | Name | Meaning |
-|----------|------|---------|
-| `>` | Fallback | Use the left side. If it matches nothing, use the right side. |
-| `\|` | OR | Either side matches |
-| `^` | XOR | One side. If both sides match, the seed picks one at random |
-| `&` | AND | Both sides match |
-| `~` | NOT | Negates the next term |
-| `( )` | Grouping | Changes the order |
-
-## Whole groups
-
-A selection is only a group expression (`Selection` in
-`backend/crates/patterns/src/selection.rs`). It always means every fixture the
-expression matches. For a random share of heads, use a `shuffle` node read by an
-order `space` and a curve, as the Sparkle preset does. For specific heads, make a group for them.
-
-A stored selection that still has a `subset` key from an older version loads as
-the whole group. The key is dropped when the selection is saved.
+`GroupNames` in `backend/src/services/groups.rs` translates between the two
+forms where a name is typed or shown. `parse` turns the text into ids and
+refuses a name the venue has no group for. `spell` writes a selection by name.
+It leaves out a deleted group, and writes `none` when no group is left. The
+names are never stored.
 
 ## Cells
 
@@ -55,7 +61,7 @@ clip and gives the engine a list of `Cell` values
 | Field | Meaning |
 |-------|---------|
 | `id` | Head identity |
-| `group` | Group name |
+| `group` | The selection the head came from: `all`, or its group ids joined by `\|` |
 | `world` | Position in venue space: X stage right, Y upstage, Z up |
 | `uvz` | Position in stage space |
 

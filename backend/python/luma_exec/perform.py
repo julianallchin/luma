@@ -630,7 +630,8 @@ class Perform:
 
         graph is a Graph from color(), aim(), strobe() or laser(), preset("Wash"),
         or a preset name; a preset also names it and gives its blend. selection
-        is a group expression. The cell goes on page (the first by default) at
+        is "all", a venue group's name, or several joined with | (their
+        union). The cell goes on page (the first by default) at
         (column, row) from 0, size (width, height), or in the first free place.
         It goes on top of the set unless z says. A graph with no pad (no button
         node on its output's alpha) gets one: a toggle button node named "pad"

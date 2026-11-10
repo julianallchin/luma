@@ -647,8 +647,7 @@ mod tests {
     // -- move in black ------------------------------------------------------
 
     /// A clip on the one head, compiled on a one-beat-per-second clock.
-    fn layer(mut clip: p::Clip, z: i64) -> CompiledAnnotation {
-        clip.selection_seed = None;
+    fn layer(clip: p::Clip, z: i64) -> CompiledAnnotation {
         let cells = vec![p::Cell {
             id: "fx:0".into(),
             group: "movers".into(),

@@ -8,6 +8,7 @@ use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
 use crate::services::{drafts, graph_scores};
+use crate::agent_execution::spoken_groups::SpokenGroups;
 use luma_patterns::{Score, ScoreEdit};
 
 impl TrackHost {
@@ -26,6 +27,28 @@ impl TrackHost {
                 .await
                 .map_err(|error| HostCallError::new("invalid_score", error)),
         }
+    }
+
+    /// This score's venue's groups as the agent names them, and the document
+    /// those names are read against.
+    async fn spoken(&self) -> Result<(SpokenGroups, Score), HostCallError> {
+        let stored = self.score_document().await?;
+        let mut access =
+            VenueAccess::<Read>::read(&self.pool, VenueResource::Venue(&self.scope.venue_id))
+                .await
+                .map_err(|error| HostCallError::new("forbidden", error))?;
+        let groups = SpokenGroups::read(&self.resource_root, &mut access)
+            .await
+            .map_err(|error| HostCallError::new("internal", error))?;
+        Ok((groups, stored))
+    }
+
+    /// A score as Python hands it over, its group names looked up.
+    pub(crate) async fn named_score(&self, document: Value) -> Result<Score, HostCallError> {
+        let (groups, stored) = self.spoken().await?;
+        groups
+            .score(document, &stored)
+            .map_err(|error| HostCallError::new("invalid_score", error))
     }
 
     /// Refuse a candidate whose changed clips fail validation. Playback leaves
@@ -128,8 +151,22 @@ impl TrackHost {
         context: &HostCallContext,
     ) -> Result<Value, HostCallError> {
         let limit = call_limit(context)?;
+        if method == "track.clip_check" {
+            let request: ClipCheck = decode(payload)?;
+            return Ok(clip_check(request));
+        }
+        let (groups, stored) = self.spoken().await?;
+        let score = |document: Value| {
+            groups
+                .score(document, &stored)
+                .map_err(|error| HostCallError::new("invalid_score", error))
+        };
         if method == "track.score_apply" {
             let plan: Apply = decode(payload)?;
+            let plan = Applied {
+                base: score(plan.base)?,
+                candidate: score(plan.candidate)?,
+            };
             supervise(
                 async {
                     self.validate_candidate(&plan.candidate).await?;
@@ -141,25 +178,23 @@ impl TrackHost {
             .await?;
             context.begin_irreversible()?;
             let saved = self.apply_score(&plan.base, &plan.candidate).await?;
-            return Ok(json!(saved));
-        }
-        if method == "track.clip_check" {
-            let request: ClipCheck = decode(payload)?;
-            return Ok(clip_check(request));
+            return Ok(groups.spoken(json!(saved)));
         }
         supervise(async {
             match method {
                 "track.score_check" => {
                     let plan: Candidate = decode(payload)?;
-                    self.validate_candidate(&plan.candidate).await?;
-                    let scene = self.prepare_score(&plan.candidate).await?;
-                    Ok(json!({"ok": true, "clips": plan.candidate.clips.len(), "compiledClips": scene.annotations.len()}))
+                    let candidate = score(plan.candidate)?;
+                    self.validate_candidate(&candidate).await?;
+                    let scene = self.prepare_score(&candidate).await?;
+                    Ok(json!({"ok": true, "clips": candidate.clips.len(), "compiledClips": scene.annotations.len()}))
                 }
                 "track.score_render" => {
                     let request: Render = decode(payload)?;
                     validate_window(&self.pool, &self.scope.track_id, request.start_time, request.end_time).await?;
-                    self.validate_candidate(&request.candidate).await?;
-                    let scene = self.prepare_score(&request.candidate).await?;
+                    let candidate = score(request.candidate)?;
+                    self.validate_candidate(&candidate).await?;
+                    let scene = self.prepare_score(&candidate).await?;
                     self.render_scene(scene, request.start_time, request.end_time).await
                 }
                 _ => Err(HostCallError::new("unknown_method", "unknown score operation")),
@@ -181,9 +216,13 @@ struct ClipCheck {
 
 /// `{"ok": true}`, or `{"ok": false, "error": text}` with the checker's text
 /// (`clip <name> (<id>): <node>.<input>: expected ...`). It needs no venue:
-/// the checker never looks at geometry.
-fn clip_check(request: ClipCheck) -> Value {
+/// the checker never looks at geometry, nor at which groups the clip names,
+/// so the clip is checked on the whole rig.
+fn clip_check(mut request: ClipCheck) -> Value {
     let id = request.id.as_deref().unwrap_or("new");
+    if let Some(selection) = request.clip.get_mut("selection") {
+        *selection = luma_patterns::Selection::All.to_value();
+    }
     let checked = serde_json::from_value::<luma_patterns::Clip>(request.clip)
         .map_err(|error| format!("clip ({id}): {error}"))
         .and_then(|clip| {
@@ -199,13 +238,19 @@ fn clip_check(request: ClipCheck) -> Value {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Candidate {
-    candidate: Score,
+    candidate: Value,
 }
 
 /// `base` is the score the edit read; only what differs from it is written.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Apply {
+    base: Value,
+    candidate: Value,
+}
+
+/// An [`Apply`] with its group names looked up.
+struct Applied {
     base: Score,
     candidate: Score,
 }
@@ -213,7 +258,7 @@ struct Apply {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Render {
-    candidate: Score,
+    candidate: Value,
     start_time: f64,
     end_time: f64,
 }

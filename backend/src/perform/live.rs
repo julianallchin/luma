@@ -271,22 +271,20 @@ impl Build {
     ) -> Result<Option<CompiledAnnotation>, String> {
         let mut clip = pattern.as_clip(-PICKUP_BARS * self.beats_per_bar, BEATS);
         if !groups.is_empty() {
-            clip.selection = luma_patterns::Selection::new(groups.join(" | "));
+            clip.selection = controls::selection(groups);
         }
         let elements = clip.graph.laser().map(|laser| laser.count());
         let cells = crate::services::composable_patterns::resolve_cells(
             access,
             fixtures_root,
             std::slice::from_ref(&clip.selection),
-            clip.seed,
             elements,
         )
         .await?;
         if cells.is_empty() {
             log::warn!(
-                "Perform pattern {} lights nothing on {} in this venue",
-                pattern.name,
-                clip.selection.expression
+                "Perform pattern {} lights nothing in this venue",
+                pattern.name
             );
             return Ok(None);
         }
@@ -440,12 +438,11 @@ async fn group_lights(
     groups.insert(controls::ALL);
     let mut lights = HashMap::new();
     for group in groups {
-        let selection = luma_patterns::Selection::new(group);
+        let selection = controls::selection(&[group.to_owned()]);
         let resolved = crate::eval::context::resolve_selection_primitives_with_access(
             access,
             fixtures_root,
             &selection,
-            0,
             None,
         )
         .await;
@@ -547,9 +544,7 @@ mod tests {
             id: id.into(),
             venue_id: "venue".into(),
             name: id.into(),
-            selection: luma_patterns::Selection {
-                expression: "all".into(),
-            },
+            selection: luma_patterns::Selection::All,
             z_index: 0,
             blend_mode: luma_patterns::BlendMode::Replace,
             seed: 1,

@@ -38,7 +38,9 @@ use crate::models::perform::{
 };
 use crate::perform::PerformSession;
 use crate::services::perform_set::{PerformSet, Set};
-use crate::services::{busk_page, groups};
+use super::spoken_groups::SpokenGroups;
+use crate::services::busk_page;
+use luma_patterns::Selection;
 
 /// The most columns or rows a page has, as on the Perform tab.
 const MOST: u16 = 16;
@@ -94,21 +96,43 @@ impl PerformHost {
         Ok(answer)
     }
 
-    /// One method, by name. Every write is an edit of the set as stored.
+    /// One method, by name. The agent names groups; the set holds their ids
+    /// ([`SpokenGroups`]), so names are looked up on the way in and every
+    /// answer is spelled on the way out.
     pub(crate) async fn call(&self, method: &str, payload: Value) -> Result<Value, HostCallError> {
+        let groups = self.groups().await?;
+        let answer = self.act(method, payload, &groups).await?;
+        Ok(groups.spoken(answer))
+    }
+
+    /// Every write is an edit of the set as stored.
+    async fn act(
+        &self,
+        method: &str,
+        payload: Value,
+        spoken: &SpokenGroups,
+    ) -> Result<Value, HostCallError> {
+        let ids = |names: Vec<String>| -> Result<Vec<String>, HostCallError> {
+            names
+                .iter()
+                .map(|name| spoken.group(name).map_err(refused))
+                .collect()
+        };
         match method {
             "perform.read" => Ok(json!({ "set": self.set().read().await?.described() })),
             "perform.add" => {
                 let add: Add = decode(payload)?;
-                self.check_selection(&add.selection).await?;
-                self.change(|set| add.apply(set)).await
+                let selection = spoken.selection(&add.selection).map_err(refused)?;
+                self.change(|set| add.apply(set, selection)).await
             }
             "perform.update" => {
                 let update: Update = decode(payload)?;
-                if let Some(selection) = &update.selection {
-                    self.check_selection(selection).await?;
-                }
-                self.change(|set| update.apply(set)).await
+                let selection = update
+                    .selection
+                    .as_deref()
+                    .map(|selection| spoken.selection(selection).map_err(refused))
+                    .transpose()?;
+                self.change(|set| update.apply(set, selection)).await
             }
             "perform.remove" => {
                 let Id { id } = decode(payload)?;
@@ -127,16 +151,16 @@ impl PerformHost {
                 self.change(|set| remove_page(&mut set.layout, &id)).await
             }
             "perform.place" => {
-                let place: Place = decode(payload)?;
-                if let CellContent::Group { group, .. } = &place.content {
-                    self.check_selection(group).await?;
+                let mut place: Place = decode(payload)?;
+                if let CellContent::Group { group, .. } = &mut place.content {
+                    *group = spoken.group(group).map_err(refused)?;
                 }
                 self.change(|set| place.apply(set)).await
             }
             "perform.cell" => {
-                let change: CellChange = decode(payload)?;
-                if let Some(group) = &change.group {
-                    self.check_selection(group).await?;
+                let mut change: CellChange = decode(payload)?;
+                if let Some(group) = &mut change.group {
+                    *group = spoken.group(group).map_err(refused)?;
                 }
                 self.change(|set| change.apply(set)).await
             }
@@ -162,12 +186,14 @@ impl PerformHost {
                 Ok(self.live())
             }
             "perform.choose" => {
-                let Groups { groups } = decode(payload)?;
+                let Groups { groups: named } = decode(payload)?;
                 self.require_open()?;
                 let set = self.set().read().await?;
-                if let Some(group) = groups.iter().find(|group| !set.layout.has_group(group)) {
+                let groups = ids(named.clone())?;
+                if let Some(at) = groups.iter().position(|group| !set.layout.has_group(group)) {
                     return Err(refused(format!(
-                        "no group cell of this set holds {group:?}: place one first"
+                        "no group cell of this set holds {:?}: place one first",
+                        named[at]
                     )));
                 }
                 self.session.choose(&groups).map_err(refused)?;
@@ -208,9 +234,12 @@ impl PerformHost {
                 }
                 self.require_open()?;
                 let set = self.set().read().await?;
-                if let Some(group) = groups.iter().find(|group| !set.layout.has_group(group)) {
+                let named = groups;
+                let groups = ids(named.clone())?;
+                if let Some(at) = groups.iter().position(|group| !set.layout.has_group(group)) {
                     return Err(refused(format!(
-                        "no group cell of this set holds {group:?}: place one first"
+                        "no group cell of this set holds {:?}: place one first",
+                        named[at]
                     )));
                 }
                 self.session
@@ -410,18 +439,17 @@ impl PerformHost {
             .map_err(|error| HostCallError::new("internal", error))
     }
 
-    /// Refuse a selection that names a group this venue does not have: it
-    /// would light nothing, and say nothing about why.
-    async fn check_selection(&self, expression: &str) -> Result<(), HostCallError> {
+    /// This venue's groups as the agent names them. A name the venue has no
+    /// group for is refused where it is used: it would light nothing, and say
+    /// nothing about why.
+    async fn groups(&self) -> Result<SpokenGroups, HostCallError> {
         let mut access =
             VenueAccess::<Read>::read(&self.pool, VenueResource::Venue(&self.venue_id))
                 .await
                 .map_err(|error| HostCallError::new("forbidden", error))?;
-        let tree = groups::GroupSources::read(&self.resource_root, &mut access)
+        SpokenGroups::read(&self.resource_root, &mut access)
             .await
-            .map_err(|error| HostCallError::new("internal", error))?
-            .tree();
-        groups::validate_selection_names(expression, &tree).map_err(refused)
+            .map_err(|error| HostCallError::new("internal", error))
     }
 }
 
@@ -524,14 +552,12 @@ fn one_by_one() -> (u16, u16) {
 }
 
 impl Add {
-    fn apply(self, set: &mut Set) -> Result<Value, CommandError> {
+    fn apply(self, set: &mut Set, selection: Selection) -> Result<Value, CommandError> {
         let pattern = PerformPattern {
             id: uuid::Uuid::new_v4().to_string(),
             venue_id: String::new(),
             name: named(self.name)?,
-            selection: luma_patterns::Selection {
-                expression: self.selection,
-            },
+            selection,
             z_index: self.z.unwrap_or_else(|| set.top()),
             blend_mode: self.blend,
             seed: self
@@ -575,13 +601,13 @@ struct Update {
 }
 
 impl Update {
-    fn apply(self, set: &mut Set) -> Result<Value, CommandError> {
+    fn apply(self, set: &mut Set, selection: Option<Selection>) -> Result<Value, CommandError> {
         let pattern = set.pattern_mut(&self.id)?;
         if let Some(name) = self.name {
             pattern.name = named(name)?;
         }
-        if let Some(expression) = self.selection {
-            pattern.selection = luma_patterns::Selection { expression };
+        if let Some(selection) = selection {
+            pattern.selection = selection;
         }
         if let Some(graph) = self.graph {
             pattern.graph = graph;

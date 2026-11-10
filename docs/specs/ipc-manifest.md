@@ -5,7 +5,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` fails when it is stale and
 rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 
-**136 commands** across **27 domains**
+**135 commands** across **27 domains**
 
 ## Domains
 
@@ -22,7 +22,7 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `engine_dj` | 7 | `backend/src/dispatch/handlers/engine_dj.rs` |
 | `fixtures` | 12 | `backend/src/dispatch/handlers/fixtures.rs` |
 | `folders` | 5 | `backend/src/dispatch/handlers/folders.rs` |
-| `group_references` | 2 | `backend/src/dispatch/handlers/group_references.rs` |
+| `group_references` | 1 | `backend/src/dispatch/handlers/group_references.rs` |
 | `groups` | 6 | `backend/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 6 | `backend/src/dispatch/handlers/host_audio.rs` |
 | `inputs` | 8 | `backend/src/dispatch/handlers/inputs.rs` |
@@ -38,7 +38,7 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `tracks` | 5 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 10 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **136** | |
+| **total** | **135** | |
 
 ## Commands
 
@@ -85,7 +85,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `preview_composable_pattern` | `request: ComposablePreviewRequest` | `ComposablePreview` |
-| `selection_cells` | `venueId: String`<br>`selection: Selection`<br>`seed: u64`<br>`elements: Option<usize>` | `Vec<luma_patterns::Cell>` |
+| `selection_cells` | `venueId: String`<br>`selection: Selection`<br>`elements: Option<usize>` | `Vec<luma_patterns::Cell>` |
 
 ### `compositor`
 
@@ -150,8 +150,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `missing_venue_groups` | `venueId: String` | `Vec<crate::models::groups::MissingGroup>` |
-| `resolve_venue_group` | `venueId: String`<br>`missing: String`<br>`replacement: Option<String>`<br>`fixtures: Vec<String>` | `()` |
+| `venue_group_usage` | `venueId: String` | `Vec<crate::models::groups::GroupUsage>` |
 
 ### `groups`
 

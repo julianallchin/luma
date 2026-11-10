@@ -74,7 +74,6 @@ impl InsertChoice {
                 start,
                 duration,
                 seed: 0,
-                selection_seed: None,
                 selection: luma_patterns::Selection::all(),
                 z_index: 0,
                 blend_mode: BlendMode::Replace,

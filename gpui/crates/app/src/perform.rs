@@ -52,6 +52,8 @@ pub(super) use luma_lib::controls::perform::{Part, PartKind};
 use luma_lib::controls::{perform as names, Control, Look, Played, UNSET_COLOR, UNTAPPED_BPM};
 use luma_lib::dispatch::handlers::inputs::{Address, Binding, ControllerState, InputState, Mode};
 use luma_lib::host_audio::HostAudioSnapshot;
+use luma_lib::models::groups::FixtureGroup;
+use luma_lib::services::groups::GroupNames;
 use luma_lib::models::perform::{
     Cell, CellContent, ListValue, PerformClock, PerformLayout, PerformPattern, PerformSource,
     PerformState,
@@ -99,7 +101,7 @@ pub(crate) struct Perform {
     /// The venue's own controls, for a fader cell to move.
     controls: Vec<Control>,
     /// The venue's named groups, for a pattern to light.
-    groups: Vec<String>,
+    groups: Vec<FixtureGroup>,
     surface: surface::Surface,
     /// The graph editor, open on one of the set's patterns.
     pub(crate) pattern_sheet: Option<pattern_sheet::PatternSheet>,
@@ -252,6 +254,27 @@ impl Perform {
         self.follow.as_ref()?.bank.effects.get(id)
     }
 
+    /// What `group` — a group's id, or `all` — is called on the surface.
+    pub(super) fn group_name(&self, group: &str) -> String {
+        match GroupNames::of_rows(&self.groups).name(group) {
+            Some(name) => group_label(name),
+            None => "Deleted group".into(),
+        }
+    }
+
+    /// What `selection` is called: its groups' names, joined.
+    pub(super) fn selection_name(&self, selection: &luma_patterns::Selection) -> String {
+        match selection {
+            luma_patterns::Selection::All => self.group_name(luma_lib::controls::ALL),
+            luma_patterns::Selection::Groups(groups) if groups.is_empty() => "Nothing".into(),
+            luma_patterns::Selection::Groups(groups) => groups
+                .iter()
+                .map(|group| self.group_name(group))
+                .collect::<Vec<_>>()
+                .join(" + "),
+        }
+    }
+
     /// `group`'s base color, when its lights have one.
     pub(super) fn base(&self, group: &str) -> Option<[f64; 3]> {
         self.follow.as_ref()?.bank.base.get(group).copied()
@@ -306,7 +329,7 @@ impl Perform {
                 true => "Colors".into(),
                 false => "Numbers".into(),
             },
-            CellContent::Group { label, group } if label.is_empty() => group_label(group),
+            CellContent::Group { label, group } if label.is_empty() => self.group_name(group),
             CellContent::Fader { label, .. }
             | CellContent::List { label, .. }
             | CellContent::Group { label, .. } => label.clone(),
@@ -379,6 +402,7 @@ impl Perform {
             self.surface.page,
             self.surface.selected.as_deref(),
             self.patterns.as_deref().unwrap_or_default(),
+            &self.groups,
             self.follow.as_ref(),
         )
     }
@@ -400,9 +424,9 @@ pub(super) fn paint(rgb: [f64; 3]) -> Hsla {
     luma_ui::arg::color::Light::opaque(rgb).display().into()
 }
 
-/// A group's name as a person reads it: `front_wash` is "Front wash".
-pub(super) fn group_label(expression: &str) -> String {
-    let words = expression.replace('_', " ");
+/// A snake_case name as a person reads it: `front_wash` is "Front wash".
+pub(super) fn group_label(name: &str) -> String {
+    let words = name.replace('_', " ");
     let mut chars = words.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),
@@ -893,7 +917,7 @@ impl Luma {
                 };
                 state.groups = groups
                     .into_iter()
-                    .filter_map(|group| group.name.filter(|name| !name.is_empty()))
+                    .filter(|group| group.name.as_ref().is_some_and(|name| !name.is_empty()))
                     .collect();
                 state.controls = controls;
                 let mut generated = None;
@@ -1011,16 +1035,20 @@ impl Luma {
         let Some(place) = Self::new_place(state) else {
             return self.report("No room on this page, make it bigger or clear a place", cx);
         };
-        let expression = state
-            .surface
-            .adding
-            .as_ref()
-            .map_or_else(|| "all".to_owned(), |adding| adding.group.clone());
+        let selection = luma_lib::controls::selection(
+            &state
+                .surface
+                .adding
+                .as_ref()
+                .map(|adding| adding.group.clone())
+                .into_iter()
+                .collect::<Vec<_>>(),
+        );
         let pattern = PerformPattern {
             id: uuid::Uuid::new_v4().to_string(),
             venue_id: state.venue_id.clone(),
             name: preset.name.clone(),
-            selection: luma_patterns::Selection { expression },
+            selection,
             z_index: Self::top_of_set(state),
             blend_mode: preset.blend_mode,
             seed: uuid::Uuid::new_v4().as_u64_pair().0,
@@ -1488,9 +1516,15 @@ impl Luma {
         }
     }
 
-    /// Have cell `id` light `expression`, a group's name or `all`: its
-    /// pattern's selection, or a group cell's group.
-    fn set_group(&mut self, target: &Target, id: &str, expression: String, cx: &mut Context<Self>) {
+    /// Have cell `id` light `chosen`: its pattern's selection, or — when it
+    /// is one group or the whole venue — a group cell's group.
+    fn set_group(
+        &mut self,
+        target: &Target,
+        id: &str,
+        chosen: luma_patterns::Selection,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.perform_mut(target) else {
             return;
         };
@@ -1501,19 +1535,29 @@ impl Luma {
             CellContent::Pattern { pattern_id } => {
                 let regrouped = state
                     .pattern(&pattern_id)
-                    .filter(|pattern| pattern.selection.expression != expression)
+                    .filter(|pattern| pattern.selection != chosen)
                     .map(|pattern| PerformPattern {
-                        selection: luma_patterns::Selection { expression },
+                        selection: chosen,
                         ..pattern.clone()
                     });
                 if let Some(pattern) = regrouped {
                     self.store_perform_pattern(target, pattern, cx);
                 }
             }
-            CellContent::Group { label, group } if group != expression => {
+            CellContent::Group { label, group } => {
+                let held = match &chosen {
+                    luma_patterns::Selection::All => luma_lib::controls::ALL,
+                    luma_patterns::Selection::Groups(groups) => match &groups[..] {
+                        [group] => group.as_str(),
+                        _ => return,
+                    },
+                };
+                if held == group {
+                    return;
+                }
                 let content = CellContent::Group {
                     label,
-                    group: expression,
+                    group: held.to_owned(),
                 };
                 self.apply_surface(target, Edit::SetContent(id.to_owned(), content), cx);
             }

@@ -21,9 +21,7 @@ fn pattern(id: &str) -> PerformPattern {
         id: id.into(),
         venue_id: "venue".into(),
         name: id.into(),
-        selection: luma_patterns::Selection {
-            expression: "all".into(),
-        },
+        selection: luma_patterns::Selection::All,
         z_index: 0,
         blend_mode: luma_patterns::BlendMode::Replace,
         seed: 1,

@@ -9,9 +9,9 @@
 //! wire vocabulary is published out of an implementation module, which is why
 //! `graph_documents` and `track_edits` are still `pub`.
 //!
-//! `groups` is `pub` for the same reason: the GPUI fixture picker reads an
-//! expression back through its parser ([`groups::or_terms`]) rather than
-//! growing a second one.
+//! `groups` is `pub` for the same reason: the GPUI sheet turns a typed group
+//! name into its id through [`groups::GroupNames`] rather than growing a
+//! second rule for what a name is.
 //!
 //! `venue_sharing` is `pub` so the UI harness can stand its
 //! [`venue_sharing::LocalShareCodes`] in for the server.

@@ -69,7 +69,7 @@ A score is rows.
 | table | columns |
 |---|---|
 | `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
-| `clips` | id, uid, score_id, name, graph_json, start, duration, seed (TEXT, decimal u64), selection_seed (TEXT, nullable), selection_json, z_index, blend_mode, created_at, updated_at; `graph` and `inputs_json` are retired form columns, written empty and never read |
+| `clips` | id, uid, score_id, name, graph_json, start, duration, seed (TEXT, decimal u64), selection_json, z_index, blend_mode, created_at, updated_at; `graph` and `inputs_json` are retired form columns, written empty and never read; `selection_seed` (TEXT, nullable) is retired too and never read |
 
 A clip key is unique inside its score, not across the library — two scores
 may each have a `flash`. Sync addresses every row by one global `id`, so

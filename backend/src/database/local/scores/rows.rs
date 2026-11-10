@@ -33,15 +33,15 @@ impl Changed {
 /// text because SQLite's integers are signed and a clip's seed is a full u64.
 ///
 /// `graph_json` holds the clip's graph. The form columns `graph` and
-/// `inputs_json` are still in the table until a later migration drops them;
-/// nothing reads them, and a new row writes them empty.
+/// `inputs_json`, and `selection_seed` from when a selection could draw at
+/// random, are still in the table until a later migration drops them; nothing
+/// reads them, and a new row writes them empty.
 struct ClipRow {
     name: String,
     graph_json: String,
     start: f64,
     duration: f64,
     seed: String,
-    selection_seed: Option<String>,
     selection_json: String,
     z_index: i64,
     blend_mode: String,
@@ -55,7 +55,6 @@ impl ClipRow {
             start: clip.start,
             duration: clip.duration,
             seed: clip.seed.to_string(),
-            selection_seed: clip.selection_seed.map(|seed| seed.to_string()),
             selection_json: json(&clip.selection)?,
             z_index: clip.z_index,
             blend_mode: clip.blend_mode.name().to_owned(),
@@ -69,7 +68,6 @@ impl ClipRow {
             start: self.start,
             duration: self.duration,
             seed: parse_seed(&self.seed)?,
-            selection_seed: self.selection_seed.as_deref().map(parse_seed).transpose()?,
             selection: from_json::<Selection>(&self.selection_json)?,
             z_index: self.z_index,
             blend_mode: from_json::<BlendMode>(&format!("\"{}\"", self.blend_mode))?,
@@ -94,12 +92,6 @@ impl ClipRow {
         );
         text("blend_mode", &self.blend_mode, &stored.blend_mode);
         text("seed", &self.seed, &stored.seed);
-        if self.selection_seed != stored.selection_seed {
-            changes.push((
-                "selection_seed",
-                Field::NullableText(self.selection_seed.as_deref()),
-            ));
-        }
         if self.start != stored.start {
             changes.push(("start", Field::Real(self.start)));
         }
@@ -115,7 +107,6 @@ impl ClipRow {
 
 enum Field<'a> {
     Text(&'a str),
-    NullableText(Option<&'a str>),
     Real(f64),
     Integer(i64),
 }
@@ -140,8 +131,8 @@ pub async fn load_score(
 ) -> Result<Score, String> {
     let mut score = Score::default();
     let rows = sqlx::query(
-        "SELECT id, name, graph_json, start, duration, seed, selection_seed, selection_json,
-                z_index, blend_mode
+        "SELECT id, name, graph_json, start, duration, seed, selection_json, z_index,
+                blend_mode
          FROM clips WHERE score_id = ? ORDER BY id",
     )
     .bind(score_id)
@@ -226,7 +217,6 @@ fn read_clip(row: &sqlx::sqlite::SqliteRow) -> Result<ClipRow, String> {
         start: get(row, "start")?,
         duration: get(row, "duration")?,
         seed: get(row, "seed")?,
-        selection_seed: get(row, "selection_seed")?,
         selection_json: get(row, "selection_json")?,
         z_index: get(row, "z_index")?,
         blend_mode: get(row, "blend_mode")?,
@@ -243,8 +233,8 @@ async fn insert_clip(
     // unread. It goes when the form columns are dropped.
     sqlx::query(
         "INSERT INTO clips (id, uid, score_id, name, graph_json, graph, start, duration, seed,
-                            selection_seed, selection_json, z_index, blend_mode)
-         VALUES (?1, (SELECT uid FROM scores WHERE id = ?2), ?2, ?3, ?4, '', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                            selection_json, z_index, blend_mode)
+         VALUES (?1, (SELECT uid FROM scores WHERE id = ?2), ?2, ?3, ?4, '', ?5, ?6, ?7, ?8, ?9, ?10)",
     )
     .bind(id)
     .bind(score_id)
@@ -253,7 +243,6 @@ async fn insert_clip(
     .bind(row.start)
     .bind(row.duration)
     .bind(&row.seed)
-    .bind(row.selection_seed.as_deref())
     .bind(&row.selection_json)
     .bind(row.z_index)
     .bind(&row.blend_mode)
@@ -279,7 +268,6 @@ async fn update_clip(
     for (_, value) in updates {
         statement = match value {
             Field::Text(text) => statement.bind(*text),
-            Field::NullableText(text) => statement.bind(*text),
             Field::Real(number) => statement.bind(*number),
             Field::Integer(number) => statement.bind(*number),
         };

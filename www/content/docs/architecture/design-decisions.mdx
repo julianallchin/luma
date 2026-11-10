@@ -7,16 +7,15 @@ This page lists the main architectural choices in Luma and the reason for each.
 
 ## Groups instead of fixture references
 
-A score that names fixture ids works in one venue only. A score names groups
-instead:
+A score that names fixture ids breaks when the rig changes. A score names
+groups instead:
 
-- A clip selection is a group expression, such as `front_wash & left_truss`.
+- A clip selection is the whole venue or a union of the venue's groups.
 - Each venue defines its own groups of its own fixtures.
 
-A score that uses `front_wash` works in every venue that has a `front_wash`
-group. The fallback operator (`>`) lets an expression choose another group when
-the first one matches nothing. See
-[Selection System](/docs/architecture/selection-system).
+A selection holds group ids, not names, so renaming a group changes no score.
+Changing the fixtures in a group changes what every clip that selects it
+lights. See [Selection System](/docs/architecture/selection-system).
 
 ## One small graph per clip
 

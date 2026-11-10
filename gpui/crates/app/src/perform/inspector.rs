@@ -15,6 +15,7 @@ use luma_lib::models::perform::{
     Cell, CellContent, ControlTarget, LayoutPage, ListValue, PerformPattern, Step, MOST_VALUES,
 };
 use luma_patterns::clip_graph::LiveInputKind;
+use luma_patterns::Selection;
 use luma_patterns::press::TimeUnit;
 use luma_ui::float::{self, Dismiss, RowState};
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
@@ -394,7 +395,7 @@ fn cell_sections(
                     ))
                     .child(float::inline_field_row(
                         "Group",
-                        group_picker(state, cell, &pattern.selection.expression, target, app),
+                        group_picker(state, cell, &pattern.selection, target, app),
                     ))
                     .child(edit_pattern(pattern, target, app))
                     .child(note(match pattern.graph.pad() {
@@ -499,7 +500,13 @@ fn cell_sections(
                 ))
                 .child(float::inline_field_row(
                     "Group",
-                    group_picker(state, cell, group, target, app),
+                    group_picker(
+                        state,
+                        cell,
+                        &luma_lib::controls::selection(std::slice::from_ref(group)),
+                        target,
+                        app,
+                    ),
                 ))
                 .child(note(
                     "Tap it to choose its group: what you do next acts there. Hold it \
@@ -549,21 +556,29 @@ fn cell_sections(
 fn group_picker(
     state: &Perform,
     cell: &Cell,
-    current: &str,
+    current: &Selection,
     target: &Target,
     app: &Entity<Luma>,
 ) -> impl IntoElement {
-    let current = current.to_owned();
-    let mut options: Vec<String> = std::iter::once("all".to_owned())
-        .chain(state.groups.iter().cloned())
+    let current = current.clone();
+    let mut options: Vec<Selection> = std::iter::once(Selection::All)
+        .chain(
+            state
+                .groups
+                .iter()
+                .map(|group| Selection::groups([group.id.as_str()])),
+        )
         .collect();
-    // An expression written in the editor is one of the choices too.
+    // Several groups chosen in the editor are one of the choices too.
     if !options.contains(&current) {
         options.push(current.clone());
     }
-    let labels: Vec<String> = options.iter().map(|option| group_label(option)).collect();
+    let labels: Vec<String> = options
+        .iter()
+        .map(|option| state.selection_name(option))
+        .collect();
     let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let shown = group_label(&current);
+    let shown = state.selection_name(&current);
     let open = {
         let (app, target) = (app.clone(), target.clone());
         move |_: &gpui::ClickEvent, _: &mut gpui::Window, cx: &mut gpui::App| {
@@ -580,8 +595,8 @@ fn group_picker(
         let rows = options.iter().zip(&labels).map(|(option, label)| {
             let (app, target, id, option) =
                 (app.clone(), target.clone(), cell.id.clone(), option.clone());
-            luma_ui::luma_select_item(label, RowState::of(*option == current, false))
-                .id(SharedString::from(format!("perform-group-{option}")))
+            luma_ui::luma_select_item(label, RowState::of(option == current, false))
+                .id(SharedString::from(format!("perform-group-{label}")))
                 .on_click(move |_, _, cx| {
                     let option = option.clone();
                     app.update(cx, |this, cx| {

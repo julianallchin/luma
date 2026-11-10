@@ -82,9 +82,9 @@ pub struct Clip {
     pub preset: Option<String>,
     #[serde(default)]
     pub seed: u64,
-    /// The clip's selection expression, when not the whole venue.
+    /// The ids of the groups the clip selects, when not the whole venue.
     #[serde(default)]
-    pub selection: Option<String>,
+    pub groups: Option<Vec<String>>,
     /// A clip graph (`{"version": 3, "nodes": {...}}`) to play in place of
     /// the preset's.
     #[serde(default)]
@@ -101,7 +101,7 @@ impl Clip {
             z_index: 0,
             preset: None,
             seed: 0,
-            selection: None,
+            groups: None,
             graph: None,
         }
     }
@@ -878,9 +878,8 @@ impl Fixture {
                     (clip.end - clip.start) * BEATS_PER_SECOND,
                 );
             placed.seed = clip.seed;
-            if let Some(expression) = &clip.selection {
-                placed.selection = serde_json::from_value(json!({ "expression": expression }))
-                    .expect("a selection expression");
+            if let Some(groups) = &clip.groups {
+                placed.selection = luma_patterns::Selection::groups(groups);
             }
             placed.z_index = clip.z_index;
             let mut placed = serde_json::to_value(placed).expect("a serializable clip");

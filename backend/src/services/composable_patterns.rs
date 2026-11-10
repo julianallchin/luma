@@ -46,7 +46,6 @@ pub(crate) async fn preview(
         &mut access,
         fixtures_root,
         &request.targets,
-        request.seed,
         elements,
     )
     .await?;
@@ -130,18 +129,15 @@ pub async fn resolve_cells(
     access: &mut impl AuthorizedVenue,
     fixtures_root: &Path,
     targets: &[Selection],
-    seed: u64,
     elements: Option<usize>,
 ) -> Result<Vec<Cell>, String> {
     let mut cells = Vec::new();
     let mut seen = BTreeSet::new();
     for target in targets {
-        target.validate().map_err(|error| error.to_string())?;
         let primitives = crate::eval::context::resolve_selection_primitives_with_access(
             access,
             fixtures_root,
             target,
-            seed,
             elements,
         )
         .await?;
@@ -153,7 +149,7 @@ pub async fn resolve_cells(
             }
             cells.push(Cell {
                 id,
-                group: target.expression.clone(),
+                group: target.key(),
                 world: position.map(f64::from),
                 uvz: luma_patterns::Cell::stage_coordinates(position.map(f64::from)),
             });

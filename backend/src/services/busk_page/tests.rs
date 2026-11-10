@@ -16,6 +16,7 @@ fn fixtures(prefix: &str, count: usize, role: FixtureRole, moves: bool) -> Vec<R
 
 fn group(name: &str, members: &[&RigFixture]) -> RigGroup {
     RigGroup {
+        id: name.into(),
         name: name.into(),
         fixtures: members.iter().map(|fixture| fixture.id.clone()).collect(),
     }
@@ -155,8 +156,8 @@ fn a_small_rig_gets_no_movement_and_few_groups() {
     assert_eq!(row(&busk, 4), ["Strobe", "White", "Black"], "no blinders");
     assert_eq!(busk.page.rows, 6, "the side column's six");
     assert!(busk.page.one_at_a_time.is_empty(), "nothing moves");
-    assert_eq!(named(&busk, "Chase").selection.expression, "washes");
-    assert_eq!(named(&busk, "Strobe").selection.expression, "strobes");
+    assert_eq!(named(&busk, "Chase").selection.key(), "washes");
+    assert_eq!(named(&busk, "Strobe").selection.key(), "strobes");
 }
 
 #[test]
@@ -169,7 +170,7 @@ fn movers_get_a_movement_row_that_plays_one_at_a_time() {
     );
     assert_eq!(row(&busk, 4), ["Sweep", "Circle", "Figure-8", "Nod wave"]);
     assert_eq!(busk.page.one_at_a_time, [4]);
-    assert_eq!(named(&busk, "Sweep").selection.expression, "spots | beams");
+    assert_eq!(named(&busk, "Sweep").selection.key(), "spots|beams");
     assert_eq!(row(&busk, 5), ["Strobe", "White", "Black"]);
 }
 
@@ -197,10 +198,10 @@ fn past_the_groups_row_roles_come_before_places_and_big_before_small() {
         .map(|group| group.fixtures.len())
         .max();
     assert_eq!(Some(size(&targets[7])), biggest);
-    assert_eq!(named(&busk, "Blinder").selection.expression, "blinders");
+    assert_eq!(named(&busk, "Blinder").selection.key(), "blinders");
     assert_eq!(
-        named(&busk, "Pulse").selection.expression,
-        "washes | led_bars"
+        named(&busk, "Pulse").selection.key(),
+        "washes|led_bars"
     );
 }
 
@@ -214,7 +215,7 @@ fn a_rig_with_no_groups_plays_everything_on_all() {
     assert!(busk
         .patterns
         .iter()
-        .all(|pattern| pattern.selection.expression == "all"));
+        .all(|pattern| pattern.selection == luma_patterns::Selection::All));
 }
 
 #[test]

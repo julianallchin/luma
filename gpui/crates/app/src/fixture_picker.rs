@@ -1,20 +1,19 @@
 //! Choosing fixtures by pointing at them.
 //!
-//! The strip's expression field is the power user's spelling of a selection.
-//! This dialog has searchable groups on the left and the venue on the right,
-//! with the heads a tick would light going
-//! white in the picture. An LD who has never typed `front_wash | back_movers`
-//! writes exactly that by ticking two boxes.
+//! The strip's field is the typed spelling of a selection. This dialog has
+//! searchable groups on the left and the venue on the right, with the heads a
+//! tick would light going white in the picture. An LD who has never typed
+//! `front_wash | back_movers` chooses exactly that by ticking two boxes.
 //!
-//! # What the picker can and cannot say
+//! # What the picker says
 //!
-//! A set of ticked rows is a **union**, and nothing else. So the picker reads
-//! an expression back through [`or_terms`] — the resolver's own parser, not a
-//! second one here — and an expression that uses `&`, `~`, `^` or `?` comes
-//! back as `None`. That one is shown verbatim and read-only at the top, its
-//! ticks left empty, and applying it *unchanged* leaves it exactly as it was
-//! ([`FixturePicker::touched`]). Ticking a row is what says "replace this with
-//! a union"; opening and closing the dialog is not.
+//! A selection is the whole venue or the union of some of its groups, by id
+//! ([`Selection`]), and a set of ticked rows is exactly that: nothing ticked
+//! is the whole venue. A group that has since been deleted has no row to
+//! tick; the header says the selection still names one, and applying it
+//! *unchanged* leaves it exactly as it was ([`FixturePicker::touched`]).
+//! Ticking a row is what says "replace this"; opening and closing the dialog
+//! is not.
 //!
 //! # Why the picture is pulled, not pumped
 //!
@@ -39,7 +38,6 @@ use gpui::{
     KeyDownEvent, RenderImage, ScrollHandle, SharedString, Subscription, Window,
 };
 use luma_lib::models::selection::Selection;
-use luma_lib::services::groups::{or_expression, or_terms};
 use luma_lib::stage_render::{Continuity, Sequence};
 use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::float::{self, RowState};
@@ -68,6 +66,13 @@ const PREVIEW_H: f32 =
 /// A group row.
 const ROW_HEIGHT: f32 = 26.0;
 
+/// One venue group: the id a selection holds and the name its row shows.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Group {
+    pub(crate) id: SharedString,
+    pub(crate) name: SharedString,
+}
+
 /// The dialog's state.
 pub(crate) struct FixturePicker {
     generation: uuid::Uuid,
@@ -76,21 +81,20 @@ pub(crate) struct FixturePicker {
     scroll: ScrollHandle,
     _search_subscription: Subscription,
     venue_id: String,
-    /// Every group in the venue, in venue order — the rows, and the only names
-    /// a tick can produce.
-    groups: Vec<SharedString>,
-    /// Ticked rows, in tick order, because that is the order the expression is
-    /// written in.
+    /// Every group in the venue, in venue order — the rows, and the only
+    /// groups a tick can choose.
+    groups: Vec<Group>,
+    /// Ticked rows, by group id, in tick order, because that is the order the
+    /// selection lists them in.
     checked: Vec<SharedString>,
-    /// The expression the picker could not read back as a union, kept verbatim.
-    /// `Some` puts the card in read-only-expression mode until a row is ticked.
-    opaque: Option<SharedString>,
-    /// Whether the person changed anything. An untouched opaque expression is
-    /// applied as itself — closing a dialog must not rewrite an expression
-    /// nobody edited.
+    /// The selection the dialog opened on.
+    opened_on: Selection,
+    /// Whether the person changed anything. An untouched selection is applied
+    /// as itself — closing a dialog must not rewrite a selection nobody
+    /// edited, and one that names a deleted group cannot be ticked back.
     touched: bool,
-    /// The row under the pointer. The picture previews that group *alone*, so
-    /// the answer to "what is this one?" costs no clicks.
+    /// The row under the pointer, by group id. The picture previews that
+    /// group *alone*, so the answer to "what is this one?" costs no clicks.
     hovered: Option<SharedString>,
     preview: Preview,
     apply_focus: FocusHandle,
@@ -103,9 +107,9 @@ struct Preview {
     /// The venue parked on the offscreen render thread. `None` until the rig
     /// lands; dropping it uninstalls.
     sequence: Option<Arc<Sequence>>,
-    /// The frame on screen and the expression it pictures.
+    /// The frame on screen and the selection it pictures.
     shown: Option<(Selection, Arc<RenderImage>)>,
-    /// The expression a frame is being drawn for. At most one at a time: a
+    /// The selection a frame is being drawn for. At most one at a time: a
     /// hover that arrives mid-render is picked up when this one lands, which
     /// is what keeps a sweep down the list from queueing twenty frames.
     inflight: Option<Selection>,
@@ -116,36 +120,60 @@ struct Preview {
 }
 
 impl FixturePicker {
-    fn filtered(&self) -> Vec<SharedString> {
+    fn filtered(&self) -> Vec<Group> {
         let query = self.query.to_lowercase();
         self.groups
             .iter()
-            .filter(|group| group.to_lowercase().contains(&query))
+            .filter(|group| group.name.to_lowercase().contains(&query))
             .cloned()
             .collect()
     }
 
-    /// The expression the picture should be showing: the hovered group alone,
+    /// The selection the picture should be showing: the hovered group alone,
     /// or the composed selection.
-    fn wanted(&self) -> String {
+    fn wanted(&self) -> Selection {
         match &self.hovered {
-            Some(group) => group.to_string(),
-            None => self.expression(),
+            Some(group) => Selection::groups([group.as_ref()]),
+            None => self.selection(),
         }
     }
 
-    /// What Apply would write. An untouched opaque expression is itself.
-    fn expression(&self) -> String {
-        match (&self.opaque, self.touched) {
-            (Some(raw), false) => raw.to_string(),
-            _ => or_expression(
-                &self
-                    .checked
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>(),
-            ),
+    /// What Apply would write: the ticked groups, the whole venue when none
+    /// is, or the selection as it was opened when nothing was touched.
+    fn selection(&self) -> Selection {
+        if !self.touched {
+            return self.opened_on.clone();
         }
+        if self.checked.is_empty() {
+            return Selection::All;
+        }
+        Selection::groups(self.checked.iter().map(AsRef::<str>::as_ref))
+    }
+
+    /// `selection` as its groups' names.
+    fn spelled(&self, selection: &Selection) -> String {
+        let Selection::Groups(ids) = selection else {
+            return "all".into();
+        };
+        let names: Vec<&str> = ids
+            .iter()
+            .filter_map(|id| self.groups.iter().find(|group| group.id.as_ref() == id))
+            .map(|group| group.name.as_ref())
+            .collect();
+        if names.is_empty() {
+            return "nothing".into();
+        }
+        names.join(" | ")
+    }
+
+    /// How many groups the opened selection names that the venue no longer
+    /// has.
+    fn deleted(&self) -> usize {
+        self.opened_on
+            .group_ids()
+            .iter()
+            .filter(|id| !self.groups.iter().any(|group| group.id.as_ref() == *id))
+            .count()
     }
 
     fn is_checked(&self, group: &SharedString) -> bool {
@@ -154,7 +182,7 @@ impl FixturePicker {
 
     fn toggle(&mut self, group: &SharedString) {
         self.touched = true;
-        if let Some(at) = self.checked.iter().position(|name| name == group) {
+        if let Some(at) = self.checked.iter().position(|id| id == group) {
             self.checked.remove(at);
         } else {
             self.checked.push(group.clone());
@@ -170,7 +198,7 @@ impl Luma {
     pub(crate) fn open_fixture_picker(
         &mut self,
         venue_id: String,
-        groups: Vec<SharedString>,
+        groups: Vec<Group>,
         selection: &Selection,
         cx: &mut Context<Self>,
     ) {
@@ -181,12 +209,11 @@ impl Luma {
             }
             if let Some(Overlay::FixturePicker(state)) = this.overlay.open_mut() {
                 state.query = field.read(cx).text().to_string();
-                state.hovered = state.filtered().first().cloned();
+                state.hovered = state.filtered().first().map(|group| group.id.clone());
                 state.scroll.scroll_to_item(0);
                 cx.notify();
             }
         });
-        let terms = or_terms(&selection.expression);
         let state = FixturePicker {
             generation: uuid::Uuid::new_v4(),
             search,
@@ -194,19 +221,15 @@ impl Luma {
             scroll: ScrollHandle::new(),
             _search_subscription: subscription,
             venue_id: venue_id.clone(),
-            // Only names the venue actually has can be ticked; a term naming a
-            // group that was renamed away is still shown in the raw expression
-            // line, but there is no row to tick for it.
-            checked: terms
-                .as_deref()
-                .unwrap_or_default()
+            // Only groups the venue has can be ticked; one deleted since has
+            // no row.
+            checked: selection
+                .group_ids()
                 .iter()
+                .filter(|id| groups.iter().any(|group| group.id.as_ref() == *id))
                 .map(SharedString::from)
-                .filter(|name| groups.contains(name))
                 .collect(),
-            opaque: terms
-                .is_none()
-                .then(|| SharedString::from(selection.expression.clone())),
+            opened_on: selection.clone(),
             groups,
             touched: false,
             hovered: None,
@@ -274,7 +297,7 @@ impl Luma {
         let Some(Overlay::FixturePicker(state)) = self.overlay.open_mut() else {
             return;
         };
-        let wanted = Selection::new(state.wanted());
+        let wanted = state.wanted();
         let generation = state.generation;
         if state.preview.inflight.is_some() || state.preview.attempted.as_ref() == Some(&wanted) {
             return;
@@ -325,7 +348,7 @@ impl Luma {
                     return;
                 }
                 state.preview.inflight = None;
-                if Selection::new(state.wanted()) != wanted {
+                if state.wanted() != wanted {
                     cx.notify();
                     return;
                 }
@@ -351,8 +374,8 @@ impl Luma {
         let Some(Overlay::FixturePicker(state)) = self.overlay.as_open() else {
             return;
         };
-        let expression = state.expression();
-        self.selection_live(cx, |selection| selection.expression = expression.clone());
+        let chosen = state.selection();
+        self.selection_live(cx, |selection| *selection = chosen.clone());
         self.close_overlay(cx);
     }
 
@@ -393,18 +416,18 @@ impl Luma {
                 let current = state
                     .hovered
                     .as_ref()
-                    .and_then(|name| rows.iter().position(|row| row == name));
+                    .and_then(|id| rows.iter().position(|row| &row.id == id));
                 let next = match (current, key) {
                     (Some(index), "down") => (index + 1).min(rows.len() - 1),
                     (Some(index), _) => index.saturating_sub(1),
                     (None, _) => 0,
                 };
-                state.hovered = Some(rows[next].clone());
+                state.hovered = Some(rows[next].id.clone());
                 state.scroll.scroll_to_item(next);
             }
             "enter" => {
-                if let Some(name) = state.hovered.clone() {
-                    state.toggle(&name);
+                if let Some(group) = state.hovered.clone() {
+                    state.toggle(&group);
                 }
             }
             _ => return,
@@ -462,7 +485,7 @@ fn body(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> AnyElemen
         .into_any_element()
 }
 
-/// Title, the note about an unreadable expression, and the card's two actions.
+/// Title, the note about a deleted group, and the card's two actions.
 ///
 /// The actions live *here*, not in the footer, because that is where every
 /// other dialog in the app keeps them (`welcome`, `add_tracks`): the primary
@@ -483,11 +506,11 @@ fn header(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl In
                 .agent_node(Role::Text, title),
         )
         .child(div().flex_1().min_w_0())
-        // An expression the ticks cannot spell is shown rather than hidden: it
-        // is what the clip currently does, and applying without touching a row
-        // leaves it alone.
-        .when_some(state.opaque.clone(), |band, raw| {
-            let note: SharedString = format!("{raw} — tick a group to replace it").into();
+        // A group that was deleted is said rather than hidden: it is what the
+        // clip currently names, and applying without touching a row leaves it
+        // alone.
+        .when(state.deleted() > 0 && !state.touched, |band| {
+            let note: SharedString = "Selects a deleted group — tick a group to replace it".into();
             band.child(
                 div()
                     .max_w(px(360.0))
@@ -528,7 +551,7 @@ fn header(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl In
 /// The room, lit by whatever the picker is pointing at.
 fn preview(state: &FixturePicker, app: &Entity<Luma>) -> impl IntoElement {
     let combined = app.clone();
-    let label: SharedString = format!("Preview: {}", state.wanted()).into();
+    let label: SharedString = format!("Preview: {}", state.spelled(&state.wanted())).into();
     div()
         .flex_none()
         .w(px(PREVIEW_W))
@@ -609,12 +632,13 @@ fn rows(state: &FixturePicker, app: &Entity<Luma>) -> impl IntoElement {
         .child(float::viewport().child(list))
 }
 
-fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyElement {
-    let checked = state.is_checked(group);
+fn row(state: &FixturePicker, group: &Group, app: &Entity<Luma>) -> AnyElement {
+    let checked = state.is_checked(&group.id);
     let clicked = app.clone();
     let entered = app.clone();
-    let name = group.clone();
-    let hover_name = group.clone();
+    let name = group.id.clone();
+    let hover_name = group.id.clone();
+    let (id, group) = (&group.id, &group.name);
     // The hover listener sits on a wrapper: `float::menu_row` already spends
     // its element's one `on_hover` on the row's own fade, and gpui allows
     // exactly one per element.
@@ -640,7 +664,7 @@ fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyEl
         })
         .child(
             float::menu_row(
-                RowState::of(checked, state.hovered.as_ref() == Some(group)),
+                RowState::of(checked, state.hovered.as_ref() == Some(id)),
                 format!("group-{group}"),
             )
             .id(gpui::ElementId::Name(group.clone()))
@@ -677,7 +701,7 @@ fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyEl
 /// status — what Apply would write. The readout is not an action, so it sits
 /// on the quiet side of the band rather than competing with the chip above it.
 fn footer(state: &FixturePicker) -> impl IntoElement {
-    let summary: SharedString = state.expression().into();
+    let summary: SharedString = state.spelled(&state.selection()).into();
     float::footer_band()
         .child(float::key_hint_text("↑ ↓", "Navigate"))
         .child(float::key_hint_text("↵", "Toggle"))

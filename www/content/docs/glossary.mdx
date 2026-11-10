@@ -45,11 +45,11 @@ A set of 512 DMX channels. A venue can use more than one universe.
 
 ## Group
 
-A named set of fixtures in one venue. A score selects fixtures by group name, not by fixture id. Group names are snake_case. They must match `[a-z][a-z0-9_]*` and cannot be `all`. See [Groups](/docs/user-guide/groups-and-tags).
+A named set of fixtures in one venue. A score selects fixtures by group, not by fixture id. Group names are snake_case. They must match `[a-z][a-z0-9_]*` and cannot be `all`. See [Groups](/docs/user-guide/groups-and-tags).
 
-## Selection Expression
+## Selection
 
-A query over group names. It uses `&` (and), `|` (or), `^` (either side, chosen at random when both match), `~` (not), `>` (fallback) and parentheses. An empty expression or `all` selects every fixture.
+What a clip or a live pattern targets: every fixture in the venue, or the union of some of its groups. A selection keeps a reference to each group, so renaming a group changes no score. Where you type one, write `all`, one group name, or several joined with `|`.
 
 ## Track
 
@@ -61,7 +61,7 @@ The light show for one track in one venue. A score is stored as rows: one `score
 
 ## Clip
 
-One placement of a clip graph on a score's timeline. A clip has a name, a start and a duration in beats, a z index, a blend mode, a selection expression, a seed and its own graph.
+One placement of a clip graph on a score's timeline. A clip has a name, a start and a duration in beats, a z index, a blend mode, a selection, a seed and its own graph.
 
 ## Clip Graph
 

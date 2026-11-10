@@ -26,6 +26,7 @@ pub mod perform_host;
 #[cfg(test)]
 mod python_constants_tests;
 pub mod sandbox;
+mod spoken_groups;
 #[cfg(all(test, target_os = "macos"))]
 mod sandbox_tests;
 pub mod track_host;

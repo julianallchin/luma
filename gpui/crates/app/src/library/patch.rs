@@ -29,15 +29,15 @@ impl Library {
             let groups = handlers::groups::list_group_tree(&services, venue_id.clone())
                 .await
                 .map_err(refused("list_group_tree"))?;
-            let (missing, missing_unchecked) =
-                match handlers::group_references::missing_venue_groups(&services, venue_id.clone())
+            let usage =
+                match handlers::group_references::venue_group_usage(&services, venue_id.clone())
                     .await
-                    .map_err(refused("missing_venue_groups"))
+                    .map_err(refused("venue_group_usage"))
                 {
-                    Ok(missing) => (missing, false),
+                    Ok(usage) => Some(usage),
                     Err(error) => {
                         log::warn!("could not check which groups the scores use: {error}");
-                        (Vec::new(), true)
+                        None
                     }
                 };
             let universes = handlers::fixtures::universes_in_use(&services, venue_id)
@@ -65,8 +65,7 @@ impl Library {
                 fixtures,
                 definitions,
                 groups,
-                missing,
-                missing_unchecked,
+                usage,
                 universes,
                 routes,
             })
@@ -233,10 +232,9 @@ pub struct Patch {
     pub definitions: HashMap<String, FixtureDefinition>,
     /// Saved fixture collections.
     pub groups: Vec<GroupTreeNode>,
-    pub missing: Vec<luma_lib::models::groups::MissingGroup>,
-    /// The check for groups the scores name but the venue lacks did not
-    /// run; the cause is in the log.
-    pub missing_unchecked: bool,
+    /// What selects each group, for the groups something does. `None` when
+    /// that could not be read; the cause is in the log.
+    pub usage: Option<Vec<luma_lib::models::groups::GroupUsage>>,
     /// Every universe the venue patches into, ascending.
     pub universes: Vec<u16>,
     /// Where each universe goes. Not per-venue: an output is a fact about

@@ -72,9 +72,9 @@ const layout = JSON.stringify({
             targets: [{ kind: "node", patternId: HUE, node: "hue" }],
           } },
         { id: "cell-left", column: 4, row: 0, width: 1, height: 1,
-          content: { kind: "group", label: "", group: "left_movers" } },
+          content: { kind: "group", label: "", group: "group-left" } },
         { id: "cell-right", column: 5, row: 0, width: 1, height: 1,
-          content: { kind: "group", label: "", group: "right_movers" } },
+          content: { kind: "group", label: "", group: "group-right" } },
         { id: "cell-bar", column: 6, row: 0, width: 1, height: 1,
           content: { kind: "pattern", patternId: BAR } },
         { id: "cell-base", column: 2, row: 1, width: 3, height: 1,
@@ -106,11 +106,11 @@ fixture({
     `INSERT INTO perform_patterns (id, uid, venue_id, name, selection_json, z_index,
                                    blend_mode, seed, graph_json)
        VALUES ('${PATTERN}', '$PRINCIPAL', 'venue-main', 'Front wash',
-               '{"expression":"all"}', 0, 'replace', '7', '${graph}'),
+               '{"all":true}', 0, 'replace', '7', '${graph}'),
               ('${HUE}', '$PRINCIPAL', 'venue-main', 'Hue wash',
-               '{"expression":"all"}', 1, 'below', '7', '${hued}'),
+               '{"all":true}', 1, 'below', '7', '${hued}'),
               ('${BAR}', '$PRINCIPAL', 'venue-main', 'Bar wash',
-               '{"expression":"all"}', 2, 'replace', '7', '${onTheBar}')`,
+               '{"all":true}', 2, 'replace', '7', '${onTheBar}')`,
     `INSERT INTO perform_layouts (id, uid, venue_id, layout_json)
        VALUES ('venue-main', '$PRINCIPAL', 'venue-main', '${layout}')`,
     `INSERT INTO perform_controllers (id, uid, venue_id, name, port, profile_json)

@@ -174,9 +174,7 @@ async fn a_pad_plays_a_button_as_the_button_says() {
         id: "wash".into(),
         venue_id: venue.clone(),
         name: "Wash".into(),
-        selection: luma_patterns::Selection {
-            expression: "all".into(),
-        },
+        selection: luma_patterns::Selection::All,
         z_index: 0,
         blend_mode: luma_patterns::BlendMode::Replace,
         seed: 1,

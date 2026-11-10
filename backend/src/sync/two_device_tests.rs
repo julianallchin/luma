@@ -399,7 +399,7 @@ async fn clip(pool: &SqlitePool, user: &str, score: &str, id: &str, start: f64, 
     sqlx::query(
         "INSERT INTO clips (id, uid, score_id, name, graph_json, graph, start, duration, seed,
              selection_json, z_index, blend_mode)
-         VALUES (?, ?, ?, 'Strobe', '{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}', '', ?, ?, '1', '{\"expression\":\"all\"}', 0,
+         VALUES (?, ?, ?, 'Strobe', '{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}', '', ?, ?, '1', '{\"all\":true}', 0,
                  'replace')",
     )
     .bind(format!("{score}:{id}"))
@@ -810,7 +810,6 @@ async fn a_merged_draft_arrives_as_clips() {
             start: 8.0,
             duration: 4.0,
             seed: 7,
-            selection_seed: None,
             selection: luma_patterns::Selection::all(),
             z_index: 0,
             blend_mode: luma_patterns::BlendMode::Replace,
@@ -963,7 +962,7 @@ async fn a_stranger_reaches_nothing_of_a_shared_venue() {
         Some(&serde_json::json!({
             "id": unique("clip"), "score_id": score, "graph": "strobe",
             "start": 0.0, "duration": 1.0, "seed": "1",
-            "selection_json": "{\"expression\":\"all\"}",
+            "selection_json": "{\"all\":true}",
         })),
     )
     .await;

@@ -10,7 +10,7 @@
 //! *derived from this graph*, and the cache that holds it is a read cache over
 //! these rows. Making each of the
 //! eight callers remember to invalidate is how six of them came to forget —
-//! moving a truss left every selection expression naming a derived group
+//! moving a truss left every selection of a derived group
 //! answering with the old split. The one place that can promise the cache is
 //! not stale is the place the rows change.
 //!

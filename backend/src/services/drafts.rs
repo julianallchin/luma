@@ -148,7 +148,6 @@ mod tests {
             start,
             duration: 4.0,
             seed: 7,
-            selection_seed: None,
             selection: Selection::all(),
             z_index: 0,
             blend_mode: BlendMode::Replace,

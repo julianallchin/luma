@@ -40,7 +40,7 @@ fixture({
     `INSERT INTO perform_patterns (id, uid, venue_id, name, selection_json, z_index,
                                    blend_mode, seed, graph_json)
        VALUES ('${FRONT}', '$PRINCIPAL', 'venue-main', 'Front wash',
-               '{"expression":"all"}', 0, 'replace', '7', '${JSON.stringify(graph)}')`,
+               '{"all":true}', 0, 'replace', '7', '${JSON.stringify(graph)}')`,
     `INSERT INTO perform_layouts (id, uid, venue_id, layout_json)
        VALUES ('venue-main', '$PRINCIPAL', 'venue-main', '${JSON.stringify(page(seeded))}')`,
   ],
@@ -81,7 +81,7 @@ fixture({
             venueId: "venue-main",
             pattern: {
               id: WARM, venueId: "venue-main", name: "Warm wash",
-              selection: { expression: "all" }, zIndex: 1, blendMode: "replace",
+              selection: { all: true }, zIndex: 1, blendMode: "replace",
               seed: 9, graph,
             },
           },

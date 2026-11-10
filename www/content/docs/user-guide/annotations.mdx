@@ -36,13 +36,13 @@ See [Clips and Presets](/docs/user-guide/patterns) for what a clip plays.
 | **Duration** | How long the clip lasts, in beats. |
 | **Z index** | The stacking order. A clip with a higher z index is placed above a clip with a lower z index. |
 | **Blend mode** | How the clip combines with the clips below it. The default is `replace`. |
-| **Selection** | A [selection expression](/docs/user-guide/groups-and-tags#selection-expressions). The default is `all`. |
+| **Selection** | A [selection](/docs/user-guide/groups-and-tags#selections): every fixture, or one or more groups. The default is `all`. |
 | **Graph** | The clip's own [graph](/docs/user-guide/patterns#the-graph) of nodes. |
 | **Seed** | The seed for the graph's random choices. |
 
 Double-click a clip to open its graph page. It shows the clip's name, selection, blend mode and graph.
 
-**Pick fixtures** opens a dialog. It lists the venue's groups next to a picture of the venue. Tick groups to write a union such as `front_wash | back_movers`. The dialog cannot write `&`, `~` or `^`. If the current expression uses them, the dialog shows it as read-only text.
+**Pick fixtures** opens a dialog. It lists the venue's groups next to a picture of the venue. Tick groups to select their union, such as `front_wash | back_movers`. With nothing ticked, the clip selects every fixture. If the selection has a group that was deleted, the dialog says so. Tick a group to replace it.
 
 ## How Clips Combine
 

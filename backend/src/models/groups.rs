@@ -199,7 +199,7 @@ pub struct FixtureGroup {
 #[serde(rename_all = "camelCase")]
 pub struct FixtureGroupNode {
     pub id: String,
-    /// The snake_case name a selection expression uses. Unique in the venue,
+    /// The snake_case name the group is typed and shown by. Unique in the venue,
     /// and empty for a group nobody has named — which selects nothing.
     pub name: String,
     /// What the tree shows — one path segment, not the whole path.
@@ -278,7 +278,8 @@ pub enum GroupOrigin {
 #[serde(rename_all = "camelCase")]
 pub struct GroupTreeNode {
     pub id: String,
-    /// The snake_case name a selection expression uses. Unique in the venue.
+    /// The snake_case name the group is typed and shown by. Unique in the
+    /// venue. A selection holds the id, not this.
     pub name: String,
     /// What the tree shows — one path segment, not the whole path.
     pub label: String,
@@ -290,13 +291,18 @@ pub struct GroupTreeNode {
     pub fixtures: Vec<String>,
 }
 
-/// A selector name used by saved patterns but absent from their venue: the
-/// scores that use it, and the Perform patterns.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// What selects one group: deleting the group leaves each of these selecting
+/// nothing in its place.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct MissingGroup {
-    pub name: String,
+pub struct GroupUsage {
+    pub group_id: String,
+    /// How many clips select it.
+    pub clips: usize,
+    /// The scores those clips are in.
     pub scores: Vec<String>,
-    #[serde(default)]
+    /// The Perform patterns that select it.
     pub perform_patterns: Vec<String>,
+    /// How many Perform group cells choose it.
+    pub perform_cells: usize,
 }

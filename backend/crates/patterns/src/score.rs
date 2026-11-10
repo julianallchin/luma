@@ -12,12 +12,7 @@ pub struct Clip {
     pub start: f64,
     pub duration: f64,
     pub seed: u64,
-    /// Historical clips used independent random draws for resolving the
-    /// selection (which side an `^` takes) and animating it. New clips use
-    /// `seed` for both unless explicitly supplied.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection_seed: Option<u64>,
-    /// Group expression resolved by the host; never physical fixture ids.
+    /// The venue's groups, resolved by the host; never physical fixture ids.
     #[serde(default = "all_selection")]
     pub selection: crate::Selection,
     #[serde(default)]
@@ -73,7 +68,6 @@ impl Score {
     /// and still play the rest of the score.
     pub fn validate_clip(base: &Library, id: &str, clip: &Clip) -> Result<()> {
         crate::graph::identity(id)?;
-        clip.selection.validate()?;
         let name = clip.name.trim();
         let prefix = |error: Error| {
             if name.is_empty() {
@@ -215,7 +209,6 @@ mod tests {
                         start,
                         duration: end - start,
                         seed: 0,
-                        selection_seed: None,
                         selection: crate::Selection::all(),
                         z_index: z,
                         blend_mode: crate::BlendMode::Replace,

@@ -130,7 +130,6 @@ pub(crate) struct Patch {
     /// take — under its field until the next save or cancel.
     pub(crate) group_refusal: Option<SharedString>,
     pub(crate) group_busy: bool,
-    pub(crate) repair_after_save: bool,
     pub(crate) data: Option<PatchData>,
     /// The patch could not be read. The cause is in the log.
     pub(crate) load_failed: bool,
@@ -183,7 +182,6 @@ impl Patch {
             group_editor: None,
             group_refusal: None,
             group_busy: false,
-            repair_after_save: false,
             venue_name,
             data: None,
             load_failed: false,
@@ -355,10 +353,6 @@ impl Luma {
                     return;
                 }
                 state.landed(data, cells, devices);
-                let repair = std::mem::take(&mut state.repair_after_save);
-                if repair {
-                    this.open_group_repair(cx);
-                }
                 cx.notify();
             })
             .ok();

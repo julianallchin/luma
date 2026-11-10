@@ -1,11 +1,11 @@
 ---
 title: Groups
-description: How groups name sets of fixtures so that a score works in more than one venue.
+description: How groups name sets of fixtures so that a score never refers to a fixture.
 ---
 
 # Create Groups
 
-A score never refers to a fixture id. It refers to **group names**. Each venue defines its own groups. When a score plays, Luma resolves the group names against the current venue.
+A score never refers to a fixture id. It refers to **groups** of its venue. Each venue defines its own groups. When a score plays, Luma lights the fixtures that are in the groups its clips select.
 
 ## What a Group Is
 
@@ -16,7 +16,7 @@ A group is a named set of fixtures in one venue. Example names:
 - `floor_ring`
 - `dj_booth`
 
-If two venues both have a group called `front_wash`, a clip that selects `front_wash` works in both venues. The fixtures in the two groups can be different models.
+A clip that selects `front_wash` lights the fixtures that are in `front_wash` when it plays. Change the fixtures in the group, and every clip that selects it follows.
 
 ### Group Names
 
@@ -32,9 +32,11 @@ Groups are on the venue page in **Rig** mode, beside the patch, under the stage.
 
 Generation gives only a starting set. You can save, rename and change groups after that.
 
-### Missing Groups
+### Rename and Delete
 
-A score can refer to a group that the venue does not have. The groups panel then shows **missing groups · Resolve**. The repair dialog lets you replace each missing name with a name that exists, and then **Fix affected scores**.
+A clip keeps a reference to the group, not to its name. You can rename a group and every score still selects it.
+
+Deleting a group breaks what selects it. Each clip, live pattern and group cell that selected the group lights nothing there. Before you confirm, Luma tells you how many times the group is used and in how many scores. The fixtures stay in the venue.
 
 ## Axis Values
 
@@ -48,25 +50,25 @@ A saved group can have three axis values. Each value is from -1 to +1.
 
 Groups that are generated and not saved have no axis values.
 
-## Selection Expressions
+## Selections
 
-A clip's selection is an expression over group names.
+A clip's selection is every fixture in the venue, or one or more groups. With more than one group, the clip lights the fixtures in any of them.
 
-| Operator | Name | Example | Result |
-|----------|------|---------|--------|
-| `&` | And | `front_wash & left_truss` | Fixtures in both groups |
-| `\|` | Or | `left_truss \| right_truss` | Fixtures in either group |
-| `^` | Either | `left_truss ^ right_truss` | One side. If both sides match fixtures, Luma picks one side at random. |
-| `~` | Not | `floor_ring & ~dj_booth` | Fixtures in `floor_ring` that are not in `dj_booth` |
-| `>` | Fallback | `strobes > front_wash` | The left side. If the left side matches no fixtures, the right side. |
+Where you type a selection, write group names:
 
-Use parentheses to group terms: `(left_truss | right_truss) & front_wash`.
+| Text | Result |
+|------|--------|
+| `all` | Every fixture in the venue |
+| `front_wash` | Fixtures in `front_wash` |
+| `left_truss \| right_truss` | Fixtures in either group |
 
-`>` binds most loosely. An empty expression or `all` selects every fixture in the venue.
+Luma refuses a name that the venue has no group for.
 
-## Name Groups for Portability
+A selection cannot combine groups in another way. For the fixtures that two groups share, or one group without another, make a group that holds those fixtures.
 
-Use the same names in every venue. Name a group by its role, its position, or both:
+## Name Groups
+
+Use the same names in every venue, so that you and the agent ask for the same thing everywhere. Name a group by its role, its position, or both:
 
 | Style | Examples |
 |-------|----------|
@@ -74,7 +76,7 @@ Use the same names in every venue. Name a group by its role, its position, or bo
 | Position | `front`, `back`, `ceiling`, `floor` |
 | Both | `front_wash`, `back_movers`, `floor_ring` |
 
-Use `>` to give a fallback when a venue does not have a group.
+A score belongs to one venue and selects that venue's groups.
 
 ## Next Steps
 

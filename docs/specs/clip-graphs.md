@@ -802,7 +802,7 @@ cap stays.
 {"clips": {"3f24…": {
   "name": "Chase",
   "start": 32.0, "duration": 8.0, "seed": 6348896133488684926,
-  "selection": {"expression": "led_bars_vertical"},
+  "selection": {"groups": ["2f6c1d0e-led-bars-vertical"]},
   "z_index": 0, "blend_mode": "replace",
   "graph": {
     "version": 2,
@@ -821,11 +821,11 @@ cap stays.
 Rules: an empty input is absent. A wire is `{"node": id}`. A list is a JSON
 array of numbers and wires; a bare 3-array reads as a vector, a color or a
 list of three numbers, by the input's definition. Settings at their
-default are still written. `selection_seed` stays as it is. The Rust type:
+default are still written. The Rust type:
 
 ```rust
 pub struct Clip { pub name: String, pub start: f64, pub duration: f64, pub seed: u64,
-    pub selection_seed: Option<u64>, pub selection: Selection, pub z_index: i64,
+    pub selection: Selection, pub z_index: i64,
     pub blend_mode: BlendMode, pub graph: ClipGraph }
 pub struct ClipGraph { pub version: u32, pub nodes: BTreeMap<String, Node> }
 pub struct Node { pub kind: Kind, pub settings: BTreeMap<String, String>, pub inputs: BTreeMap<String, Input> }
