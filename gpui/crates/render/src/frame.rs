@@ -1057,9 +1057,9 @@ pub fn build_at(
                     direction: base.transform_vector3(dir).normalize_or_zero(),
                     cos_beam: cone.cos_beam,
                     color: Vec3::from(head_state.color),
-                    // Overlapping cones sum in the haze, so a many-celled
-                    // fixture shares its light out as a bar's pixels do.
-                    intensity: intensity * cone.gain / count.sqrt(),
+                    // Each cell carries its share of the fixture's lumens:
+                    // the cells together are the fixture, no more.
+                    intensity: intensity * cone.gain / count,
                     cos_field: cone.cos_field,
                     wash: cone.wash,
                     gobo: head_state.gobo.min(2),
