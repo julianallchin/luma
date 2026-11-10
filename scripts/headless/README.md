@@ -118,7 +118,6 @@ The quota comes from these modules:
 | `skill {name}` | Return one playbook. |
 
 The server also answers `prompts/list` and `prompts/get` with the skills.
-`luma-cli mcp record-usage --json '<AgentThreadUsage>'` stores usage for a thread.
 
 Before `open` and `python`, the server checks whether its executable was
 rebuilt. If it was, the client must restart the MCP connection.

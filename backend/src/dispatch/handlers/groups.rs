@@ -4,7 +4,6 @@ use crate::database::local::venue_graph::rig_changed;
 use crate::dispatch::handlers::fixtures::require_changed;
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
-use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
@@ -37,31 +36,13 @@ pub async fn delete_group(services: &AppServices, id: String) -> Result<(), Comm
 // Hierarchy and selection
 // -----------------------------------------------------------------------------
 
-pub async fn preview_selection_query(
-    services: &AppServices,
-    venue_id: String,
-    query: String,
-    seed: Option<u64>,
-) -> Result<Vec<PatchedFixture>, CommandError> {
-    let mut access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    let resolved = groups_service::resolve_selection(
-        &services.fixtures_root,
-        &mut access,
-        &Selection::new(query.trim()),
-        seed.unwrap_or(groups_service::PREVIEW_SEED),
-    )
-    .await?;
-    Ok(resolved.into_iter().map(|r| r.fixture).collect())
-}
-
 /// The frame that answers "which heads is this?": every head the selection
 /// matches open and white, the rest of the rig dark — see
 /// [`stage_render::highlight`].
 ///
 /// A [`UniverseState`] rather than a fixture list because the answer is
-/// head-accurate — [`preview_selection_query`] above collapses a match to whole
-/// fixtures and so cannot picture a group that owns half a bar.
+/// head-accurate: a list of whole fixtures cannot picture a group that owns
+/// half a bar.
 pub async fn highlight_selection(
     services: &AppServices,
     venue_id: String,
@@ -449,15 +430,19 @@ mod tests {
             .find(|g| g["id"] == id)
             .unwrap()
     }
+    /// How many fixtures `query` matches in `venue`.
     async fn selection(services: &AppServices, venue: &str, query: &str) -> usize {
-        dispatch(
-            services,
-            "preview_selection_query",
-            &json!({"venueId":venue,"query":query,"seed":null}),
+        use super::{groups_service, Read, Selection, VenueAccess, VenueResource};
+        let mut access = VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(venue))
+            .await
+            .unwrap();
+        groups_service::resolve_selection(
+            &services.fixtures_root,
+            &mut access,
+            &Selection::new(query),
+            groups_service::PREVIEW_SEED,
         )
         .await
-        .unwrap()
-        .as_array()
         .unwrap()
         .len()
     }
