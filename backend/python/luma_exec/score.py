@@ -383,7 +383,11 @@ class Edit:
         Supply exactly one range: at=("17.1", "21.1") with positions
         "bar.beat.16th" (all from 1; "17" is 17.1.1), bars=(17, 21), or
         seconds=(0, 16). A range includes its start and excludes its end.
-        selection is a group expression. Clips composite bottom-up by integer z; omit z to
+        selection is "all", a venue group's name, or several joined with |
+        (their union): "spots | washes". For anything else, such as an
+        intersection or part of a group, make a group of those lights with
+        luma.venue.group(name, fixtures) and select it. Renaming a group keeps
+        the clip on it. Clips composite bottom-up by integer z; omit z to
         place above clips overlapping this range. One z is one track, as in
         Ableton: clips at one z never overlap, whatever lights they select. A
         clip placed on or stretched into another clip at its z cuts that clip

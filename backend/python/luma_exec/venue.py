@@ -276,7 +276,7 @@ def _camera(value: Any) -> dict[str, Any]:
 
 def _targets(name: str, value: Any) -> Any:
     """A `highlight=` or `focus=` argument as the host takes it: a selection
-    expression, or a list of fixture ids and `"<fixture>:<cell>"` cells."""
+    by group name, or a list of fixture ids and `"<fixture>:<cell>"` cells."""
     if isinstance(value, str):
         return value
     if isinstance(value, Group):
@@ -1235,7 +1235,7 @@ class Group:
 
     `name` is the exact snake_case identifier a score selects by, such as
     `spots_left_wing_top`. `path` is a human-readable hierarchy of labels;
-    it is not a selection expression and must not be converted into one.
+    it is not a group name and must not be used as one.
     A group with an empty `name` selects nothing.
 
     `axis_lr` / `axis_fb` / `axis_ab` are columns of a hand-made row, so a
@@ -1322,7 +1322,7 @@ class GroupTree(tuple):
         return any(g.name == wanted or g.path == wanted or g.id == wanted for g in self)
 
     def names(self) -> tuple[str, ...]:
-        """Every name a selection expression can say, in tree order."""
+        """Every name a selection can say, in tree order."""
         return tuple(g.name for g in self if g.name)
 
     def __repr__(self) -> str:
@@ -1500,8 +1500,8 @@ class Venue:
         Pass one or the other — a frame has one sky. `environment()` is the way
         to change the room itself.
 
-        `highlight` is a group selection expression (`"moving_spots"`,
-        `"~back_wash & left"`), or a list of fixtures and cells: ids, fixture
+        `highlight` is a selection (`"moving_spots"`, `"spots | washes"`,
+        `"all"`), or a list of fixtures and cells: ids, fixture
         handles, `"bar_1:3"` or `(bar, 3)` for cell 3 of `bar_1`. It
         *replaces* the lighting: every cell it names comes on open and white
         and every other goes dark, so the picture is the answer to "which

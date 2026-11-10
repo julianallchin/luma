@@ -1235,7 +1235,7 @@ mod tests {
              (id, uid, score_id, graph_json, graph, start, duration, seed, selection_json,
               blend_mode)
              VALUES ('bob-score:bob-clip', 'bob', 'bob-score', '{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}', '', 0, 1, '0',
-                     '{\"expression\":\"all\"}', 'replace')",
+                     '{\"all\":true}', 'replace')",
         )
         .execute(&pool)
         .await

@@ -11,7 +11,7 @@ use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::{glass, ladder, radius};
 
 use super::surface::Edit;
-use super::{group_label, Perform};
+use super::Perform;
 use crate::workspace::Target;
 use crate::Luma;
 
@@ -58,16 +58,12 @@ pub(super) fn menu(state: &Perform, target: &Target, app: &Entity<Luma>) -> AnyE
             app.update(cx, |this, cx| this.edit_surface(&target, edit.clone(), cx));
         }
     };
-    let groups = std::iter::once("all".to_owned())
-        .chain(state.groups.iter().cloned())
+    let groups = std::iter::once(luma_lib::controls::ALL.to_owned())
+        .chain(state.groups.iter().map(|group| group.id.clone()))
         .map(|group| {
             let chosen = adding.group == group;
-            let label = if group == "all" {
-                "All".to_owned()
-            } else {
-                group_label(&group)
-            };
-            let key = format!("perform-add-group-{group}");
+            let label = state.group_name(&group);
+            let key = format!("perform-add-group-{label}");
             float::nav_row(RowState::of(chosen, false), key.clone())
                 .id(SharedString::from(key))
                 .text_color(ladder::foreground_alpha(if chosen { 1. } else { 0.65 }))

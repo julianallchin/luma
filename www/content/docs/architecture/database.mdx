@@ -65,7 +65,7 @@ columns of synced tables are also local, such as `tracks.file_path`.
 | Table | Columns |
 |-------|---------|
 | `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
-| `clips` | id, uid, score_id, name, graph_json, start, duration, seed, selection_seed, selection_json, z_index, blend_mode, created_at, updated_at, and the unread `graph` and `inputs_json` |
+| `clips` | id, uid, score_id, name, graph_json, start, duration, seed, selection_json, z_index, blend_mode, created_at, updated_at, and the unread `graph`, `inputs_json` and `selection_seed` |
 
 A clip id is `score_id:key`. Loading a score reads the two tables into a
 `luma_patterns::Score`. Saving a score compares it with the

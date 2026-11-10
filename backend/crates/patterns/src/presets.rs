@@ -111,7 +111,6 @@ impl ClipPreset {
             start,
             duration,
             seed: 0,
-            selection_seed: None,
             selection: Selection::all(),
             z_index: 0,
             blend_mode: self.blend_mode,

@@ -100,7 +100,6 @@ async fn prepare_scene_data(
         let elements = clip.graph.laser().map(|laser| laser.count());
         let key = (
             serde_json::to_string(&clip.selection).map_err(|error| error.to_string())?,
-            clip.selection_seed.unwrap_or(clip.seed),
             elements,
         );
         let cells = if let Some(cells) = domains.get(&key) {
@@ -110,7 +109,6 @@ async fn prepare_scene_data(
                 access,
                 fixtures_root,
                 std::slice::from_ref(&clip.selection),
-                clip.selection_seed.unwrap_or(clip.seed),
                 elements,
             )
             .await?;
@@ -329,7 +327,6 @@ pub(crate) async fn preview_clips(
         let elements = clip.graph.laser().map(|laser| laser.count());
         let key = (
             serde_json::to_string(&clip.selection).map_err(|error| error.to_string())?,
-            clip.selection_seed.unwrap_or(clip.seed),
             elements,
         );
         let cells = match domains.get(&key) {
@@ -339,7 +336,6 @@ pub(crate) async fn preview_clips(
                     access,
                     fixtures_root,
                     std::slice::from_ref(&clip.selection),
-                    clip.selection_seed.unwrap_or(clip.seed),
                     elements,
                 )
                 .await
@@ -549,7 +545,6 @@ fn stand_in_clip(graph: &luma_patterns::ClipGraph, beats: f64) -> luma_patterns:
         start: 0.,
         duration: beats,
         seed: 0,
-        selection_seed: None,
         selection: luma_patterns::Selection::all(),
         z_index: 0,
         blend_mode: luma_patterns::BlendMode::Replace,

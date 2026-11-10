@@ -6,6 +6,7 @@
 use super::{inline, unavailable, ProviderCtx};
 use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::agent_execution::bindings::manifest::AgentKind;
+use crate::agent_execution::spoken_groups::SpokenGroups;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::services::perform_set;
 
@@ -20,12 +21,14 @@ pub async fn provide(b: &mut BindingBuilder, ctx: &ProviderCtx<'_>) -> Result<()
     let read = async {
         let mut access =
             VenueAccess::<Read>::read(ctx.pool, VenueResource::Venue(venue_id)).await?;
-        perform_set::read(&mut access).await
+        let set = perform_set::read(&mut access).await?;
+        let groups = SpokenGroups::read(ctx.resource_root, &mut access).await?;
+        Ok::<_, String>(groups.spoken(set.described()))
     };
     match read.await {
         Ok(set) => {
             inline(b, "perform.venue_id", venue_id)?;
-            inline(b, "perform.set", set.described())
+            inline(b, "perform.set", set)
         }
         Err(error) => unavailable(
             b,

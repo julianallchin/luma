@@ -340,9 +340,11 @@ def _check_result(response: Any) -> CheckResult:
 
 
 def _selection(expression: str) -> dict[str, Any]:
+    """A selection as the host takes it: `all`, a group's name, or several
+    joined with `|`. The host turns each name into the group it names."""
     expression = str(expression).strip()
     if not expression:
-        raise TrackError("Selection expression cannot be empty")
+        raise TrackError("A selection cannot be empty: use \"all\" or a group's name")
     return {"expression": expression}
 
 

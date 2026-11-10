@@ -25,7 +25,7 @@ const theirs = [
     `INSERT INTO scores (id, uid, track_id, venue_id, name)
        VALUES ('score-theirs-${venue}', '$PRINCIPAL', 'track-theirs', '${venue}', 'Theirs')`,
     `INSERT INTO clips (id, uid, score_id, graph, start, duration, seed, selection_json, blend_mode)
-       VALUES ('clip-theirs-${venue}', '$PRINCIPAL', 'score-theirs-${venue}', 'pattern', 0.0, 4.0, '0', '{"expression":"all"}', 'replace')`,
+       VALUES ('clip-theirs-${venue}', '$PRINCIPAL', 'score-theirs-${venue}', 'pattern', 0.0, 4.0, '0', '{"all":true}', 'replace')`,
   ]),
 ];
 fixture({

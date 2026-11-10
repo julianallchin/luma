@@ -30,13 +30,13 @@ use sqlx::SqlitePool;
 use tokio::runtime::Handle;
 
 use crate::agent_execution::cell_host::{call_limit, decode, supervise};
+use crate::agent_execution::spoken_groups::SpokenGroups;
 use crate::agent_execution::track_host::TrackHost;
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::agent_execution::workspace::Workspace;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::eval::{Arena, Scope};
 use crate::models::distribute::DistributeLayout;
-use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
 use crate::services::groups;
 use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
@@ -387,19 +387,14 @@ impl VenueHost {
             Targets::Expression(expression) => expression,
             Targets::Members(members) => return marked_members(geometry, members).map_err(invalid),
         };
-        let tree = groups::GroupSources::read(&self.resource_root, access)
+        let selection = SpokenGroups::read(&self.resource_root, access)
             .await
             .map_err(invalid)?
-            .tree();
-        groups::validate_selection_names(expression, &tree).map_err(invalid)?;
-        let resolved = groups::resolve_selection(
-            &self.resource_root,
-            access,
-            &Selection::new(expression),
-            groups::PREVIEW_SEED,
-        )
-        .await
-        .map_err(invalid)?;
+            .selection(expression)
+            .map_err(invalid)?;
+        let resolved = groups::resolve_selection(&self.resource_root, access, &selection)
+            .await
+            .map_err(invalid)?;
         Ok(resolved
             .into_iter()
             .map(|entry| stage_render::Marked {
@@ -1107,7 +1102,7 @@ impl VenueHost {
     async fn state_at(
         &self,
         time: f32,
-        edit: Option<&luma_patterns::Score>,
+        edit: Option<&Value>,
     ) -> Result<Option<UniverseState>, HostCallError> {
         let Some(track) = self.lighting.as_ref() else {
             if edit.is_some() {
@@ -1119,7 +1114,10 @@ impl VenueHost {
             return Ok(None);
         };
         let scene = match edit {
-            Some(edit) => track.prepare_score(edit).await?,
+            Some(edit) => {
+                let score = track.named_score(edit.clone()).await?;
+                track.prepare_score(&score).await?
+            }
             None => track.saved_scene().await?,
         };
         let mut arena = Arena::default();
@@ -2030,7 +2028,7 @@ struct RenderRequest {
     focus: Option<Targets>,
     /// A private candidate score, evaluated by the same compositor as apply.
     /// Omitted for the saved score. Never persisted or sent to the live viewport.
-    edit: Option<luma_patterns::Score>,
+    edit: Option<Value>,
     /// Light this one frame with the house at `house`, whatever the room is.
     ///
     /// A camera setting, not an edit: it is written over the environment the

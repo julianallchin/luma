@@ -95,7 +95,6 @@ pub async fn resolve_primitive_ids_with_access(
         access,
         resource_root,
         &Selection::all(),
-        0,
         None,
     )
     .await
@@ -119,7 +118,6 @@ pub(crate) async fn resolve_selection_primitives_with_access(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     resource_root: &Path,
     selection: &Selection,
-    seed: u64,
     elements: Option<usize>,
 ) -> Result<Vec<(String, [f32; 3])>, String> {
     // One solve for the whole pre-pass: a primitive's position is where its
@@ -128,7 +126,7 @@ pub(crate) async fn resolve_selection_primitives_with_access(
 
     let root_buf = resource_root.to_path_buf();
     let fixtures =
-        crate::services::groups::resolve_selection(&root_buf, access, selection, seed).await?;
+        crate::services::groups::resolve_selection(&root_buf, access, selection).await?;
 
     let mut out = Vec::new();
     for resolved in &fixtures {

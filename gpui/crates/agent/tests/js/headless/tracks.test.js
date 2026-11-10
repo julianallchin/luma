@@ -36,7 +36,7 @@ const track = (id, title, artist, uid, createdAt) =>
   `('${id}', '${uid ?? "$PRINCIPAL"}', '${id}-hash', '${title}', '${artist}', 240.0, '/fixture/${id}.mp3', '${createdAt}')`;
 const score = (trackId, venue) => `('score-${trackId}-${venue}', '$PRINCIPAL', '${trackId}', '${venue}', 'Score')`;
 const clip = (trackId, venue) =>
-  `('clip-score-${trackId}-${venue}', '$PRINCIPAL', 'score-${trackId}-${venue}', 'pattern', 0.0, 120.0, '0', '{"expression":"all"}', 'replace')`;
+  `('clip-score-${trackId}-${venue}', '$PRINCIPAL', 'score-${trackId}-${venue}', 'pattern', 0.0, 120.0, '0', '{"all":true}', 'replace')`;
 
 const tracks = [
   ...SEEDS.map((s, i) => track(s.id, s.title, s.artist, s.uid, `2026-08-19T12:${String(59 - i).padStart(2, "0")}:00Z`)),

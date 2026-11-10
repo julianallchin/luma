@@ -1,17 +1,18 @@
-//! The group-expression editor: one line of selection algebra, highlighted in
-//! place, autocompleted from the venue's group names, committed only whole.
+//! The group-expression editor: one line naming the groups a selection
+//! joins — `front_wash | spots` — highlighted in place, autocompleted from the
+//! venue's group names, committed only whole.
 //!
 //! # Commit on Enter/blur only
 //!
-//! Evaluating a selection expression is expensive and a half-typed one is
+//! Resolving a selection is expensive and a half-typed one is
 //! invalid, so the host hears [`ExpressionEvent::Committed`] and nothing else.
 //! The field's own shaper colors the tokens ([`TextInput::set_highlight`]), so
 //! there is one rendering and no overlay to keep aligned.
 //!
 //! # Token colors are the ladder's
 //!
-//! Group names take [`ladder::status_warn`]'s amber and operators
-//! [`ladder::status_bad`]'s rose, and parens take [`ladder::param_label`].
+//! Group names take [`ladder::status_warn`]'s amber and `|` takes
+//! [`ladder::status_bad`]'s rose.
 //! Nothing here mints a color.
 
 use std::ops::Range;
@@ -39,10 +40,8 @@ use crate::CONTROL_HEIGHT;
 pub enum TokenKind {
     /// A known group name, or `all`.
     Group,
-    /// `> | ^ & ~`
+    /// `|`, which joins two groups.
     Operator,
-    /// `(` or `)`
-    Paren,
     Text,
 }
 
@@ -54,7 +53,8 @@ pub struct Token {
     pub kind: TokenKind,
 }
 
-const OPERATORS: [char; 5] = ['>', '|', '^', '&', '~'];
+/// The one operator: a selection is a union of groups.
+const OPERATOR: char = '|';
 
 fn is_word(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
@@ -76,10 +76,8 @@ pub fn tokenize(text: &str, is_group: impl Fn(&str) -> bool) -> Vec<Token> {
     };
     let mut chars = text.char_indices().peekable();
     while let Some((at, c)) = chars.next() {
-        if OPERATORS.contains(&c) {
+        if c == OPERATOR {
             push(at..at + c.len_utf8(), TokenKind::Operator);
-        } else if c == '(' || c == ')' {
-            push(at..at + c.len_utf8(), TokenKind::Paren);
         } else if is_word(c) {
             let mut end = at + c.len_utf8();
             while let Some(&(next, nc)) = chars.peek() {
@@ -110,7 +108,6 @@ pub fn token_color(kind: TokenKind) -> Hsla {
     match kind {
         TokenKind::Group => ladder::status_warn().into(),
         TokenKind::Operator => ladder::status_bad().into(),
-        TokenKind::Paren => ladder::param_label().into(),
         TokenKind::Text => ladder::foreground().into(),
     }
 }
@@ -464,12 +461,13 @@ mod tests {
             .collect()
     }
 
-    /// The grammar's four inks, on a real expression: known groups and `all`
-    /// are groups, the five operators are operators, parens are parens, and
-    /// unknown words plus whitespace fall through to text.
+    /// The grammar's three inks, on a real expression: known groups and
+    /// `all` are groups, `|` is the operator, and everything a union does not
+    /// say — unknown words, whitespace, any other sign — falls through to
+    /// text.
     #[test]
     fn the_tokenizer_speaks_the_grammar() {
-        let toks = kinds("front_wash | (all & ~back)", &["front_wash", "back"]);
+        let toks = kinds("front_wash | all|back & ~x", &["front_wash", "back"]);
         assert_eq!(
             toks,
             vec![
@@ -477,14 +475,10 @@ mod tests {
                 (" ".into(), TokenKind::Text),
                 ("|".into(), TokenKind::Operator),
                 (" ".into(), TokenKind::Text),
-                ("(".into(), TokenKind::Paren),
                 ("all".into(), TokenKind::Group),
-                (" ".into(), TokenKind::Text),
-                ("&".into(), TokenKind::Operator),
-                (" ".into(), TokenKind::Text),
-                ("~".into(), TokenKind::Operator),
+                ("|".into(), TokenKind::Operator),
                 ("back".into(), TokenKind::Group),
-                (")".into(), TokenKind::Paren),
+                (" & ~x".into(), TokenKind::Text),
             ]
         );
     }

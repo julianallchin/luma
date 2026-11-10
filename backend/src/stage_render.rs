@@ -447,14 +447,13 @@ impl FrameLights<'_> {
 /// `selection` resolved in the venue behind `access` and drawn as a highlight
 /// ([`highlight_state`]). The one way a highlight is made, so the fixture
 /// picker and the agent's `venue.render` light the same heads for the same
-/// expression: both resolve with [`groups::PREVIEW_SEED`].
+/// selection.
 pub async fn highlight(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
     selection: &Selection,
 ) -> Result<UniverseState, String> {
-    let resolved =
-        groups::resolve_selection(resource_path, access, selection, groups::PREVIEW_SEED).await?;
+    let resolved = groups::resolve_selection(resource_path, access, selection).await?;
     Ok(highlight_state(&resolved))
 }
 
@@ -1078,7 +1077,7 @@ mod tests {
         }
     }
 
-    /// An expression that matched nothing draws an unlit room rather than
+    /// A selection that matched nothing draws an unlit room rather than
     /// falling back to the score — the answer "no heads" is a picture too.
     #[test]
     fn an_empty_match_lights_nothing() {

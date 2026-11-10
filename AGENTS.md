@@ -135,13 +135,15 @@ Bad: `Fixed "Venue resource not found" when saving haze` (admits a bug, leaks an
 
 ## Groups & Selection
 
-Groups are the core mechanism for targeting fixtures in scores. A score never references specific fixtures — it references **group names**, and each venue defines its own groups of physical fixtures.
+Groups are the core mechanism for targeting fixtures in scores. A score never references specific fixtures — it references its venue's **groups, by id**, and each venue defines its own groups of physical fixtures.
 
 ### How it works
 
 - **Groups** are user-created collections of fixtures within a venue (e.g., `front_wash`, `drum_uplighters`, `back_movers`). Each group has a snake_case name and optional axis positions (LR/FB/AB) for spatial selection.
-- **Selection expressions** in scores reference group names with boolean operators (`front_wash & left_movers`, `drum_uplighters | dj_booth > back_wash`, `all & ~back_wash`). The `all` keyword selects every fixture. At runtime, the expression resolves to whichever fixtures belong to the named groups in the current venue.
-- **Venue portability**: When moving a score between venues, an LLM can remap group names (e.g., `front_wash` in venue A → `house_pars` in venue B).
+- **Selections** are what a clip or a Perform pattern targets. A stored selection is `{"all": true}` for the whole venue, or `{"groups": ["<group id>", …]}` for the union of those groups. At runtime it resolves to the fixtures and heads that belong to those groups. A set that is not a union of groups is a group of its own.
+- **Names are for typing.** People and the agent write `all`, one group name, or several joined with `|` (`front_wash | back_movers`). That spelling is translated to ids where it is typed and is never stored. An unknown name is refused.
+- **Rename and delete**: renaming a group changes no score. A deleted group stays listed in every selection that named it and selects nothing there; the Rig page's delete confirmation says how often the group is used.
+- **Venue portability**: a score belongs to one venue and references that venue's groups. A score copied to another venue must choose that venue's groups.
 
 ### Group naming
 
@@ -150,11 +152,13 @@ Group names are automatically normalized to snake_case: lowercase, spaces/hyphen
 ### Key files
 
 - `backend/src/models/groups.rs` — `FixtureGroup`, name normalization/validation helpers
-- `backend/src/services/groups.rs` — hierarchy building, selection expression parser/evaluator, spatial filtering
+- `backend/crates/patterns/src/selection.rs` — `Selection`, the stored form
+- `backend/src/services/groups.rs` — group tree, selection resolution, name-to-id translation
 - `backend/src/database/local/groups.rs` — group CRUD, membership
 - `backend/src/dispatch/handlers/groups.rs` — group command handlers
+- `backend/src/dispatch/handlers/group_references.rs` — `venue_group_usage`: what selects each group
 - `gpui/crates/app/` — native group management UI
-- `gpui/crates/ui/src/arg/expression.rs` — group selection expression editor
+- `gpui/crates/ui/src/arg/expression.rs` — the typed selection field
 
 ---
 

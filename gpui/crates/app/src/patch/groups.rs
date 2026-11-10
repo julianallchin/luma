@@ -113,7 +113,6 @@ impl Luma {
                         Ok(()) => {
                             state.group_editor = None;
                             state.say("Group saved");
-                            state.repair_after_save = true;
                         }
                         Err(error) => match super::refusal(&error) {
                             Some(message) => state.group_refusal = Some(message),
@@ -194,10 +193,29 @@ fn editor(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         if let Some(id) = &editor.id {
             let id = id.clone();
             let venue = state.venue_id.clone();
+            let consequence = deleting(state, &id);
             let remove = app.clone();
-            body=body.child(float::btn("Delete group","delete-venue-group").id("delete-venue-group").on_click(move |_,_,cx| remove.update(cx,|this,cx| {
-                this.ask(crate::confirm::Confirm { title:"Delete group?".into(), body:"The fixtures stay in the venue. Any affected scores will be shown for repair.".into(), verb:"Delete group".into(), action:crate::confirm::Action::DeleteGroup {venue:venue.clone(),id:id.clone()} },cx);
-            })).agent_node(Role::Button,"Delete group"));
+            body = body.child(
+                float::btn("Delete group", "delete-venue-group")
+                    .id("delete-venue-group")
+                    .on_click(move |_, _, cx| {
+                        remove.update(cx, |this, cx| {
+                            this.ask(
+                                crate::confirm::Confirm {
+                                    title: "Delete group?".into(),
+                                    body: consequence.clone(),
+                                    verb: "Delete group".into(),
+                                    action: crate::confirm::Action::DeleteGroup {
+                                        venue: venue.clone(),
+                                        id: id.clone(),
+                                    },
+                                },
+                                cx,
+                            );
+                        })
+                    })
+                    .agent_node(Role::Button, "Delete group"),
+            );
         }
         return body.into_any_element();
     }
@@ -260,25 +278,6 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                 ),
         );
     if let Some(data) = &state.data {
-        if data.missing_unchecked {
-            section = section.child(luma_ui::plate(
-                "Could not check which groups the scores use".to_string(),
-                ladder::muted_foreground(),
-            ));
-        }
-        if !data.missing.is_empty() {
-            let repair = app.clone();
-            section = section.child(
-                float::btn(
-                    format!("{} missing groups · Resolve", data.missing.len()),
-                    "missing-groups",
-                )
-                .id("missing-groups")
-                .text_color(ladder::danger())
-                .on_click(move |_, _, cx| repair.update(cx, |this, cx| this.open_group_repair(cx)))
-                .agent_node(Role::Button, "Resolve missing groups"),
-            );
-        }
         if data.groups.is_empty() {
             section = section.child(
                 float::btn("Generate from stage", "generate-groups")
@@ -367,40 +366,7 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// Repair owns a snapshot for display; the backend rechecks every write.
-pub(crate) struct Repair {
-    venue: String,
-    missing: Vec<luma_lib::models::groups::MissingGroup>,
-    groups: Vec<String>,
-    fixtures: Vec<String>,
-    selected: Option<String>,
-    busy: bool,
-    /// Why the backend refused the last resolve, in its words.
-    refusal: Option<SharedString>,
-}
 impl Luma {
-    pub(crate) fn open_group_repair(&mut self, cx: &mut Context<Self>) {
-        let Some(Body::Patch(state)) = self.workspace.active_body() else {
-            return;
-        };
-        let Some(data) = &state.data else {
-            return;
-        };
-        if data.missing.is_empty() {
-            return;
-        }
-        self.overlay
-            .open(crate::shell::Overlay::GroupRepair(Repair {
-                venue: state.venue_id.clone(),
-                missing: data.missing.clone(),
-                groups: data.groups.iter().map(|g| g.name.clone()).collect(),
-                fixtures: state.selected.iter().cloned().collect(),
-                selected: None,
-                busy: false,
-                refusal: None,
-            }));
-        cx.notify();
-    }
     pub(crate) fn delete_venue_group(&mut self, venue: String, id: String, cx: &mut Context<Self>) {
         let pending = self.library.delete_venue_group(&id);
         cx.spawn(async move |this, cx| {
@@ -410,7 +376,6 @@ impl Luma {
                     Ok(()) => {
                         if let Some(state) = this.patch_mut(&venue) {
                             state.group_editor = None;
-                            state.repair_after_save = true;
                         }
                     }
                     Err(error) => this.report_failure("The group was not deleted", error, cx),
@@ -447,193 +412,47 @@ impl Luma {
         .detach();
         cx.notify();
     }
-    fn resolve_group(&mut self, recreate: bool, cx: &mut Context<Self>) {
-        let Some(crate::shell::Overlay::GroupRepair(state)) = self.overlay.open_mut() else {
-            return;
-        };
-        if state.busy {
-            return;
-        }
-        let Some(missing) = state.missing.first() else {
-            return;
-        };
-        let replacement = if recreate {
-            None
-        } else {
-            let Some(name) = &state.selected else {
-                return;
-            };
-            Some(name.clone())
-        };
-        state.busy = true;
-        state.refusal = None;
-        let venue = state.venue.clone();
-        let name = missing.name.clone();
-        let pending = self.library.resolve_venue_group(
-            &venue,
-            &name,
-            replacement.as_deref(),
-            &state.fixtures,
-        );
-        cx.spawn(async move |this, cx| {
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                let mut failed = None;
-                if let Some(crate::shell::Overlay::GroupRepair(state)) = this.overlay.open_mut() {
-                    if state.venue != venue {
-                        return;
-                    }
-                    state.busy = false;
-                    match result {
-                        Ok(()) => {
-                            state.missing.retain(|m| m.name != name);
-                            if recreate {
-                                state.groups.push(name);
-                            }
-                            state.selected = None;
-                        }
-                        Err(error) => match super::refusal(&error) {
-                            Some(message) => state.refusal = Some(message),
-                            None => failed = Some(error),
-                        },
-                    }
-                    if state.missing.is_empty() {
-                        this.dismiss_overlay(cx);
-                    }
-                }
-                if let Some(error) = failed {
-                    this.report_failure("The missing group was not resolved", error, cx);
-                }
-                this.reload_patch(venue, cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
-    }
-}
-pub(crate) fn repair_dialog(state: &Repair, app: &Entity<Luma>) -> AnyElement {
-    let Some(missing) = state.missing.first() else {
-        return div().into_any_element();
-    };
-    let recreate = app.clone();
-    let replace = app.clone();
-    let close = app.clone();
-    let mut body = div()
-        .p(px(20.))
-        .flex()
-        .flex_col()
-        .gap(px(12.))
-        .child(
-            div()
-                .text_size(px(16.))
-                .child(format!("Missing group: {}", missing.name)),
-        )
-        .child(div().text_size(px(12.)).child(missing_usage(missing)))
-        .child(
-            float::btn(
-                format!("Recreate with {} selected fixtures", state.fixtures.len()),
-                "recreate-group",
-            )
-            .id("recreate-group")
-            .on_click(move |_, _, cx| recreate.update(cx, |this, cx| this.resolve_group(true, cx)))
-            .agent_node(Role::Button, "Recreate missing group")
-            .agent_disabled(state.busy),
-        )
-        .child(float::label("Replace references with"));
-    let mut choices = div()
-        .id("replacement-groups")
-        .max_h(px(150.))
-        .overflow_y_scroll()
-        .flex()
-        .flex_col()
-        .gap(px(3.));
-    for name in &state.groups {
-        let label = format!("Use group {name}");
-        let name = name.clone();
-        let picked = app.clone();
-        let selected = state.selected.as_ref() == Some(&name);
-        choices = choices.child(
-            float::btn(name.replace('_', " "), format!("replace-{name}"))
-                .id(SharedString::from(format!("replace-{name}")))
-                .when(selected, |d| d.bg(luma_ui::glass::card_selected_bg()))
-                .on_click(move |_, _, cx| {
-                    picked.update(cx, |this, cx| {
-                        if let Some(crate::shell::Overlay::GroupRepair(state)) =
-                            this.overlay.open_mut()
-                        {
-                            if !state.busy {
-                                state.selected = Some(name.clone());
-                            }
-                        }
-                        cx.notify();
-                    })
-                })
-                .agent_node(Role::Toggle, label)
-                .agent_focused(selected),
-        );
-    }
-    body = body.child(choices);
-    if let Some(refusal) = &state.refusal {
-        body = body.child(luma_ui::notice::line(refusal.clone()));
-    }
-    body = body.child(
-        div()
-            .flex()
-            .gap(px(8.))
-            .child(
-                float::btn_primary(if state.busy {
-                    "Saving…"
-                } else {
-                    "Fix affected scores"
-                })
-                .id("repair-group-references")
-                .on_click(move |_, _, cx| {
-                    replace.update(cx, |this, cx| this.resolve_group(false, cx))
-                })
-                .agent_node(Role::Button, "Fix affected scores")
-                .agent_disabled(state.busy || state.selected.is_none()),
-            )
-            .child(
-                float::btn("Later", "repair-later")
-                    .id("repair-later")
-                    .on_click(move |_, _, cx| close.update(cx, |this, cx| this.dismiss_overlay(cx)))
-                    .agent_node(Role::Button, "Resolve later"),
-            ),
-    );
-    luma_ui::dialog::morph::fixed_card(
-        "Group repair dialog",
-        luma_ui::dialog::morph::MorphSize::new(480., 440.),
-        body.into_any_element(),
-    )
 }
 
-/// Who uses a missing group's name, and what to do about it.
-fn missing_usage(missing: &luma_lib::models::groups::MissingGroup) -> String {
-    let count = |n: usize, one: &str, many: &str| match n {
-        0 => None,
-        1 => Some(format!("1 {one}")),
-        n => Some(format!("{n} {many}")),
+/// What deleting group `id` does, for the question asked first.
+///
+/// A selection names the group itself, so everything that selects it is left
+/// selecting nothing in its place: the sentence says how much that is, or
+/// that it could not be counted — never that nothing uses it when that is
+/// not known.
+fn deleting(state: &Patch, id: &str) -> SharedString {
+    let Some(usage) = state.data.as_ref().and_then(|data| data.usage.as_ref()) else {
+        return "Could not check which scores use this group. Anything that selects it will \
+                light nothing there. The fixtures stay in the venue."
+            .into();
     };
-    let users: Vec<String> = [
-        count(missing.scores.len(), "saved score", "saved scores"),
-        count(
-            missing.perform_patterns.len(),
-            "Perform pattern",
-            "Perform patterns",
-        ),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let Some(used) = usage.iter().find(|used| used.group_id == id) else {
+        return "Nothing selects this group. The fixtures stay in the venue.".into();
+    };
+    let mut places = Vec::new();
+    if used.clips > 0 {
+        places.push(format!(
+            "{} across {}",
+            super::plural(used.clips, "time"),
+            super::plural(used.scores.len(), "score")
+        ));
+    }
+    if !used.perform_patterns.is_empty() {
+        places.push(format!(
+            "by {}",
+            super::plural(used.perform_patterns.len(), "Perform pattern")
+        ));
+    }
+    if used.perform_cells > 0 {
+        places.push(format!(
+            "on {}",
+            super::plural(used.perform_cells, "Perform group cell")
+        ));
+    }
     format!(
-        "{} {} this name. Recreate it, or change their selectors to an existing group.",
-        users.join(" and "),
-        if missing.scores.len() + missing.perform_patterns.len() == 1 {
-            "uses"
-        } else {
-            "use"
-        },
+        "It is used {}. Deleting this group will break them: each will light nothing there. \
+         The fixtures stay in the venue.",
+        places.join(", ")
     )
+    .into()
 }

@@ -343,7 +343,7 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
         .into();
     let selected = state.selected.contains(&row.id);
     let last = row.address + row.num_channels - 1;
-    // The selection vocabulary is snake_case because an expression is typed; a
+    // A group's name is snake_case because a selection is typed by name; a
     // table is read. Underscores become spaces for the eye only — the name a
     // score would name is unchanged.
     let group = state

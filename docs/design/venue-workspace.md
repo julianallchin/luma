@@ -44,23 +44,20 @@ Deleting a group leaves the physical fixtures in place. Whole-fixture
 membership is editable. Existing per-head rows stay until that fixture leaves
 the collection. A head-level membership editor is not built.
 
-## Missing targets
+## What references a group
 
-A warning names selector names that saved scores use but the venue does not
-have. A group edit opens the repair dialog when needed. An audit failure stays
-visible and does not block the fixture table. The dialog offers:
+A clip's selection, a Perform pattern's selection and a Perform group cell
+hold a group's id, not its name (`luma_patterns::Selection`,
+`backend/crates/patterns/src/selection.rs`). Renaming a group changes no
+score.
 
-- Recreate the missing name with the selected fixtures. An empty collection is
-  allowed.
-- Replace that name in affected scores with an existing group.
-
-Replacement is `resolve_venue_group`
-(`backend/src/dispatch/handlers/group_references.rs`). It parses selection
-expressions and replaces exact identifiers only. Boolean operators and graph
-labels stay unchanged. Each score is rewritten in its own transaction through
-the score rows. The server's history records every row it changes (see
-[sync.md](sync.md)). A failure stops the batch. Scores already repaired stay
-repaired. A retry skips scores that no longer use the missing name.
+A deleted group stays listed wherever it was selected and selects nothing
+there. The delete confirmation says how many times the group is used across
+how many scores, by how many Perform patterns and on how many Perform group
+cells, and that deleting will break them. The counts come from
+`venue_group_usage` (`backend/src/dispatch/handlers/group_references.rs`),
+which counts ids and reads no graph. If the count fails, the confirmation
+says the usage could not be checked.
 
 Advanced patch tools stay behind Patch: occupancy, auto patch, channel ranges
 and output routing.

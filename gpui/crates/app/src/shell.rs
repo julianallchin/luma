@@ -82,7 +82,6 @@ pub(crate) enum Overlay {
     UpdateReady(crate::update::Ready),
     /// Quitting with changes not yet on the server — see [`crate::quit`].
     QuitSync(crate::quit::QuitSync),
-    GroupRepair(patch::groups::Repair),
     /// Rendering the open score to a video file. Boxed like the rest: it
     /// carries paths, names and the running export.
     ShowExport(Box<export_dialog::ExportDialog>),
@@ -102,7 +101,6 @@ impl Overlay {
             Self::Confirm(_) => keymap::context::CONFIRM,
             Self::UpdateReady(_) => keymap::context::UPDATE_READY,
             Self::QuitSync(_) => keymap::context::QUIT_SYNC,
-            Self::GroupRepair(_) => keymap::context::ROOT,
             Self::ShowExport(_) => keymap::context::SHOW_EXPORT,
         }
     }
@@ -1491,10 +1489,6 @@ fn overlay_layer(
         Overlay::FixturePicker(state) => (
             fixture_picker::render(state, entity, window),
             "Fixture picker dialog",
-        ),
-        Overlay::GroupRepair(state) => (
-            patch::groups::repair_dialog(state, entity),
-            "Group repair dialog",
         ),
         Overlay::ShowExport(state) => (export_dialog::render(state, entity), "Export show dialog"),
         Overlay::Confirm(state) => (

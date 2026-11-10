@@ -1,5 +1,5 @@
 //! A venue's fixture groups and the selections written over them: group
-//! edits, missing-group repair, and resolving a selection to heads.
+//! edits, and resolving a selection to heads.
 
 use std::future::Future;
 
@@ -11,36 +11,6 @@ use luma_lib::models::universe::UniverseState;
 use super::{Library, LibraryError};
 
 impl Library {
-    pub fn missing_venue_groups(
-        &self,
-        venue: &str,
-    ) -> impl Future<Output = Result<Vec<luma_lib::models::groups::MissingGroup>, LibraryError>> + use<>
-    {
-        let venue_id = venue.to_owned();
-        self.call("missing_venue_groups", |services| async move {
-            handlers::group_references::missing_venue_groups(&services, venue_id).await
-        })
-    }
-    pub fn resolve_venue_group(
-        &self,
-        venue: &str,
-        missing: &str,
-        replacement: Option<&str>,
-        fixtures: &[String],
-    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        let (venue_id, missing) = (venue.to_owned(), missing.to_owned());
-        let (replacement, fixtures) = (replacement.map(str::to_owned), fixtures.to_vec());
-        self.call("resolve_venue_group", |services| async move {
-            handlers::group_references::resolve_venue_group(
-                &services,
-                venue_id,
-                missing,
-                replacement,
-                fixtures,
-            )
-            .await
-        })
-    }
     pub fn delete_venue_group(
         &self,
         id: &str,
@@ -77,8 +47,8 @@ impl Library {
         })
     }
 
-    /// A venue's fixture groups — the vocabulary a selection expression is
-    /// written over, which is what seeds the strip's autocomplete.
+    /// A venue's fixture groups — what a selection chooses from, by id, and
+    /// the names the strip's field completes.
     pub fn venue_groups(
         &self,
         venue_id: &str,
@@ -95,15 +65,12 @@ impl Library {
         &self,
         venue_id: &str,
         selection: &Selection,
-        seed: u64,
         elements: Option<usize>,
     ) -> impl Future<Output = Result<Vec<luma_patterns::Cell>, LibraryError>> + use<> {
         let (venue_id, selection) = (venue_id.to_owned(), selection.clone());
         self.call("selection_cells", move |services| async move {
-            handlers::composable_patterns::selection_cells(
-                &services, venue_id, selection, seed, elements,
-            )
-            .await
+            handlers::composable_patterns::selection_cells(&services, venue_id, selection, elements)
+                .await
         })
     }
 
@@ -112,7 +79,7 @@ impl Library {
     ///
     /// The picker draws this over the venue's own geometry, so the picture a
     /// person points at and the fixtures a clip will drive are resolved by one
-    /// evaluator. Head-accurate, which is why it is not `preview_selection_query`.
+    /// evaluator, head by head.
     pub fn highlight_selection(
         &self,
         venue_id: &str,

@@ -396,7 +396,7 @@ impl Luma {
         let selection = target_selection(editor);
         let key = Key {
             preset: self::key(preset),
-            selection: selection.expression.clone(),
+            selection: selection.key(),
             start,
         };
         let browser = &mut editor.sheet.browser;

@@ -6,6 +6,7 @@
 
 use super::{inline, unavailable, ProviderCtx, NO_TRACK};
 use crate::agent_execution::bindings::assembler::BindingBuilder;
+use crate::agent_execution::spoken_groups::SpokenGroups;
 use crate::database::local;
 use crate::database::local::scores::rows;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
@@ -65,7 +66,17 @@ async fn provide_timeline(
 ) -> Result<(), String> {
     match &ctx.score_document {
         Ok(Some(score)) => {
-            inline(b, "track.document", score)?;
+            // The document names groups, as the agent does. A score with no
+            // venue in scope has none to name.
+            let groups = match ctx.scope.venue_id.as_deref() {
+                Some(venue_id) => {
+                    let mut access =
+                        VenueAccess::<Read>::read(ctx.pool, VenueResource::Venue(venue_id)).await?;
+                    SpokenGroups::read(ctx.resource_root, &mut access).await?
+                }
+                None => SpokenGroups::default(),
+            };
+            inline(b, "track.document", groups.spoken(serde_json::json!(score)))?;
             let grid = crate::database::local::tracks::get_track_beats(ctx.pool, track_id).await?;
             inline(
                 b,

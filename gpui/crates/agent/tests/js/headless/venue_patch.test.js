@@ -338,21 +338,33 @@ test("render settings follow the venue across a score and a reopen", () => {
   expect(sun()).toBe(changed);
 });
 
+// A clip selects a group by its id: a rename leaves the clip on it, and
+// deleting it is asked about first, with what uses it.
 test(
-  "the missing-group dialog repairs saved score selectors",
+  "a clip follows its group through a rename, and deleting it says what uses it",
   {
     fixture: {
-      clips: [{ pattern: "a", name: "Lost", start: 0, end: 2, preset: "Chase", selection: "lost_wash" }],
+      clips: [{ pattern: "a", name: "Chase", start: 0, end: 2, preset: "Chase", groups: ["group-left"] }],
     },
   },
   () => {
+    const texts = () => app.snapshot().findAll({ role: "text" }).map((n) => n.label);
     nav.patch("Test Venue");
-    nav.step("repair", "button", "Resolve missing groups");
-    until("the dialog", (s) => s.find({ role: "card", label: "Group repair dialog" }));
-    nav.step("a replacement", "toggle", "Use group left_movers");
-    nav.step("apply the repair", "button", "Fix affected scores");
-    until("resolved", (s) => !s.find({ role: "button", label: "Resolve missing groups" }) && !s.find({ role: "button", label: "Fix affected scores" }));
-    expect(library.score().clips.a.selection.expression).toBe("left_movers");
+    nav.step("edit the group", "button", "Edit group left movers");
+    app.key("secondary-a h o u s e space l e f t");
+    nav.step("save the name", "button", "Save group");
+    until("the renamed group", (s) => s.find({ role: "button", label: "Edit group house left" }));
+    expect(library.score().clips.a.selection).toEqual({ groups: ["group-left"] });
+
+    nav.step("edit it again", "button", "Edit group house left");
+    nav.step("delete it", "button", "Delete group");
+    until("the question", () => texts().includes("Delete group?"));
+    const asked = texts().find((label) => label.startsWith("It is used"));
+    expect(asked).toContain("1 time across 1 score");
+    expect(asked).toContain("Deleting this group will break them");
+    app.click(app.snapshot().findAll({ role: "button", label: "Delete group" }).at(-1));
+    until("the group gone", (s) => !s.find({ role: "button", label: "Edit group house left" }));
+    expect(library.score().clips.a.selection).toEqual({ groups: ["group-left"] });
   },
 );
 

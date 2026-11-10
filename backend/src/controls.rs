@@ -271,8 +271,18 @@ pub mod perform {
 /// Clear held this long lets every effect go; let go sooner, it is a tap.
 pub const CLEAR_HOLD: Duration = Duration::from_millis(500);
 
-/// The group that is every light: what nothing chosen acts on.
+/// The group that is every light: what nothing chosen acts on. Every other
+/// group is named by its id.
 pub const ALL: &str = "all";
+
+/// The lights of `groups` together, as a selection.
+#[must_use]
+pub fn selection(groups: &[String]) -> luma_patterns::Selection {
+    if groups.iter().any(|group| group == ALL) {
+        return luma_patterns::Selection::All;
+    }
+    luma_patterns::Selection::groups(groups)
+}
 
 /// One venue's control values, its buttons and its tempo.
 #[derive(Debug)]
@@ -353,7 +363,8 @@ struct Effect {
     color: Option<String>,
     /// Its blend as stored. Select changes it by storing another.
     blend: BlendMode,
-    /// Its selection's expression, where it plays on no groups.
+    /// Its own selection ([`luma_patterns::Selection::key`]), where it plays
+    /// on no groups.
     selection: String,
 }
 
@@ -1421,7 +1432,7 @@ impl VenueControls {
                         .unwrap_or_default(),
                     color,
                     blend: pattern.blend_mode,
-                    selection: pattern.selection.expression.clone(),
+                    selection: pattern.selection.key(),
                 };
                 (pattern.id.clone(), effect)
             })

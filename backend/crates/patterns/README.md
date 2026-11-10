@@ -54,7 +54,8 @@ evaluation and persistence contract.
   effect, curve shapes, gradients and frequency bands.
 
 The host supplies selected cells and their world and U/V/Z coordinates.
-Group expression resolution is the host's job.
+A selection names groups by id (`src/selection.rs`); resolving it to cells is
+the host's job.
 
 Run checks from the repository root:
 

@@ -19,13 +19,12 @@ pub async fn preview_composable_pattern(
 }
 
 /// The heads a clip's selection resolves to in the venue, with their places:
-/// what a form maps along an axis. `seed` is the clip's selection seed;
-/// `elements` a laser clip's elements per projector.
+/// what a form maps along an axis. `elements` is a laser clip's elements per
+/// projector.
 pub async fn selection_cells(
     services: &AppServices,
     venue_id: String,
     selection: Selection,
-    seed: u64,
     elements: Option<usize>,
 ) -> Result<Vec<Cell>, CommandError> {
     let mut access =
@@ -34,7 +33,6 @@ pub async fn selection_cells(
         &mut access,
         &services.fixtures_root,
         std::slice::from_ref(&selection),
-        seed,
         elements,
     )
     .await?)

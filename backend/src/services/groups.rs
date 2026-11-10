@@ -1,13 +1,12 @@
 //! Business logic for fixture group operations.
 //!
-//! Handles group hierarchy building, fixture type detection, and tag expression resolution.
+//! Handles group hierarchy building, fixture type detection, and selection resolution.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use once_cell::sync::Lazy;
-use rand::prelude::*;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::database::local::fixtures as fixtures_db;
@@ -118,19 +117,13 @@ async fn get_cached_venue_fixtures(
         let fixtures = fixtures_db::get_patched_fixtures(access).await?;
         let memberships = groups_db::venue_memberships(access).await?;
 
-        // fixture_id → (normalized group name → which heads are members)
+        // fixture_id → (group id → which heads are members)
         let mut by_fixture: HashMap<String, HashMap<String, HeadMembership>> = HashMap::new();
         for row in memberships {
-            let Some(name) = row.group_name.as_deref().map(normalize_group_name) else {
-                continue;
-            };
-            if name.is_empty() {
-                continue;
-            }
             let entry = by_fixture
                 .entry(row.fixture_id)
                 .or_default()
-                .entry(name)
+                .entry(row.group_id)
                 .or_insert_with(|| HeadMembership::Heads(HashSet::new()));
             if row.head_index < 0 {
                 *entry = HeadMembership::All;
@@ -256,7 +249,7 @@ fn head_count_with_path(resource_path: &Path, fixture: &PatchedFixture) -> usize
 }
 
 // =============================================================================
-// Expression-Based Selection
+// Selection
 // =============================================================================
 
 /// Which heads of a fixture belong to one group.
@@ -273,354 +266,11 @@ struct FixtureInfo {
     fixture: PatchedFixture,
     /// Heads the fixture's mode defines, floored at 1 (eval's primitive universe).
     head_count: usize,
-    /// Normalized group name → member heads.
+    /// Group id → member heads.
     group_heads: HashMap<String, HeadMembership>,
 }
 
-#[derive(Clone, Debug)]
-enum Expr {
-    Token(String),
-    Not(Box<Expr>),
-    And(Box<Expr>, Box<Expr>),
-    Or(Box<Expr>, Box<Expr>),
-    Xor(Box<Expr>, Box<Expr>),
-    Fallback(Box<Expr>, Box<Expr>),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum LexToken {
-    Ident(String),
-    Or,
-    And,
-    Xor,
-    Not,
-    Fallback,
-    LParen,
-    RParen,
-    End,
-}
-
-struct Lexer {
-    chars: Vec<char>,
-    pos: usize,
-}
-
-impl Lexer {
-    fn new(input: &str) -> Self {
-        Self {
-            chars: input.chars().collect(),
-            pos: 0,
-        }
-    }
-
-    fn next_token(&mut self) -> Result<LexToken, String> {
-        while self.pos < self.chars.len() && self.chars[self.pos].is_whitespace() {
-            self.pos += 1;
-        }
-        if self.pos >= self.chars.len() {
-            return Ok(LexToken::End);
-        }
-
-        let c = self.chars[self.pos];
-        match c {
-            '|' => {
-                self.pos += 1;
-                Ok(LexToken::Or)
-            }
-            '&' => {
-                self.pos += 1;
-                Ok(LexToken::And)
-            }
-            '^' => {
-                self.pos += 1;
-                Ok(LexToken::Xor)
-            }
-            '~' => {
-                self.pos += 1;
-                Ok(LexToken::Not)
-            }
-            '>' => {
-                self.pos += 1;
-                Ok(LexToken::Fallback)
-            }
-            '(' => {
-                self.pos += 1;
-                Ok(LexToken::LParen)
-            }
-            ')' => {
-                self.pos += 1;
-                Ok(LexToken::RParen)
-            }
-            _ => {
-                if c.is_ascii_alphanumeric() || c == '_' {
-                    let start = self.pos;
-                    while self.pos < self.chars.len()
-                        && (self.chars[self.pos].is_ascii_alphanumeric()
-                            || self.chars[self.pos] == '_')
-                    {
-                        self.pos += 1;
-                    }
-                    let ident: String = self.chars[start..self.pos].iter().collect();
-                    Ok(LexToken::Ident(ident.to_lowercase()))
-                } else {
-                    Err(format!("Unexpected character '{}' in selection query", c))
-                }
-            }
-        }
-    }
-}
-
-struct Parser {
-    tokens: Vec<LexToken>,
-    pos: usize,
-}
-
-impl Parser {
-    fn new(tokens: Vec<LexToken>) -> Self {
-        Self { tokens, pos: 0 }
-    }
-
-    fn peek(&self) -> &LexToken {
-        self.tokens.get(self.pos).unwrap_or(&LexToken::End)
-    }
-
-    fn consume(&mut self) -> LexToken {
-        let tok = self.peek().clone();
-        self.pos += 1;
-        tok
-    }
-
-    fn expect(&mut self, expected: LexToken) -> Result<(), String> {
-        let tok = self.consume();
-        if tok == expected {
-            Ok(())
-        } else {
-            Err(format!("Expected {:?}, found {:?}", expected, tok))
-        }
-    }
-
-    fn parse_expression(&mut self) -> Result<Expr, String> {
-        self.parse_fallback()
-    }
-
-    fn parse_fallback(&mut self) -> Result<Expr, String> {
-        let mut expr = self.parse_union()?;
-        while matches!(self.peek(), LexToken::Fallback) {
-            self.consume();
-            let right = self.parse_union()?;
-            expr = Expr::Fallback(Box::new(expr), Box::new(right));
-        }
-        Ok(expr)
-    }
-
-    fn parse_union(&mut self) -> Result<Expr, String> {
-        let mut expr = self.parse_xor()?;
-        while matches!(self.peek(), LexToken::Or) {
-            self.consume();
-            let right = self.parse_xor()?;
-            expr = Expr::Or(Box::new(expr), Box::new(right));
-        }
-        Ok(expr)
-    }
-
-    fn parse_xor(&mut self) -> Result<Expr, String> {
-        let mut expr = self.parse_and()?;
-        while matches!(self.peek(), LexToken::Xor) {
-            self.consume();
-            let right = self.parse_and()?;
-            expr = Expr::Xor(Box::new(expr), Box::new(right));
-        }
-        Ok(expr)
-    }
-
-    fn parse_and(&mut self) -> Result<Expr, String> {
-        let mut expr = self.parse_unary()?;
-        while matches!(self.peek(), LexToken::And) {
-            self.consume();
-            let right = self.parse_unary()?;
-            expr = Expr::And(Box::new(expr), Box::new(right));
-        }
-        Ok(expr)
-    }
-
-    fn parse_unary(&mut self) -> Result<Expr, String> {
-        if matches!(self.peek(), LexToken::Not) {
-            self.consume();
-            let inner = self.parse_unary()?;
-            return Ok(Expr::Not(Box::new(inner)));
-        }
-        self.parse_primary()
-    }
-
-    fn parse_primary(&mut self) -> Result<Expr, String> {
-        match self.consume() {
-            LexToken::Ident(name) => Ok(Expr::Token(name)),
-            LexToken::LParen => {
-                let expr = self.parse_expression()?;
-                self.expect(LexToken::RParen)?;
-                Ok(expr)
-            }
-            LexToken::End => Err("Unexpected end of selection query".into()),
-            tok => Err(format!("Unexpected token {:?}", tok)),
-        }
-    }
-}
-
-fn parse_selection_expression(input: &str) -> Result<Expr, String> {
-    let mut lexer = Lexer::new(input);
-    let mut tokens = Vec::new();
-    loop {
-        let tok = lexer.next_token()?;
-        if tok == LexToken::End {
-            tokens.push(tok);
-            break;
-        }
-        tokens.push(tok);
-    }
-    let mut parser = Parser::new(tokens);
-    let expr = parser.parse_expression()?;
-    if !matches!(parser.peek(), LexToken::End) {
-        return Err("Unexpected token after selection query".into());
-    }
-    Ok(expr)
-}
-
-/// The group names a selection expression is a plain union of, or `None` when
-/// it says something a list of checkboxes cannot.
-///
-/// The picker dialog's whole contract with the grammar. A union of bare tokens
-/// is exactly what a set of checked rows means, so those expressions round-trip
-/// through the picker unchanged; anything using `&`, `~`, `^` or `?` — or a
-/// parenthesised sub-expression that is not itself a bare token — has no
-/// checkbox spelling and is handed back as `None` for the caller to show
-/// read-only. Parsing here rather than in the UI keeps one grammar: the picker
-/// cannot drift from what the resolver actually evaluates.
-///
-/// The whole venue — an empty expression or `all` — is the empty list, so
-/// "nothing checked" and "everything lit" are the same state in both
-/// directions.
-///
-/// Names come back normalized and deduplicated, in first-mention order.
-#[must_use]
-pub fn or_terms(expression: &str) -> Option<Vec<String>> {
-    let trimmed = expression.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
-        return Some(Vec::new());
-    }
-    let mut terms = Vec::new();
-    collect_or_terms(&parse_selection_expression(trimmed).ok()?, &mut terms).then_some(terms)
-}
-
-/// Flatten a union of bare tokens into `out`; `false` as soon as any other
-/// operator is reached.
-fn collect_or_terms(expr: &Expr, out: &mut Vec<String>) -> bool {
-    match expr {
-        Expr::Token(name) => {
-            // `all` inside a union is redundant with every other arm of it,
-            // and as a checkbox it would be a row that is not a group.
-            if !name.eq_ignore_ascii_case("all") && !out.iter().any(|seen| seen == name) {
-                out.push(name.clone());
-            }
-            true
-        }
-        Expr::Or(a, b) => collect_or_terms(a, out) && collect_or_terms(b, out),
-        _ => false,
-    }
-}
-
-/// The expression a set of checked groups spells — the inverse of [`or_terms`].
-///
-/// Empty is `all`, which is what an LD unchecking every row means and what
-/// [`or_terms`] reads back as empty.
-#[must_use]
-pub fn or_expression(terms: &[String]) -> String {
-    if terms.is_empty() {
-        return "all".into();
-    }
-    terms.join(" | ")
-}
-
-/// Selection sets are `(fixture index, head index)` pairs — the atom of
-/// targeting is a head, so boolean algebra (esp. negation and intersection)
-/// stays exact when groups contain partial fixtures.
-type HeadSet = HashSet<(usize, usize)>;
-
-struct EvalContext<'a> {
-    fixtures: &'a [FixtureInfo],
-    all_heads: HeadSet,
-    rng: StdRng,
-}
-
-fn eval_expr(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<HeadSet, String> {
-    match expr {
-        Expr::Token(token) => {
-            if token == "all" {
-                return Ok(ctx.all_heads.clone());
-            }
-            let mut set = HeadSet::new();
-            for (fi, info) in ctx.fixtures.iter().enumerate() {
-                match info.group_heads.get(token) {
-                    Some(HeadMembership::All) => {
-                        set.extend((0..info.head_count).map(|h| (fi, h)));
-                    }
-                    Some(HeadMembership::Heads(heads)) => {
-                        // Ignore stale rows pointing past the current mode's head count.
-                        set.extend(
-                            heads
-                                .iter()
-                                .filter(|&&h| h < info.head_count)
-                                .map(|&h| (fi, h)),
-                        );
-                    }
-                    None => {}
-                }
-            }
-            Ok(set)
-        }
-        Expr::Not(inner) => {
-            let inner_set = eval_expr(inner, ctx)?;
-            let mut result = ctx.all_heads.clone();
-            result.retain(|pair| !inner_set.contains(pair));
-            Ok(result)
-        }
-        Expr::And(a, b) => {
-            let left = eval_expr(a, ctx)?;
-            let right = eval_expr(b, ctx)?;
-            let result = left.intersection(&right).cloned().collect::<HashSet<_>>();
-            Ok(result)
-        }
-        Expr::Or(a, b) => {
-            let mut left = eval_expr(a, ctx)?;
-            let right = eval_expr(b, ctx)?;
-            left.extend(right);
-            Ok(left)
-        }
-        Expr::Xor(a, b) => {
-            let left = eval_expr(a, ctx)?;
-            let right = eval_expr(b, ctx)?;
-            if left.is_empty() && right.is_empty() {
-                return Ok(HashSet::new());
-            }
-            if left.is_empty() {
-                return Ok(right);
-            }
-            if right.is_empty() {
-                return Ok(left);
-            }
-            let pick_left = ctx.rng.gen_bool(0.5);
-            Ok(if pick_left { left } else { right })
-        }
-        Expr::Fallback(a, b) => {
-            let left = eval_expr(a, ctx)?;
-            if !left.is_empty() {
-                return Ok(left);
-            }
-            eval_expr(b, ctx)
-        }
-    }
-}
-
-/// A fixture matched by a selection expression, with the heads it matched on.
+/// A fixture matched by a selection, with the heads it matched on.
 #[derive(Clone, Debug)]
 pub struct ResolvedFixture {
     pub fixture: PatchedFixture,
@@ -628,78 +278,166 @@ pub struct ResolvedFixture {
     pub heads: Option<Vec<usize>>,
 }
 
-/// The seed a selection preview and a highlight resolve with when nothing
-/// supplies one: a picture of *one* answer, so the random selectors have to give
-/// the same answer on every call, and the picker and the agent's `venue.render`
-/// have to draw the same heads for the same expression.
-pub const PREVIEW_SEED: u64 = 12345;
-
 /// Resolve a selection to matching fixtures/heads, in venue fixture order.
 ///
-/// # Determinism
-///
-/// `rng_seed` decides every random choice the resolution makes — which side an
-/// `^` takes — so one seed always lights the same rig. Callers own that
-/// contract: a clip seeds from its own stored seed, so one clip renders the same
-/// lights on every run while the same graph placed twice can draw two different
-/// sides. Previews and highlights pass [`PREVIEW_SEED`] so the picker does not
-/// flicker between calls.
+/// The union of the groups it lists. A group that no longer exists has no
+/// members, so it adds nothing; a selection of only such groups is empty.
 pub async fn resolve_selection(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
     selection: &Selection,
-    rng_seed: u64,
 ) -> Result<Vec<ResolvedFixture>, String> {
-    let trimmed = selection.expression.trim();
     let cached = get_cached_venue_fixtures(resource_path, access).await?;
-
-    if cached.fixtures.is_empty() {
-        return Ok(vec![]);
-    }
-
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
-        return Ok(cached
-            .fixtures
-            .iter()
-            .map(|fixture| ResolvedFixture {
-                fixture: fixture.clone(),
-                heads: None,
-            })
-            .collect());
-    }
-
-    let expr = parse_selection_expression(trimmed)?;
-    let all_heads: HeadSet = cached
-        .fixture_info
-        .iter()
-        .enumerate()
-        .flat_map(|(fi, info)| (0..info.head_count).map(move |h| (fi, h)))
-        .collect();
-    let mut ctx = EvalContext {
-        fixtures: &cached.fixture_info,
-        all_heads,
-        rng: StdRng::seed_from_u64(rng_seed),
+    let groups = match selection {
+        Selection::All => {
+            return Ok(cached
+                .fixtures
+                .iter()
+                .map(|fixture| ResolvedFixture {
+                    fixture: fixture.clone(),
+                    heads: None,
+                })
+                .collect());
+        }
+        Selection::Groups(groups) => groups,
     };
-    let selected = eval_expr(&expr, &mut ctx)?;
 
     let mut result = Vec::new();
-    for (fi, info) in cached.fixture_info.iter().enumerate() {
-        let heads: Vec<usize> = (0..info.head_count)
-            .filter(|&h| selected.contains(&(fi, h)))
-            .collect();
+    for info in &cached.fixture_info {
+        let mut heads: HashSet<usize> = HashSet::new();
+        for group in groups {
+            match info.group_heads.get(group) {
+                Some(HeadMembership::All) => heads.extend(0..info.head_count),
+                // Ignore stale rows pointing past the current mode's head count.
+                Some(HeadMembership::Heads(members)) => {
+                    heads.extend(members.iter().filter(|&&h| h < info.head_count));
+                }
+                None => {}
+            }
+        }
         if heads.is_empty() {
             continue;
         }
         result.push(ResolvedFixture {
             fixture: info.fixture.clone(),
-            heads: if heads.len() == info.head_count {
-                None
-            } else {
-                Some(heads)
-            },
+            heads: (heads.len() < info.head_count).then(|| {
+                let mut heads: Vec<usize> = heads.into_iter().collect();
+                heads.sort_unstable();
+                heads
+            }),
         });
     }
     Ok(result)
+}
+
+/// What a selection is called where people and the agent write one: `all`,
+/// or group names joined by `|`.
+///
+/// Stored selections hold group ids ([`Selection`]). This is the translation
+/// at the edge where a name is typed or shown, made against one read of the
+/// venue's groups so every name in a call means the same row.
+pub struct GroupNames<'a> {
+    /// `(id, name)`, in venue order.
+    groups: Vec<(&'a str, &'a str)>,
+}
+
+/// How [`GroupNames::spell`] writes a selection that selects nothing: no
+/// group listed, or only groups that have been deleted.
+pub const NO_GROUPS: &str = "none";
+
+impl<'a> GroupNames<'a> {
+    /// The names of a group tree's nodes.
+    #[must_use]
+    pub fn of_tree(tree: &'a [GroupTreeNode]) -> Self {
+        Self {
+            groups: tree
+                .iter()
+                .filter(|node| !node.name.is_empty())
+                .map(|node| (node.id.as_str(), node.name.as_str()))
+                .collect(),
+        }
+    }
+
+    /// The names of a venue's group rows.
+    #[must_use]
+    pub fn of_rows(rows: &'a [crate::models::groups::FixtureGroup]) -> Self {
+        Self {
+            groups: rows
+                .iter()
+                .filter_map(|row| Some((row.id.as_str(), row.name.as_deref()?)))
+                .collect(),
+        }
+    }
+
+    /// The selection `text` names.
+    ///
+    /// # Errors
+    /// A name the venue has no group for, or anything that is not a union:
+    /// the answer lists the groups there are.
+    pub fn parse(&self, text: &str) -> Result<Selection, String> {
+        let text = text.trim();
+        if text.eq_ignore_ascii_case("all") {
+            return Ok(Selection::All);
+        }
+        let mut ids = Vec::new();
+        let mut unknown = Vec::new();
+        for term in text.split('|') {
+            let term = term.trim();
+            // Only what a name is made of: `front & back` is not the group
+            // `front_back`.
+            let named = term
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ' ' | '-'));
+            let name = normalize_group_name(term);
+            if named && name == "all" {
+                return Ok(Selection::All);
+            }
+            match self.groups.iter().find(|(_, known)| named && *known == name) {
+                Some((id, _)) => ids.push(*id),
+                None => unknown.push(term),
+            }
+        }
+        if unknown.is_empty() {
+            return Ok(Selection::groups(ids));
+        }
+        let available: Vec<&str> = self.groups.iter().take(12).map(|(_, name)| *name).collect();
+        Err(format!(
+            "Unknown group name(s): {}. A selection is all, one group name, or several joined \
+             with | (their union). Available groups: {}.",
+            unknown.join(", "),
+            if available.is_empty() {
+                "none".into()
+            } else {
+                available.join(", ")
+            }
+        ))
+    }
+
+    /// What `group` — a group's id, or `all` — is called. `None` for a group
+    /// that has been deleted.
+    #[must_use]
+    pub fn name(&self, group: &str) -> Option<&'a str> {
+        if group == crate::controls::ALL {
+            return Some(crate::controls::ALL);
+        }
+        self.groups
+            .iter()
+            .find(|(id, _)| *id == group)
+            .map(|(_, name)| *name)
+    }
+
+    /// `selection` by name. A deleted group has no name and is left out.
+    #[must_use]
+    pub fn spell(&self, selection: &Selection) -> String {
+        let Selection::Groups(groups) = selection else {
+            return "all".into();
+        };
+        let names: Vec<&str> = groups.iter().filter_map(|id| self.name(id)).collect();
+        if names.is_empty() {
+            return NO_GROUPS.into();
+        }
+        names.join(" | ")
+    }
 }
 
 // =============================================================================
@@ -892,6 +630,7 @@ impl GroupSources {
                 .into_iter()
                 .filter(|node| !node.name.is_empty())
                 .map(|node| RigGroup {
+                    id: node.id,
                     name: node.name,
                     fixtures: node.fixtures,
                 })
@@ -922,8 +661,8 @@ pub fn label_paths(nodes: &[FixtureGroupNode]) -> HashMap<String, String> {
 /// selection namespace a namespace.
 ///
 /// Derived nodes and authored groups share it: a `fixture_groups` row called
-/// `spots_right_wing` and the wing of that name are two sets an expression
-/// cannot tell apart, so it would quietly union them. `except` is the node
+/// `spots_right_wing` and the wing of that name are two sets a typed
+/// selection cannot tell apart, so it would pick whichever came first. `except` is the node
 /// being renamed, which is allowed to keep its own name.
 ///
 /// Names that normalize to empty are not names and never collide.
@@ -1129,26 +868,6 @@ pub async fn set_named_group(
         .ok_or_else(|| "saved group could not be read".into())
 }
 
-/// Interactive previews refuse misspelled names, while a known empty group
-/// remains a valid empty selection. Score evaluation stays venue-portable.
-pub fn validate_selection_names(expression: &str, tree: &[GroupTreeNode]) -> Result<(), String> {
-    let missing: Vec<String> = selection_names(expression)?
-        .into_iter()
-        .filter(|name| !tree.iter().any(|node| node.name == *name))
-        .collect();
-    if missing.is_empty() {
-        return Ok(());
-    }
-    let available: Vec<&str> = tree
-        .iter()
-        .filter(|node| !node.name.is_empty())
-        .take(12)
-        .map(|node| node.name.as_str())
-        .collect();
-    Err(format!("Unknown group name(s): {}. Available groups: {}. Use groups() for exact names, group(name, fixtures) to create one, or generate_groups() for suggestions.",
-        missing.join(", "), if available.is_empty() { "none".into() } else { available.join(", ") }))
-}
-
 /// Save a derived starting set. Only adds names nobody has taken; it never
 /// replaces the memberships of a user's existing collections.
 pub async fn snapshot_generated_groups(
@@ -1186,70 +905,71 @@ pub async fn snapshot_generated_groups(
     Ok(())
 }
 
-/// Inspect selectors using the same grammar as evaluation, never substring search.
-pub fn selection_names(expression: &str) -> Result<Vec<String>, String> {
-    if expression.trim().is_empty() {
-        return Ok(vec![]);
-    }
-    parse_selection_expression(expression)?;
-    let mut lexer = Lexer::new(expression);
-    let mut names = Vec::new();
-    loop {
-        match lexer.next_token()? {
-            LexToken::End => break,
-            LexToken::Ident(name) if name != "all" && !names.contains(&name) => names.push(name),
-            _ => {}
-        }
-    }
-    Ok(names)
-}
-
-pub fn replace_selection_name(expression: &str, from: &str, to: &str) -> Result<String, String> {
-    parse_selection_expression(expression)?;
-    crate::models::groups::validate_group_name(to)?;
-    let mut result = String::new();
-    let mut token = String::new();
-    let flush = |token: &mut String, result: &mut String| {
-        if token.eq_ignore_ascii_case(from) {
-            result.push_str(to);
-        } else {
-            result.push_str(token);
-        }
-        token.clear();
-    };
-    for c in expression.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            token.push(c);
-        } else {
-            flush(&mut token, &mut result);
-            result.push(c);
-        }
-    }
-    flush(&mut token, &mut result);
-    Ok(result)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{or_expression, or_terms, venue_cache_key};
+    use super::{venue_cache_key, GroupNames, NO_GROUPS};
+    use crate::models::groups::{GroupOrigin, GroupTreeNode};
+    use crate::models::selection::Selection;
     use std::path::Path;
 
+    fn tree(names: &[&str]) -> Vec<GroupTreeNode> {
+        names
+            .iter()
+            .map(|name| GroupTreeNode {
+                id: format!("id-{name}"),
+                name: (*name).into(),
+                label: (*name).into(),
+                parent_id: None,
+                origin: GroupOrigin::Manual,
+                role: None,
+                fixtures: vec![],
+            })
+            .collect()
+    }
+
+    /// A typed selection names groups; what is stored is their ids, and it
+    /// reads back by name.
     #[test]
-    fn interactive_selection_names_accept_empty_sets_and_check_boolean_expressions() {
-        let tree = vec![crate::models::groups::GroupTreeNode {
-            id: "empty".into(),
-            name: "empty".into(),
-            label: "Empty".into(),
-            parent_id: None,
-            origin: crate::models::groups::GroupOrigin::Manual,
-            role: None,
-            fixtures: vec![],
-        }];
-        assert!(super::validate_selection_names("empty | ALL", &tree).is_ok());
-        assert!(super::validate_selection_names("empty & ~empty", &tree).is_ok());
-        let error = super::validate_selection_names("missing | empty", &tree).unwrap_err();
-        assert!(error.contains("missing") && error.contains("Available groups: empty"));
-        assert!(super::validate_selection_names("empty |", &tree).is_err());
+    fn a_typed_union_becomes_group_ids_and_reads_back() {
+        let tree = tree(&["front_wash", "spots"]);
+        let names = GroupNames::of_tree(&tree);
+        for (typed, selection, spelled) in [
+            ("all", Selection::All, "all"),
+            ("  ALL ", Selection::All, "all"),
+            ("spots", Selection::groups(["id-spots"]), "spots"),
+            (
+                "front_wash|spots | front_wash",
+                Selection::groups(["id-front_wash", "id-spots"]),
+                "front_wash | spots",
+            ),
+            ("Front Wash", Selection::groups(["id-front_wash"]), "front_wash"),
+            ("spots | all", Selection::All, "all"),
+        ] {
+            assert_eq!(names.parse(typed), Ok(selection.clone()), "{typed}");
+            assert_eq!(names.spell(&selection), spelled, "{typed}");
+        }
+    }
+
+    /// A misspelled name, and an operator that is not a union, are refused
+    /// with the names there are.
+    #[test]
+    fn an_unknown_name_is_refused_with_the_groups_there_are() {
+        let tree = tree(&["front_wash", "spots"]);
+        for typed in ["missing | spots", "front_wash & spots", "~spots", "spots |", ""] {
+            let error = GroupNames::of_tree(&tree).parse(typed).unwrap_err();
+            assert!(error.contains("Available groups: front_wash, spots"), "{typed}: {error}");
+        }
+    }
+
+    /// A deleted group has no name: it drops out of the spelling, and a
+    /// selection of nothing else says so.
+    #[test]
+    fn a_deleted_group_is_left_out_of_the_spelling() {
+        let tree = tree(&["spots"]);
+        let names = GroupNames::of_tree(&tree);
+        assert_eq!(names.spell(&Selection::groups(["gone", "id-spots"])), "spots");
+        assert_eq!(names.spell(&Selection::groups(["gone"])), NO_GROUPS);
+        assert_eq!(names.spell(&Selection::Groups(vec![])), NO_GROUPS);
     }
 
     /// The bug this key exists to prevent: two libraries holding a venue of the
@@ -1283,50 +1003,5 @@ mod tests {
             venue_cache_key(Path::new("/tmp/luma"), "a/venue-main"),
             venue_cache_key(Path::new("/tmp/luma/a"), "venue-main"),
         );
-    }
-
-    /// A union of bare tokens is what a set of checkboxes means; anything
-    /// else has no checkbox spelling.
-    #[test]
-    fn or_terms_reads_back_only_plain_unions() {
-        assert_eq!(or_terms("front_wash"), Some(vec!["front_wash".into()]));
-        assert_eq!(
-            or_terms("front_wash | back_movers|spots"),
-            Some(vec![
-                "front_wash".into(),
-                "back_movers".into(),
-                "spots".into()
-            ])
-        );
-        assert_eq!(
-            or_terms("(front_wash) | (spots)"),
-            or_terms("front_wash | spots")
-        );
-        assert_eq!(
-            or_terms("front_wash | front_wash"),
-            Some(vec!["front_wash".into()])
-        );
-
-        for opaque in [
-            "front_wash & left",
-            "~spots",
-            "a ^ b",
-            "a ? b",
-            "a & (b | c)",
-        ] {
-            assert_eq!(or_terms(opaque), None, "{opaque}");
-        }
-        assert_eq!(or_terms("front_wash |"), None);
-    }
-
-    /// Nothing checked and the whole venue are the same state, both ways.
-    #[test]
-    fn the_whole_venue_is_the_empty_term_list() {
-        assert_eq!(or_terms(""), Some(vec![]));
-        assert_eq!(or_terms("  ALL "), Some(vec![]));
-        assert_eq!(or_terms("all | spots"), Some(vec!["spots".into()]));
-        assert_eq!(or_expression(&[]), "all");
-        assert_eq!(or_expression(&["a".to_string(), "b".to_string()]), "a | b");
-        assert_eq!(or_terms(&or_expression(&[])), Some(vec![]));
     }
 }

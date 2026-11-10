@@ -3,7 +3,7 @@
 //!
 //! The positions tensor is the load-bearing part. Its `primitive` axis is
 //! labeled with the **exact** ordered ids the evaluator produces
-//! ([`resolve_primitive_ids`] with the `all` expression), so a graph view and a
+//! ([`resolve_primitive_ids`] with the `all` selection), so a graph view and a
 //! position row can be joined by identity rather than by index luck (design
 //! §8.5). Re-deriving head expansion here would be a second source of truth and
 //! would silently drift.
@@ -65,7 +65,7 @@ struct FixtureBinding {
 #[derive(Serialize)]
 pub(crate) struct GroupBinding {
     id: String,
-    /// The snake_case name a selection expression uses. Empty for a group
+    /// The snake_case name a selection says the group by. Empty for a group
     /// nobody has named, which selects nothing.
     name: String,
     /// One path segment — what the tree shows for this node.

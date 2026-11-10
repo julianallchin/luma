@@ -78,8 +78,14 @@ async fn call(host: &PerformHost, method: &str, payload: Value) -> Result<Value,
     host.call(method, payload).await
 }
 
+/// The set's patterns. The agent reads a selection as the names it wrote;
+/// here each is put back as the whole rig, for the tests that read the rest.
 fn patterns(answer: &Value) -> Vec<PerformPattern> {
-    serde_json::from_value(answer["set"]["patterns"].clone()).unwrap()
+    let mut patterns = answer["set"]["patterns"].clone();
+    for pattern in patterns.as_array_mut().unwrap() {
+        pattern["selection"] = json!(luma_patterns::Selection::All);
+    }
+    serde_json::from_value(patterns).unwrap()
 }
 
 fn layout(answer: &Value) -> PerformLayout {

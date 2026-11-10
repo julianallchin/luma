@@ -137,7 +137,6 @@ commands! {
     composable_patterns::selection_cells(
         venue_id: String,
         selection: Selection,
-        seed: u64,
         elements: Option<usize>,
     ) -> Vec<luma_patterns::Cell>;
 
@@ -186,8 +185,7 @@ commands! {
     fixtures::remove_patched_fixture(venue_id: String, id: String) -> ();
     fixtures::rename_patched_fixture(venue_id: String, id: String, label: String) -> ();
 
-    group_references::missing_venue_groups(venue_id: String) -> Vec<crate::models::groups::MissingGroup>;
-    group_references::resolve_venue_group(venue_id: String, missing: String, replacement: Option<String>, fixtures: Vec<String>) -> ();
+    group_references::venue_group_usage(venue_id: String) -> Vec<crate::models::groups::GroupUsage>;
     folders::list_folders(venue_id: String) -> Vec<Folder>;
     folders::create_folder(venue_id: String, name: String) -> Folder;
     folders::rename_folder(folder_id: String, name: String) -> ();

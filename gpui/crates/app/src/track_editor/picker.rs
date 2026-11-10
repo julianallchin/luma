@@ -253,7 +253,7 @@ fn fetch(app: &mut Luma, menu: InsertMenu, choice: InsertChoice, cx: &mut Contex
             venue_id: editor.venue_id.clone(),
             track_id: editor.track_id.clone(),
             graph: choice.graph(),
-            targets: vec![luma_lib::models::selection::Selection::new("all")],
+            targets: vec![luma_lib::models::selection::Selection::All],
             times: (0..count)
                 .map(|i| start + i as f64 * (end - start) / count as f64)
                 .collect(),

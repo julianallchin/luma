@@ -355,9 +355,7 @@ fn a_page_maps_each_cell_onto_the_controls_at_its_places() {
         id: "wash".into(),
         venue_id: "venue".into(),
         name: "Wash".into(),
-        selection: luma_patterns::Selection {
-            expression: "all".into(),
-        },
+        selection: luma_patterns::Selection::All,
         z_index: 0,
         blend_mode: luma_patterns::BlendMode::Replace,
         seed: 1,
