@@ -472,6 +472,9 @@ pub struct AgentChat {
     /// rather than on a turn because a call is named by its id, and a `RefCell`
     /// because a row reads its call while the panel is mid-render.
     cells: RefCell<python_cell::Cells>,
+    /// Markdown rows the list laid out since the last frame's trim; see
+    /// [`transcript::Viewed`].
+    viewed: transcript::Viewed,
     /// The one fold in flight: which call was clicked, when, and which row it
     /// is in so the tween can remeasure it. At most one — a fold is started by
     /// a click, and a click lands on one chip.
@@ -562,6 +565,7 @@ impl AgentChat {
             error: None,
             expanded: HashSet::new(),
             cells: RefCell::default(),
+            viewed: transcript::Viewed::default(),
             fold: None,
             fold_hold: None,
             fold_px: Cell::new(0.0),
@@ -1702,6 +1706,7 @@ impl Render for AgentChat {
 
 impl AgentChat {
     fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        transcript::trim_caches(&self.entries, &self.viewed);
         if self.usage.tick_close(luma_ui::motion::reduced_motion(cx)) {
             window.request_animation_frame();
         }
@@ -1934,6 +1939,7 @@ impl AgentChat {
                         trailer: (last_item == Some(ix)).then_some(trailer).flatten(),
                         expanded: &state.expanded,
                         cells: &state.cells,
+                        viewed: &state.viewed,
                         agent: &state.agent,
                         fold: fold.as_ref().map(|(call, progress)| (call, *progress)),
                         fold_px: &state.fold_px,

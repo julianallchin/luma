@@ -605,6 +605,40 @@ fn part_key(turn: &SharedString, part: usize) -> String {
     format!("{turn}:{part}")
 }
 
+/// The markdown rows the list has laid out since the last trim.
+///
+/// The list renders only its viewport and overdraw, so what it asked for in a
+/// frame is exactly what deserves to stay cached. Interior-mutable because
+/// rows note themselves during the panel's own render, when the panel entity
+/// is already borrowed.
+#[derive(Default)]
+pub struct Viewed(RefCell<HashSet<SharedString>>);
+
+impl Viewed {
+    fn note(&self, row: &SharedString) {
+        self.0.borrow_mut().insert(row.clone());
+    }
+
+    /// What was laid out since the last call, and start a fresh set.
+    fn take(&self) -> HashSet<SharedString> {
+        std::mem::take(&mut *self.0.borrow_mut())
+    }
+}
+
+/// Drop the cached layout of every row the list did not lay out since the last
+/// trim. Run at the top of a render, so it judges the previous frame's list.
+/// Does nothing when no row was laid out: a panel that was not painted has no
+/// opinion about what is visible.
+pub fn trim_caches(entries: &[Entry], viewed: &Viewed) {
+    let rows = viewed.take();
+    if rows.is_empty() {
+        return;
+    }
+    for entry in entries {
+        entry.cache.borrow_mut().retain_rows(&rows);
+    }
+}
+
 /// The markdown a part carries, if it carries any.
 fn markdown_of(part: &AgentChatPart) -> Option<&str> {
     match part {
@@ -711,6 +745,8 @@ pub struct RowCtx<'a> {
     /// borrowed — see [`crate::python_cell`] for why the reading is cached at
     /// all.
     pub cells: &'a RefCell<crate::python_cell::Cells>,
+    /// Where a markdown row notes that it was laid out, for the cache trim.
+    pub viewed: &'a Viewed,
     /// What a python card loads its figures through.
     pub agent: &'a crate::Agent,
     /// The one fold in flight, if any: which call, and how far through its
@@ -953,8 +989,10 @@ fn markdown(
 ) -> Option<(AnyElement, String)> {
     let state = turn.parts.get(part)?.as_ref()?;
     let top = state.tree.blocks.get(block)?;
+    let row_key = SharedString::from(part_key(&turn.key, part));
+    ctx.viewed.note(&row_key);
     let opts = RenderOptions {
-        row_key: SharedString::from(part_key(&turn.key, part)),
+        row_key,
         veil: ctx.live.then(|| Rc::clone(&turn.veil)),
         cache: Some(Rc::clone(&turn.cache)),
         now: Instant::now(),
@@ -1220,6 +1258,25 @@ mod tests {
             pin_after_scroll(true, false, 0.0, 0.0),
             "a pinned view stays pinned"
         );
+    }
+
+    /// What the trim keeps is what the last frame laid out: a row that
+    /// scrolled out of the list is absent from the next set, a visible one is
+    /// present, and a frame that laid out nothing keeps everything.
+    #[test]
+    fn the_trim_keeps_what_the_last_frame_laid_out() {
+        let viewed = Viewed::default();
+        let (a, b) = (SharedString::from("t:0"), SharedString::from("t:1"));
+        viewed.note(&a);
+        viewed.note(&b);
+        assert_eq!(viewed.take(), HashSet::from([a.clone(), b.clone()]));
+        // `b` scrolled out; only `a` is laid out the next frame.
+        viewed.note(&a);
+        let kept = viewed.take();
+        assert!(kept.contains(&a) && !kept.contains(&b));
+        // An unpainted frame: empty, so the trim must not wipe anything.
+        assert!(viewed.take().is_empty());
+        trim_caches(&[Entry::restored("t")], &viewed);
     }
 
     /// A row's gap comes from the pair it sits between. The one that matters
