@@ -113,19 +113,18 @@ pub(super) struct Gpu {
     /// The camera export recorded with the last submission, and its serial.
     /// Taken by the prepaint, which writes it.
     pub(super) exported: Option<(u64, luma_render::camera_export::CameraExport)>,
-    /// The UI-thread cost of the most recent [`Self::frame`] call.
+    /// The UI-thread cost of the most recent [`Self::submit`] call.
     ///
     /// Held here rather than returned because these phases run on every call
     /// while a *completed* frame arrives only sometimes, and a measurement
     /// that existed only on the frames that finished would miss precisely the
     /// frames that did not.
     pub(super) work: StageWork,
-    /// What the presentation seam did with the most recent submission.
+    /// What the presentation seam did on the most recent prepaint.
     ///
     /// Held here for the same reason as `work`, and it is the half that was
-    /// missing: a submission happens every call, a delivery only sometimes,
-    /// and the frames that were submitted and never delivered are exactly the
-    /// ones a stall is made of.
+    /// missing: a delivery happens only sometimes, and the prepaints that
+    /// delivered nothing are exactly the ones a stall is made of.
     pub(super) submission: Submission,
     pub(super) assets: assets::Library,
     pub(super) picks: PickTimeline,
@@ -136,6 +135,10 @@ pub(super) struct Gpu {
 /// What the presentation seam did with one submitted frame.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Submission {
+    /// Whether the last prepaint submitted a frame. It does not while an
+    /// earlier one is still in flight, and then `serial` and `haze_time_s`
+    /// are still that earlier frame's.
+    pub(super) submitted: bool,
     pub(super) serial: u64,
     pub(super) haze_time_s: f32,
     /// This frame pushed an older, undelivered one out of the queue.
@@ -271,20 +274,18 @@ pub(super) enum StageFrame {
 pub(super) type PaintedStage = Option<(StageFrame, Option<PickSnapshot>)>;
 
 impl Gpu {
-    /// Queue one frame and hand back the newest completed image, if any.
+    /// Queue one frame, without waiting for the renderer or the GPU.
     ///
     /// Frame assembly stays on the caller because it samples current evaluator
     /// state. Device submission, mapping and its blocking wait are owned by
-    /// [`AsyncViewport`]'s renderer thread. This method only enqueues and drains
-    /// a completed slot; neither operation polls the GPU.
+    /// [`AsyncViewport`]'s renderer thread.
+    ///
+    /// The caller submits only when [`AsyncViewport::in_flight`] says no
+    /// earlier frame is, and calls [`Self::held`] on the prepaints in between.
     ///
     /// # Errors
-    /// A mesh that would not load, or a readback that would not map, as a
-    /// message fit to put on the screen.
-    pub(super) fn frame(
-        &mut self,
-        input: LiveFrameInputs<'_>,
-    ) -> Result<Option<CompletedFrame>, String> {
+    /// A mesh that would not load, as a message fit to put on the screen.
+    pub(super) fn submit(&mut self, input: LiveFrameInputs<'_>) -> Result<(), String> {
         let LiveFrameInputs {
             scene,
             definitions,
@@ -327,17 +328,13 @@ impl Gpu {
         // The camera export below keeps the shake.
         let pick = PickSnapshot::from_frame(&frame, scene, camera, &mut self.pick_cache);
         self.work.pick_ms = picked.elapsed().as_secs_f32() * 1_000.0;
-        let completed = self
-            .viewport
-            .take_latest()
-            .transpose()
-            .map_err(|error| format!("Could not render the frame: {error}"))?;
         let exported = export
             .map(|context| luma_render::camera_export::CameraExport::capture(&frame, context));
         let (serial, outcome, occupancy) = self.viewport.submit_numbered(frame, width, height);
         self.exported = exported.map(|export| (serial, export));
         let (finished, last_signalled) = self.viewport.finished();
         self.submission = Submission {
+            submitted: true,
             serial,
             haze_time_s,
             replaced_undelivered: matches!(outcome, SubmitOutcome::Replaced { .. }),
@@ -347,6 +344,35 @@ impl Gpu {
         };
         self.picks
             .submitted(serial, SubmittedFrame { pick, spans }, outcome);
+        Ok(())
+    }
+
+    /// Record a prepaint that submitted nothing because an earlier frame is
+    /// still in flight, with the slots as it found them.
+    pub(super) fn held(&mut self, slots: luma_render::Occupancy) {
+        let (finished, last_signalled) = self.viewport.finished();
+        self.submission = Submission {
+            submitted: false,
+            replaced_undelivered: false,
+            slots,
+            finished,
+            last_signalled,
+            ..self.submission
+        };
+    }
+
+    /// The newest completed image, if one has come home since the last call.
+    /// Does not poll the GPU.
+    ///
+    /// # Errors
+    /// A frame that would not render, or a readback that would not map, as a
+    /// message fit to put on the screen.
+    pub(super) fn latest(&mut self) -> Result<Option<CompletedFrame>, String> {
+        let completed = self
+            .viewport
+            .take_latest()
+            .transpose()
+            .map_err(|error| format!("Could not render the frame: {error}"))?;
         let Some(presented) = completed else {
             return Ok(None);
         };

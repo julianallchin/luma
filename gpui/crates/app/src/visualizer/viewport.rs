@@ -138,9 +138,10 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                         "renders_in_gap": "stage renders during ui_frame_gap_ms; 1 is healthy, 0 means nothing asked for a frame",
                         "input_ms": "input dispatch time during ui_frame_gap_ms (input_events events, input_moves of them mouse moves; input_longest_ms the longest)",
                         "shared_surface": "true = zero-copy (an IOSurface on Metal, a texture on the compositor's own device on wgpu); false = CPU readback, whose copy and map sit inside draw_ms and are invisible to gpu_total_ms",
-                        "delivered": "false = a prepaint that submitted a frame and got none back; interval/draw/queued/gpu are absent on those rows, everything measured before submission is valid",
+                        "delivered": "false = a prepaint that got no frame back; interval/draw/queued/gpu are absent on those rows, everything measured before submission is valid",
+                        "submitted": "false = this prepaint built and submitted nothing because an earlier frame was still in flight (one frame is on the GPU at a time); its submitted_serial is that earlier frame's, and its camera and track time were never rendered",
                         "replaced_undelivered": "this submission pushed an older frame out of the queue before it ever reached the screen",
-                        "slots_idle/rendering/ready/reserved": "presentation slots at submit; reserved are held because their surface is still on screen",
+                        "slots_idle/rendering/ready/reserved": "presentation slots at this prepaint; reserved are held because their surface is still on screen",
                         "slot_startable": "false = no slot could take this frame, which is what queued_ms then waits on",
                         "draw_ms": "renderer submit to observed completion (latency, not cost); until_signalled_ms + until_noticed_ms is the same span, split",
                         "until_signalled_ms": "submit until the driver's completion callback fired — the GPU's share, including any wait to begin executing",
@@ -169,7 +170,7 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                         "width": "physical pixels rendered across",
                         "height": "physical pixels rendered down",
                     },
-                    "reading": "All spans describe the same frame as interval_ms; they are paired by submission serial. Work the late frame in order: renders_in_gap 0 means nothing asked for a frame; ui_frame_gap_ms tracking interval_ms means the UI thread did not produce one, and request_to_prepaint_ms says how much of that belonged to another view before the walk reached the stage; if ui_frame_gap_ms stays at frame rate while interval_ms grows, the frames were made and something downstream held them. Then count the delivered=false rows between two deliveries: that is how many frames were made and thrown away, and on those rows slot_startable, the slot counts and replaced_undelivered say why.",
+                    "reading": "All spans describe the same frame as interval_ms; they are paired by submission serial. Work the late frame in order: renders_in_gap 0 means nothing asked for a frame; ui_frame_gap_ms tracking interval_ms means the UI thread did not produce one, and request_to_prepaint_ms says how much of that belonged to another view before the walk reached the stage; if ui_frame_gap_ms stays at frame rate while interval_ms grows, the frames were made and something downstream held them. Then read the delivered=false rows between two deliveries: with submitted=false the stage was waiting for the frame in flight, which is the GPU taking longer than a refresh; with submitted=true a frame was made and thrown away, and on those rows slot_startable, the slot counts and replaced_undelivered say why.",
                 },
                 "hitchMs": run_up.last().map_or(0.0, |frame| frame.interval_ms),
                 "frames": run_up,
@@ -378,20 +379,17 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                             false
                         } else {
                             match &mut stage.idle {
-                                Some((held, settle)) if *held == key => match settle {
-                                    0 => true,
-                                    _ => {
-                                        *settle -= 1;
-                                        false
-                                    }
-                                },
+                                Some((held, settle)) if *held == key => *settle == 0,
                                 slot => {
                                     let settle = if key_controls.look.exposure.auto {
                                         EXPOSURE_SETTLE_FRAMES
                                     } else {
                                         SETTLE_FRAMES
                                     };
-                                    *slot = Some((key, settle));
+                                    // The frame that shows the change, and
+                                    // then the frames it settles over: each
+                                    // one submitted counts one off.
+                                    *slot = Some((key, settle + 1));
                                     false
                                 }
                             }
@@ -426,22 +424,41 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                                 build: build_affordances.clone(),
                             };
                             gpu.viewport.set_display_range(display);
-                            stage.clock.submitted(clock);
-                            match gpu.frame(LiveFrameInputs {
-                                scene,
-                                definitions: &stage.definitions,
-                                lights: &stage.lights,
-                                strobes: &mut stage.strobes,
-                                moment,
-                                state: universe.as_ref(),
-                                lasers: &stage.lasers,
-                                size: (width, height),
-                                camera,
-                                spans,
-                                export: stage.exports.request.take().map(|request| {
-                                    request.context(time, camera, (width, height), scale)
-                                }),
-                            }) {
+                            // One frame on the GPU at a time. A second one
+                            // submitted behind it does not finish sooner: the
+                            // two take turns, finish together and one is
+                            // thrown away. So a prepaint that finds a frame
+                            // still in flight builds nothing, and the clock,
+                            // the settle count and a camera export wait for
+                            // the prepaint that does submit.
+                            let arrived = gpu.latest().and_then(|completed| {
+                                let (busy, slots) = gpu.viewport.in_flight();
+                                if busy {
+                                    gpu.held(slots);
+                                    return Ok(completed);
+                                }
+                                stage.clock.submitted(clock);
+                                if let Some((_, settle)) = &mut stage.idle {
+                                    *settle = settle.saturating_sub(1);
+                                }
+                                gpu.submit(LiveFrameInputs {
+                                    scene,
+                                    definitions: &stage.definitions,
+                                    lights: &stage.lights,
+                                    strobes: &mut stage.strobes,
+                                    moment,
+                                    state: universe.as_ref(),
+                                    lasers: &stage.lasers,
+                                    size: (width, height),
+                                    camera,
+                                    spans,
+                                    export: stage.exports.request.take().map(|request| {
+                                        request.context(time, camera, (width, height), scale)
+                                    }),
+                                })?;
+                                Ok(completed)
+                            });
+                            match arrived {
                                 Err(error) => {
                                     // Drop the last good frame with the error. A
                                     // renderer that has stopped must not leave a
@@ -457,6 +474,14 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                                     if let Some((serial, export)) = gpu.exported.take() {
                                         stage.exports.written(serial, &export);
                                     }
+                                    // What this prepaint built: nothing,
+                                    // while an earlier frame is in flight.
+                                    let submitted = gpu.submission.submitted;
+                                    let work = if submitted {
+                                        gpu.work
+                                    } else {
+                                        StageWork::default()
+                                    };
                                     stage.last_work = StageWork {
                                         sample_ms,
                                         ..gpu.work
@@ -473,12 +498,13 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                                     // that got nothing back, which is the point:
                                     // the silent ones are what a stall is made of.
                                     let mut sample = FrameSample {
+                                        submitted,
                                         submitted_serial: gpu.submission.serial,
                                         haze_time_s: gpu.submission.haze_time_s,
                                         delivered: false,
                                         score_ms: sample_ms,
-                                        build_ms: stage.last_work.build_ms,
-                                        pick_ms: stage.last_work.pick_ms,
+                                        build_ms: work.build_ms,
+                                        pick_ms: work.pick_ms,
                                         camera_radius: camera.radius,
                                         // `build_frame_with` converts the scene's
                                         // Y-up camera back to this internal Z-up
@@ -594,8 +620,8 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                                             sample.submit_encode_ms = ms(completed.cpu.encode);
                                             Some((completed.frame, Some(completed.pick)))
                                         }
-                                        // Submitted, nothing back: a row with
-                                        // no delivered frame.
+                                        // Nothing back: a row with no
+                                        // delivered frame.
                                         _ => stage.previous.clone().map(|frame| (frame, None)),
                                     };
                                     let now = Instant::now();
