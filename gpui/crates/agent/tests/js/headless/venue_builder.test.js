@@ -574,3 +574,24 @@ test("deleting a light unpatches it and undo patches it again", () => {
   until("the light to come back", () => fixtures().includes("Mover 0"));
   expect(fixtures()).toEqual(before);
 });
+
+// A selected light aims from its card: the tilt dragged is the tilt the rig
+// keeps, and undo takes the aim back.
+test("a light's tilt drags, sticks and undoes", () => {
+  nav.stage("Test Venue");
+  nav.agentOff();
+  until("the fixture inventory", (s) => s.findAll({ role: "row" }).some((n) => n.label === "Mover 0"));
+  nav.step("a light", "row", "Mover 0");
+  until("the aim rows", (s) => s.findAll({ role: "slider" }).some((n) => n.label.startsWith("stage-tilt = ")));
+  valueBox("stage-pan");
+  const before = settled("stage-tilt");
+  sweep("stage-tilt", 0.85);
+  const aimed = settled("stage-tilt");
+  expect(aimed).toBeGreaterThan(before);
+  // The rig kept it: reselecting reads the graph, not the drag.
+  app.key("escape");
+  nav.step("a light", "row", "Mover 0");
+  until("the kept tilt", () => settled("stage-tilt") === aimed);
+  app.action("luma::Undo");
+  until("the tilt to come back", () => settled("stage-tilt") === before);
+});

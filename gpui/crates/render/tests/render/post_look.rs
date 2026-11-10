@@ -1,11 +1,12 @@
-//! The camera look: exposure, lens glow and glare (`post.rs`).
+//! The camera look: exposure and glare (`post.rs`).
 //!
 //! ```sh
 //! cargo test -p luma-render --test render post_look:: -- --test-threads=1
 //! ```
 //!
-//! One light aimed at the camera over a dark stage. Each test renders the
-//! same frame under two looks and compares the pictures.
+//! One light aimed at the camera over a dark stage, or the sun over open
+//! ground. Each test renders the same frame under two looks and compares the
+//! pictures.
 
 use std::collections::BTreeMap;
 
@@ -96,8 +97,8 @@ fn capture_numbered(pixels: &[u8]) {
     crate::common::capture(&format!("{n:02}"), pixels, WIDTH, HEIGHT);
 }
 
-/// Where the lens is on screen: the brightest pixel of a frame with it in.
-fn lens_pixel(pixels: &[u8]) -> (u32, u32) {
+/// Where the source is on screen: the brightest pixel of the frame.
+fn brightest(pixels: &[u8]) -> (u32, u32) {
     let (mut best, mut at) = (0u32, 0usize);
     for (i, px) in pixels.chunks_exact(4).enumerate() {
         let sum = u32::from(px[0]) + u32::from(px[1]) + u32::from(px[2]);
@@ -144,48 +145,8 @@ fn manual(glare: Glare) -> Look {
     }
 }
 
-/// A beam aimed into the camera shows its lens white-hot, and its glare
-/// spreads over the dark around it; off the axis the lens is barely there.
-#[test]
-fn a_lens_in_its_beam_glares() {
-    let mut renderer = Renderer::new().unwrap();
-    // No haze: the lens and its glare are all there is to see.
-    let glaring = render(
-        &mut renderer,
-        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE)),
-    );
-    let plain = render(
-        &mut renderer,
-        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::OFF)),
-    );
-    let lens = lens_pixel(&glaring);
-    assert!(
-        luma(&glaring, lens.0, lens.1) > 245.0,
-        "the lens on its beam's axis is white: {}",
-        luma(&glaring, lens.0, lens.1)
-    );
-    // Two degrees out.
-    let halo = ring(&glaring, lens, 6.0);
-    let without = ring(&plain, lens, 6.0);
-    assert!(
-        halo > without + 5.0,
-        "glare lights the dark around the lens: {halo} against {without} without it"
-    );
-
-    // Turned away, the same lens is a fraction of that.
-    let away = render(
-        &mut renderer,
-        &hazy_frame(0.5, 0.0, 0.0, manual(Glare::STAGE)),
-    );
-    let away_halo = ring(&away, lens, 6.0);
-    assert!(
-        away_halo < halo * 0.5,
-        "the glow falls off out of the beam: {away_halo} against {halo} on axis"
-    );
-}
-
-/// The veil is a long power-law tail: from one lens it still lights the dark
-/// a quarter of the frame away, and it falls smoothly all the way out, with no
+/// The veil is a long power-law tail: from the sun it still lights the
+/// frame well away from it, and it falls smoothly all the way out, with no
 /// bright ring where a kernel or a fade might end.
 #[test]
 fn the_veil_reaches_far_without_a_ring() {
@@ -194,42 +155,40 @@ fn the_veil_reaches_far_without_a_ring() {
         style: GlareStyle::Bloom,
         ..Glare::STAGE
     };
-    let glaring = render(&mut renderer, &hazy_frame(0.5, 1.0, 0.0, manual(bloom)));
-    let plain = render(
-        &mut renderer,
-        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::OFF)),
-    );
-    let lens = lens_pixel(&glaring);
-    let far = ring(&glaring, lens, 30.0);
+    let glaring = render(&mut renderer, &sun_frame(0.0, manual(bloom)));
+    let plain = render(&mut renderer, &sun_frame(0.0, manual(Glare::OFF)));
+    let sun = brightest(&glaring);
+    let far = ring(&glaring, sun, 30.0);
     assert!(
-        far > ring(&plain, lens, 30.0) + 1.0,
+        far > ring(&plain, sun, 30.0) + 1.0,
         "the veil reaches 30 px out: {far}"
     );
-    let profile: Vec<f32> = (3..60).map(|r| ring(&glaring, lens, r as f32)).collect();
+    // From outside the sun's clipped core, where both pictures are white and
+    // their difference says nothing about the veil.
+    let profile: Vec<f32> = (6..60)
+        .map(|r| ring(&glaring, sun, r as f32) - ring(&plain, sun, r as f32))
+        .collect();
     for (i, pair) in profile.windows(2).enumerate() {
         assert!(
             pair[1] <= pair[0] + 0.5,
             "the veil rises at {} px: {profile:?}",
-            i + 4
+            i + 7
         );
     }
 }
 
-/// Medium quality convolves on a coarser grid; the glare around a lens is much
-/// the same.
+/// Medium quality convolves on a coarser grid; the glare around the sun is
+/// much the same.
 #[test]
 fn medium_quality_glares_alike() {
     let mut renderer = Renderer::new().unwrap();
-    let high = render(
-        &mut renderer,
-        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE)),
-    );
-    let mut frame = hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE));
+    let high = render(&mut renderer, &sun_frame(0.0, manual(Glare::STAGE)));
+    let mut frame = sun_frame(0.0, manual(Glare::STAGE));
     frame.quality = Quality::Medium;
     let low = render(&mut renderer, &frame);
-    let lens = lens_pixel(&high);
+    let sun = brightest(&high);
     for radius in [4.0, 8.0, 16.0] {
-        let (h, l) = (ring(&high, lens, radius), ring(&low, lens, radius));
+        let (h, l) = (ring(&high, sun, radius), ring(&low, sun, radius));
         assert!(
             (h - l).abs() < 0.3 * h.max(l) + 2.0,
             "at {radius} px: high {h}, low {l}"

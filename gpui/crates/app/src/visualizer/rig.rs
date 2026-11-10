@@ -447,6 +447,8 @@ pub(crate) fn scene(
                     mode_name: f.mode_name.clone(),
                     pos: node.position.map(|v| v as f32),
                     rot: node.rotation.map(|v| v as f32),
+                    aim: luma_scene::venue::ANGLE_PARAMS
+                        .map(|key| node.params.get(key).copied().unwrap_or(0.0) as f32),
                 })
             })
             .collect(),

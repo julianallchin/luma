@@ -206,10 +206,18 @@ pub(crate) fn build(
         let Some(def) = definitions.get(&fixture.fixture_path) else {
             continue;
         };
-        let d = def.physical.as_ref().and_then(|p| p.dimensions.as_ref());
-        let size = d.map_or(Vec3::ZERO, |d| {
-            Vec3::new(d.width, d.height, d.depth) / 1000.0
-        });
+        // A library fixture's box is its build's, which hangs from its pivot
+        // rather than being centred on it.
+        let (size, centre) = def.built.as_ref().and_then(|b| b.bounds()).map_or_else(
+            || {
+                let d = def.physical.as_ref().and_then(|p| p.dimensions.as_ref());
+                let size = d.map_or(Vec3::ZERO, |d| {
+                    Vec3::new(d.width, d.height, d.depth) / 1000.0
+                });
+                (size, Vec3::ZERO)
+            },
+            |(lo, hi)| (hi - lo, (lo + hi) / 2.0),
+        );
         if size.min_element() <= 0.0 {
             continue;
         }
@@ -219,7 +227,9 @@ pub(crate) fn build(
         // A procedural bar's body is drawn a quarter turn onto the mount
         // normal (see the bar branch in `build_frame_with`); its cage turns
         // with it or it wears a box for a body it does not have.
-        let turned = if luma_scene::luminaire::is_procedural(def) {
+        let turned = if def.built.is_some() {
+            Mat4::from_translation(centre)
+        } else if luma_scene::luminaire::is_procedural(def) {
             Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
         } else {
             Mat4::IDENTITY

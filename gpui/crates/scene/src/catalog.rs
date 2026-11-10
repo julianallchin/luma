@@ -1218,6 +1218,7 @@ impl StatedHousing {
     #[must_use]
     pub fn stock_head() -> Self {
         Self(Definition {
+            built: None,
             kind: "Moving Head".into(),
             modes: Vec::new(),
             physical: Some(crate::definition::Physical {
@@ -1320,9 +1321,13 @@ impl Housings {
 /// `housing_draws` scales the mesh itself — to the definition's physical
 /// height. Everything else is drawn as its dimension box turned onto the mount
 /// normal, so its clamp is half its depth: the box is centred on the origin, so
-/// its back face is `depth / 2` above it.
+/// its back face is `depth / 2` above it. A library fixture is its build's top
+/// above its pivot.
 #[must_use]
 pub fn clamp_standoff(def: &Definition, mesh: impl Fn(ModelKind) -> Option<DAabb>) -> f64 {
+    if let Some(built) = &def.built {
+        return f64::from(crate::library::clamp_height(built));
+    }
     let dims = def.dimensions_m();
     let half_depth = f64::from(dims[2]) / 2.0;
     if is_procedural(def) {

@@ -1,0 +1,128 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "custom/hollywood-search-light",
+  "name": "Custom Hollywood search light",
+  "manufacturer": "Custom",
+  "model": "Hollywood search light",
+  "category": "multi_head_array",
+  "description": "This is a custom search light, probably about a metre across, with four cylindrical cans on one square base. The base is a solid box, 99 units square, carrying four pan pivots on its top face, joined by a flat arm frame at pivot height. Each head pans up to 540 degrees about a tilted axis, so the cans fan out; apply each pan's own orientation, not a plain Y rotation. Each can tilts 45 degrees on its local horizontal axis. Every can is about 46 units wide and 77 long, ending in a round flat lens about 41 units across with one light source at its centre. Four cells in extended DMX mode, one shared in basic.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "multi_head",
+   "photo_pass": {
+    "verdict": "cannot",
+    "identity": "No supplied photos. Exact-name, joined searchlight spelling, Custom/DMX, Depence, manual and discontinued searches found no identifiable exact-model product source. No look-alike data used.",
+    "supported_corrections": "Local description and facts.json report four repeated cylindrical heads, one lens/source per head, direct pan pivots, RGBW, and a total tilt travel of 45 degrees. Face root describes ONE array element; array.n=4 supplies the four heads. Removed four spurious peripheral openings per head and unsupported two-arm element yokes.",
+    "control": "Inferred from imported record, not independently verified: Extended 40 = 4 heads x (Pan, Tilt, Intensity, Strobe, Zoom, Focus, R, G, B, W); Basic 10 shares all four heads. Four RGBW cells in the represented Extended mode.",
+    "lens_ratio": "40.8/45.9 of can diameter from imported mesh record; absolute metres unverified.",
+    "unresolved": [
+     "Overall bounding box and absolute scale: original dims.size retained; no manufacturer measurements or known mesh unit.",
+     "Head width/length proportions remain unverified against a photo; imported description reports 45.9:77.0.",
+     "Square solid base and shared flat pivot frame are not accurately represented by the existing hub carrier.",
+     "Head pivot radius/height, individual tilted pan orientations and outward/upward rest pose are unverified and not represented accurately.",
+     "No photo crops or silhouette comparison possible; no manufacturer weight or verified DMX chart found."
+    ]
+   },
+   "import": {"from": "depence", "old_id": "927421da-0715-45f4-85e5-8eefb2d5d2b9"},
+   "sources": []
+  }
+ },
+ "template": "array",
+ "dims": {"size": [1.6447, 1.5188, 1.6446]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "can",
+   "profile": "cylinder",
+   "outline": "round",
+   "w": 0.296,
+   "len": 0.6975,
+   "d": 0.296,
+   "off": 0.0,
+   "tilt_y": 0.3607,
+   "features": [],
+   "lens_d": 0.263111
+  }
+ },
+ "faces": [{"on": "front", "root": {"outline": "circle", "cell": true, "emitter": {"kind": "lens", "colour": "rgbw"}}}],
+ "array": {
+  "n": 4,
+  "carrier": {"kind": "hub", "w": 1.6447, "d": 1.6446, "h": 0.6246},
+  "per_head": {
+   "pan": {"drive": "dmx", "range": [-270.0, 270.0], "per_head": true, "axis": [0, 1, 0]},
+   "tilt": {"drive": "dmx", "range": [-22.5, 22.5], "per_head": true, "axis": [1, 0, 0]}
+  },
+  "beam": "y",
+  "cells_total": 4,
+  "element_mount": null
+ },
+ "cells": {"count": 4, "emitters": 4},
+ "sources": [{"cell_ranges": [[0, 0]]}, {"cell_ranges": [[1, 1]]}, {"cell_ranges": [[2, 2]]}, {"cell_ranges": [[3, 3]]}],
+ "control": {
+  "modes": [
+   {
+    "name": "12ch",
+    "options": {"channels": "12"},
+    "footprint": 12,
+    "channels": [
+     {"attr": "position/pan"},
+     {"attr": "position/pan", "rank": 1},
+     {"attr": "position/tilt"},
+     {"attr": "position/tilt", "rank": 1},
+     {"attr": "dimmer"},
+     {"attr": "shutter", "ranges": [{"dmx": [1, 255], "state": "strobe"}]},
+     {"attr": "beam/zoom"},
+     {"attr": "beam/focus"},
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/white"}
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "48ch",
+    "options": {"channels": "48"},
+    "footprint": 48,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [
+        {"attr": "position/pan"},
+        {"attr": "position/pan", "rank": 1},
+        {"attr": "position/tilt"},
+        {"attr": "position/tilt", "rank": 1},
+        {"attr": "dimmer"},
+        {"attr": "shutter", "ranges": [{"dmx": [1, 255], "state": "strobe"}]},
+        {"attr": "beam/zoom"},
+        {"attr": "beam/focus"},
+        {"attr": "colour/red"},
+        {"attr": "colour/green"},
+        {"attr": "colour/blue"},
+        {"attr": "colour/white"}
+       ]
+      }
+     }
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {
+   "cells": {
+    "note": "4 cells; canonical order = reading order of dmx order (no positions) positions (prototype: check against the geometry build order)"
+   }
+  }
+ }
+}

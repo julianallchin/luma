@@ -332,10 +332,13 @@ async fn a_stale_projection_clears_without_uploading() {
 async fn a_clip_insert_update_and_delete_become_put_patch_and_delete() {
     let (_directory, pool) = database("clip.db").await;
     let mut connection = writer(&pool).await;
+    // An old stamp, so the update's trigger moves it even when both land in
+    // the same millisecond.
     sqlx::query(
         "INSERT INTO clips (id, uid, score_id, graph, start, duration, seed, selection_seed,
-             selection_json, z_index, blend_mode, inputs_json)
-         VALUES ('clip-1', 'user-1', 'score-1', '{}', 0.0, 8.0, '7', NULL, '[]', 0, 'normal', '{}')",
+             selection_json, z_index, blend_mode, inputs_json, updated_at)
+         VALUES ('clip-1', 'user-1', 'score-1', '{}', 0.0, 8.0, '7', NULL, '[]', 0, 'normal', '{}',
+                 '2000-01-01T00:00:00.000Z')",
     )
     .execute(&mut *connection)
     .await

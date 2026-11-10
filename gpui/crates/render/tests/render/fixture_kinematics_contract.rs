@@ -35,6 +35,7 @@ const TILT_DEG: f32 = -19.0;
 
 fn mover_definition() -> Definition {
     Definition {
+        built: None,
         kind: "Moving Head".into(),
         modes: vec![Mode {
             name: "Standard".into(),
@@ -88,6 +89,7 @@ fn characterization_frame() -> Frame {
             mode_name: "Standard".into(),
             pos: MOUNT_POSITION,
             rot: MOUNT_ROTATION,
+            aim: [0.0; 2],
         }],
         pieces: Vec::new(),
         state,

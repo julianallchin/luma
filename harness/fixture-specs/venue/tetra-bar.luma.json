@@ -1,0 +1,414 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "venue/tetra-bar",
+  "name": "Venue Tetra Bar",
+  "manufacturer": "Venue",
+  "model": "Tetra Bar",
+  "category": "led_bar",
+  "description": "One fixed slim rectangular bar with two rear end L-brackets used as floor feet, facing forward. Twelve identical round 4 W RGBA lenses in one evenly spaced row; four independently controlled zones of three adjacent lenses.",
+  "provenance": {
+   "source": "qlc describe + QLC+ pack import (qlc_base.py)",
+   "archetype": "bar",
+   "dims_src": "QLC+ authoritative overall 1004/61/170 mm retained, mapped width/height/depth in forward-facing low floor pose. Manual p22 lists Length/Width/Height as 1004/61/170 mm without a dimensioned bracket drawing; short-axis mapping and housing/bracket split are inferred from exact photo, not independently verified.",
+   "qlc_id": "qlc:Venue/Tetra Bar",
+   "qlc_type": "LED Bar (Pixels)",
+   "manual": "https://venuelightingeffects.com/wp-content/uploads/2024/06/Venue-Tetra-Bar-Manual.pdf",
+   "photo": "https://media.guitarcenter.com/is/image/MMGS7/L69844000001000-00-600x600.jpg",
+   "verification": "Photo 3 whole-face crop: four adjacent groups of three round lenses; first and second groups separately cropped and counted. Manual p5/p22: 12 x 4 W RGBA, four zones, 3/4/5/6/12/16/20/24/28 channels, 3.6 kg. QLC+ four heads/cells retained.",
+   "mount_basis": "Two rear end L-brackets from exact photo and original manual p5/p7. Base tiers represent one left bracket support only; rig.parts complete both open end brackets. Body proportions and bracket footprint remain photo estimates within QLC overall envelope.",
+   "import": {"from": "qlc", "old_id": "qlc:Venue/Tetra Bar"},
+   "sources": [
+    {
+     "sha": "b327810830e40874653d9a394e61f27403b7220c13cf37fe96cdd7eaf0551a86",
+     "kind": "manual",
+     "verdict": "verified"
+    },
+    {"sha": "168df2c0c63a959a30a2e0cf55b14e7890a311230fc77b53bcdf083e1fdc562a", "kind": "photo"},
+    {"sha": "1a920198a99afc3080184bc9724caa232b75afedc7ff766de9c3f4983cde12e9", "kind": "photo"},
+    {"sha": "2e08f96831bbb9799916595eee4faa4698a4c9a17663d19b872a1166fa29c49d", "kind": "photo"},
+    {"sha": "3027e47624e523be044cc9da236d7b774c40c39eb3a2d0a04e666ad584b6d401", "kind": "photo"},
+    {"sha": "392f269adf3c092de5ac6e211b28e5e3f5a94c94f637ff02e21714650ceb0009", "kind": "photo"},
+    {"sha": "3f223a83193b4b9ecf5004ff74b5c5633a8ad3010fed30dd379a64ea7ee20ba8", "kind": "photo"},
+    {"sha": "66ed540df7cbd27c05ba0d4025b2de8ccf857af64010446e3bff35eb26199b4d", "kind": "photo"},
+    {"sha": "791a4e04399624a5ce80d3c9245608c7831cc33ed3693b9c53aa296379796ce9", "kind": "photo"},
+    {"sha": "7b5bde916e2507e1eb404048eee65664e4350dab1a3f9a82484076e18aee4793", "kind": "photo"},
+    {"sha": "813187789b5675ae6e6fc0597d1f6baeda779932c5cf37122929ffc61e2b1856", "kind": "photo"},
+    {"sha": "8a381d6134e63b09862f5e5409540f62fc229469d4350ebcc60f14bf2f4f912b", "kind": "photo"},
+    {"sha": "b3f3c78b17c02631b8b0c6480f169a6106f914debfae2dd7ea2a0012f677dd57", "kind": "photo"},
+    {"sha": "d6dd47d83f34fe2136abe76e3a982feaaa6bba283971765f637ebd02e0fe04c1", "kind": "photo"},
+    {"sha": "e8464c0cbffad20bd9b5670f7e8059abf05e526226b39a9a34da8ff356114297", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [1.004, 0.061, 0.17]},
+ "optics": {
+  "type": "wash",
+  "beam_deg": {"v": 15, "src": "import", "conf": "medium"},
+  "field_deg": {"v": 30, "src": "import", "conf": "medium"},
+  "cct_k": {"v": 5600, "src": "control:onyx", "conf": "medium"}
+ },
+ "materials": {},
+ "rig": {
+  "mount": {
+   "type": "bracket",
+   "base": {
+    "shape": "box",
+    "w": 1.004,
+    "h": 0.0125,
+    "d": 0.17,
+    "handles": false,
+    "display": false,
+    "tiers": [
+     {"w": 0.0597609561752988, "d": 1, "h": 0.003, "x": -0.43824701195219123, "r": 0},
+     {
+      "w": 0.00597609561752988,
+      "d": 0.03529411764705882,
+      "h": 0.0095,
+      "x": -0.46314741035856577,
+      "z": 0.16176470588235292,
+      "r": 0
+     }
+    ]
+   },
+   "yoke": null
+  },
+  "joints": {
+   "pan": null,
+   "tilt": {"drive": "manual", "axis": [1, 0, 0], "range": [-180, 180], "rest": 90},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "bar",
+   "outline": "rect",
+   "w": 1.004,
+   "len": 0.052,
+   "d": 0.045,
+   "off": 0,
+   "tilt_y": 0.0385,
+   "pods": false,
+   "features": []
+  },
+  "parts": [
+   {
+    "name": "left_end_bracket_outer_support",
+    "attach": "base",
+    "shape": "box",
+    "size": [0.006, 0.022, 0.006],
+    "pos": [-0.465, 0.014, -0.0275],
+    "mat": "body"
+   },
+   {
+    "name": "left_end_bracket_inner_support",
+    "attach": "base",
+    "shape": "box",
+    "size": [0.006, 0.022, 0.006],
+    "pos": [-0.415, 0.014, -0.0275],
+    "mat": "body"
+   },
+   {
+    "name": "left_end_bracket_top",
+    "attach": "base",
+    "shape": "box",
+    "size": [0.056, 0.004, 0.006],
+    "pos": [-0.44, 0.025, -0.0275],
+    "mat": "body"
+   },
+   {
+    "name": "right_end_bracket_foot",
+    "attach": "base",
+    "shape": "box",
+    "size": [0.06, 0.003, 0.17],
+    "pos": [0.44, 0.0015, 0],
+    "mat": "body"
+   },
+   {
+    "name": "right_end_bracket_inner_support",
+    "attach": "base",
+    "shape": "box",
+    "size": [0.006, 0.022, 0.006],
+    "pos": [0.415, 0.014, -0.0275],
+    "mat": "body"
+   },
+   {
+    "name": "right_end_bracket_outer_support",
+    "attach": "base",
+    "shape": "box",
+    "size": [0.006, 0.022, 0.006],
+    "pos": [0.465, 0.014, -0.0275],
+    "mat": "body"
+   },
+   {
+    "name": "right_end_bracket_top",
+    "attach": "base",
+    "shape": "box",
+    "size": [0.056, 0.004, 0.006],
+    "pos": [0.44, 0.025, -0.0275],
+    "mat": "body"
+   }
+  ]
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [0.97, 0.04],
+    "layout": {"kind": "line", "n": 4, "dir": "x", "gap": 0},
+    "child": {
+     "cell": true,
+     "layout": {"kind": "line", "n": 3, "dir": "x", "gap": 0},
+     "child": {"outline": "circle", "fill": 0.65, "emitter": {"kind": "lens", "colour": "rgba"}}
+    }
+   }
+  }
+ ],
+ "cells": {"count": 4, "emitters": 12},
+ "sources": [{"cell_ranges": [[0, 3]]}],
+ "control": {
+  "native_cct_k": 5600,
+  "modes": [
+   {
+    "name": "3ch",
+    "options": {"channels": "3"},
+    "footprint": 3,
+    "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "qlc"],
+     "doc": "b327810830e4",
+     "page": 9,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "4ch",
+    "options": {"channels": "4"},
+    "footprint": 4,
+    "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/amber"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "qlc"],
+     "doc": "b327810830e4",
+     "page": 9,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "5ch",
+    "options": {"channels": "5"},
+    "footprint": 5,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/amber"},
+     {
+      "attr": "dimmer",
+      "ranges": [
+       {"dmx": [0, 127], "phys": [0.0, 100.0], "unit": "%"},
+       {"dmx": [128, 227], "state": "strobe", "phys": [1.0, 23.0], "unit": "Hz"},
+       {"dmx": [228, 255], "state": "open"}
+      ]
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx"],
+     "conflict": {"qlc": "slot 4: shutter (want dimmer)"},
+     "doc": "b327810830e4",
+     "page": 9,
+     "note": "manual verified",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   },
+   {
+    "name": "6ch",
+    "options": {"channels": "6"},
+    "footprint": 6,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/amber"},
+     {"attr": "dimmer"},
+     {
+      "attr": "shutter",
+      "ranges": [
+       {"dmx": [0, 0], "state": "open"},
+       {"dmx": [1, 255], "state": "strobe", "phys": [1.0, 23.0], "unit": "Hz"}
+      ]
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "qlc"],
+     "doc": "b327810830e4",
+     "page": 9,
+     "note": "manual verified",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   },
+   {
+    "name": "12ch",
+    "options": {"channels": "12"},
+    "footprint": 12,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "qlc"],
+     "doc": "b327810830e4",
+     "page": 9,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "16ch",
+    "options": {"channels": "16"},
+    "footprint": 16,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "colour/amber"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "qlc"],
+     "doc": "b327810830e4",
+     "page": 9,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "20ch",
+    "options": {"channels": "20"},
+    "footprint": 20,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [
+        {"attr": "colour/red"},
+        {"attr": "colour/green"},
+        {"attr": "colour/blue"},
+        {"attr": "colour/amber"},
+        {
+         "attr": "dimmer",
+         "ranges": [
+          {"dmx": [0, 127], "phys": [0.0, 100.0], "unit": "%"},
+          {"dmx": [128, 227], "state": "strobe", "phys": [1.0, 23.0], "unit": "Hz"},
+          {"dmx": [228, 255], "state": "open"}
+         ]
+        }
+       ]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx"],
+     "conflict": {"qlc": "slot 4: shutter@0 (want dimmer@0)"},
+     "doc": "b327810830e4",
+     "page": 9,
+     "note": "manual verified",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   },
+   {
+    "name": "24ch",
+    "options": {"channels": "24"},
+    "footprint": 24,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 3},
+       "channels": [
+        {"attr": "colour/red"},
+        {"attr": "colour/green"},
+        {"attr": "colour/blue"},
+        {"attr": "colour/amber"},
+        {"attr": "dimmer"},
+        {
+         "attr": "shutter",
+         "ranges": [
+          {"dmx": [0, 0], "state": "open"},
+          {"dmx": [1, 255], "state": "strobe", "phys": [1.0, 23.0], "unit": "Hz"}
+         ]
+        }
+       ]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "qlc"],
+     "doc": "b327810830e4",
+     "page": 9,
+     "note": "manual verified",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   },
+   {
+    "name": "28ch",
+    "options": {"channels": "28"},
+    "footprint": 28,
+    "channels": [
+     {"attr": "colour/red", "cell": 0},
+     {"attr": "colour/green", "cell": 0},
+     {"attr": "colour/blue", "cell": 0},
+     {"attr": "colour/amber", "cell": 0},
+     {"attr": "none", "n": 1},
+     {"attr": "none", "n": 2},
+     {"attr": "none", "n": 3},
+     {"attr": "colour/red", "cell": 1},
+     {"attr": "colour/green", "cell": 1},
+     {"attr": "colour/blue", "cell": 1},
+     {"attr": "colour/amber", "cell": 1},
+     {"attr": "none", "n": 4},
+     {"attr": "none", "n": 5},
+     {"attr": "none", "n": 6},
+     {"attr": "colour/red", "cell": 2},
+     {"attr": "colour/green", "cell": 2},
+     {"attr": "colour/blue", "cell": 2},
+     {"attr": "colour/amber", "cell": 2},
+     {"attr": "none", "n": 7},
+     {"attr": "none", "n": 8},
+     {"attr": "none", "n": 9},
+     {"attr": "colour/red", "cell": 3},
+     {"attr": "colour/green", "cell": 3},
+     {"attr": "colour/blue", "cell": 3},
+     {"attr": "colour/amber", "cell": 3},
+     {"attr": "none", "n": 10},
+     {"attr": "none", "n": 11},
+     {"attr": "none", "n": 12}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "qlc"],
+     "doc": "b327810830e4",
+     "page": 9,
+     "note": "manual verified"
+    }
+   }
+  ],
+  "prov": {
+   "cells": {
+    "agree": ["onyx"],
+    "note": "4 cells; canonical order = reading order of onyx positions (prototype: check against the geometry build order)"
+   },
+   "native_cct_k": {"agree": ["onyx"]},
+   "manual": {"doc": "b327810830e4", "page": 9}
+  }
+ }
+}

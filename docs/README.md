@@ -24,6 +24,7 @@ works and the decisions behind it.
 - [design/venue-authoring-api.md](design/venue-authoring-api.md) — the agent's Python API for building rigs
 - [specs/venue-builder-gauntlet.md](specs/venue-builder-gauntlet.md) — the acceptance contract for the venue graph's rig building
 - [design/editor-core.md](design/editor-core.md) — the stage builder's editor kernel: selection, input, tools
+- [design/fixture-library.md](design/fixture-library.md) — the Luma fixture library: `lib:` fixtures, how they load, draw and drive, and what is still lowered
 
 ## Rendering
 

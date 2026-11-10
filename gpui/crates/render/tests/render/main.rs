@@ -24,6 +24,7 @@ mod golden_descriptors;
 mod horizon_seam;
 mod laser;
 mod lens_footprint;
+mod library_fixture;
 mod outdoor_haze;
 mod post_look;
 mod procedural_haze;

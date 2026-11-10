@@ -1,0 +1,51 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "insight/treo-tc-8ft-white",
+  "name": "Insight Lighting Treo TC 8ft White",
+  "manufacturer": "Insight Lighting",
+  "model": "Treo TC 8ft White",
+  "category": "architectural",
+  "description": "Insight Lighting Treo TC 8ft White: assumed to be an 8 ft (2.44 m) static linear LED bar with white light only and no mount modelled. No product page or photo of this exact model was found. The linear shape is inferred from the '8ft' name and Insight's TC linear light-bar line, and the ~40 mm profile is a guess. The 8 channel DMX mode (8 x Intensity) gives 8 cells, modelled as 8 equal one-foot segments of a continuous diffused strip.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "arch_block",
+   "dims_src": "median:arch_block",
+   "ref_placeholder": true,
+   "import": {"from": "depence", "old_id": "e7d8376f-681b-4303-a1af-f2a6d8bf48c8"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [2.438, 0.04, 0.04]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "bar",
+   "outline": "rect",
+   "w": 2.438,
+   "len": 0.04,
+   "d": 0.04,
+   "off": 0.0,
+   "tilt_y": 0.02,
+   "features": []
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "zones": [
+    {
+     "region": [0.005, 0.15, 0.995, 0.85],
+     "emitter": {"kind": "strip", "rows": 1, "cols": 1, "shape": "square", "colour": "white"},
+     "cells": {"rows": 1, "cols": 8},
+     "cell_ids": [0, 1, 2, 3, 4, 5, 6, 7]
+    }
+   ]
+  }
+ ],
+ "cells": {"count": 8, "emitters": 8},
+ "sources": [{"cell_ranges": [[0, 7]]}]
+}

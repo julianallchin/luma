@@ -1,0 +1,188 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "jb-systems/lounge-laser-dmx",
+  "name": "JB Systems Lounge Laser DMX",
+  "manufacturer": "JB Systems",
+  "model": "Lounge Laser DMX",
+  "category": "laser",
+  "description": "Fixed rectangular laser/LED effect housing on a side-pivot U bracket, facing forward. Two unequal circular outputs in one horizontal row: blue water-wave LED lens on the left, shared red/green laser aperture to its right. One QLC+ merged DMX cell; 1- and 7-channel modes. No DMX pan or tilt channels.",
+  "provenance": {
+   "source": "QLC+ definition; exact-model photographs; JB Systems Lounge Laser DMX operation manual V1.0",
+   "archetype": "laser",
+   "dims_src": "qlc_physical",
+   "qlc_id": "qlc:JB_Systems/JB Systems Lounge Laser DMX",
+   "qlc_type": "Laser",
+   "photo": "https://cdn.beglec.com/media/catalog/product/l/o/lounge_laser_dmx_front_7hr.jpg",
+   "product_page": "https://jb-systems.eu/de/lounge-laser-dmx",
+   "manual": "https://www.recordcase.de/media/a2/6d/59/1700636115/jb-systems-lounge-laser-dmx-manual.pdf",
+   "verified_counts": {
+    "housings": {"count": 1, "method": "counted_in_crop"},
+    "front_apertures": {"count": 2, "method": "counted_in_crop"},
+    "optical_outputs_per_aperture": {"count": 1, "method": "counted_in_crop"},
+    "dmx_cells": {"count": 1, "method": "QLC+ authoritative merged largest mode"},
+    "laser_sources": {"count": 2, "method": "spec_sheet: 150mW red 650nm and 40mW green 532nm"},
+    "blue_LED_projectors": {"count": 1, "method": "counted_in_crop; role and 5W/455nm from manual"},
+    "internal_blue_LED_dies": {"count": null, "method": "unverified: not visible behind projection lens"}
+   },
+   "weight_kg": 1.6,
+   "dmx_modes": [1, 7],
+   "dimension_conflict": "QLC+ authoritative [233,86,160] mm retained exactly. Manual drawing gives housing height 86 mm, bracket-up overall height 165 mm and depth 200 mm including protrusions. The required overall-height interpretation conflicts with QLC+; modeled housing/bracket height is compressed to fit the mandated 86 mm. Therefore silhouette height is only partial, not manufacturer-exact.",
+   "motion": "Deflector template retained. No spatial DMX channels: internal pan/tilt are fixed; laser-dot and LED-effect rotations are pattern effects, not housing aim.",
+   "optics_note": "Two modeled optical exits, not two source dies: red/green share one aperture. Internal die placement is not visible.",
+   "control_channels": "Largest mode: 1 mode selector + 2 laser strobes + 2 effect rotations + 1 LED dimmer + 1 LED strobe = 7 channels for one QLC+ merged cell.",
+   "verification_note": "ptool compare assumes the unrotated deflector head normal and looks down on the housing. Additional actual-front comparison rendered along world +Z verifies two optical exits sharing one hue.",
+   "import": {"from": "qlc", "old_id": "qlc:JB_Systems/JB Systems Lounge Laser DMX"},
+   "sources": [
+    {"sha": "05ab4a6565cf66632b7d37e42f2fac76ff8fcab0e73364c0e7a3468b1314b807", "kind": "photo"},
+    {"sha": "1e556f8b8a52cb7a3e7f049745ca1e910241702571fe98100c959678cfa66c08", "kind": "photo"},
+    {"sha": "216439a264f77d02d3884cf6fde1b549969fde3b2a04b5b204218aeefad0ffcf", "kind": "photo"},
+    {"sha": "2de495f53c48722c6556cf7a11e51767ad31a3f11193b1ee6b5fa51828cff0a5", "kind": "photo"},
+    {"sha": "3aa3fe6f43218027e57e8fff603afdc82512568d13ceaac44c79234f413e5ae9", "kind": "photo"},
+    {"sha": "58843029961f1f7b5eceb2e6f51207381ce9ddd363385b7da9ad4daa36c7fe5f", "kind": "photo"},
+    {"sha": "5f603838e97901e6cd6bab3a51e59a970a593ed0a4495b28a239258073f99d1b", "kind": "photo"},
+    {"sha": "a27c69d2a63f731c89047b7ab054ad07987be66f072bbc39adf3755a0e3267c9", "kind": "photo"},
+    {"sha": "c12e933edb894ee231f44858b8189a058b99a0bea487f75641c44d04fba56039", "kind": "photo"},
+    {"sha": "c54777fdd9e4978237489dd7626401d37f7b075e279f6daa908e54138ffff3c2", "kind": "photo"},
+    {"sha": "e44c1f5015a208fa6cdc44941e3ee35b0d8681f094445a7dfd39a6e52427833f", "kind": "photo"},
+    {"sha": "e830b58ee3cde05122f4e686af01277e7eaf1b7405ff68f3bd0ffc780a104b84", "kind": "photo"},
+    {"sha": "ed5411e1cf574a2d34a4d9097817dafa51f2a15c7eb1814d63c4e4286467afd7", "kind": "photo"},
+    {"sha": "f505920ddf1447d1579e95330a1c2710e59857babc794ab68b52274bb12e8a93", "kind": "photo"},
+    {"sha": "f75bf8e949fba88cc6daee6923759d56fba730f7827c7f32b3f433679ccc914b", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "deflector",
+ "dims": {"size": [0.233, 0.086, 0.16]},
+ "optics": {"cct_k": {"v": 5600, "src": "control:onyx", "conf": "medium"}},
+ "materials": {},
+ "rig": {
+  "mount": {
+   "type": "bail",
+   "base": null,
+   "legs": 0,
+   "yoke": {
+    "w": 0.221,
+    "y1": 0.06,
+    "d": 0.05,
+    "gap": 0.004,
+    "arm": {"profile": "straight", "t": [0.004, 0.004], "d": [0.04, 0.032], "round_top": 0.6}
+   }
+  },
+  "joints": {
+   "pan": {"drive": "fixed", "axis": [0, 1, 0], "range": [0, 0], "per_head": false},
+   "tilt": {"drive": "fixed", "axis": [1, 0, 0], "range": [0, 0], "rest": 90, "per_head": false},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.209,
+   "len": 0.064,
+   "d": 0.16,
+   "off": 0,
+   "tilt_y": 0.054,
+   "pods": false,
+   "features": [],
+   "shell": {
+    "sections": [{"t": 0, "w": 1, "d": 1, "r": 0.06}, {"t": 1, "w": 1, "d": 1, "r": 0.06}],
+    "ring": {"rec": 0, "wall": 0.001, "bezel": false},
+    "pods": false
+   }
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [0.209, 0.064],
+    "tilt": [90, 0],
+    "cell": true,
+    "note": "One merged QLC+ cell for both optical exits. Face rotated onto the forward side of the fixed deflector housing.",
+    "layout": {"kind": "place", "boxes": [[0.075, 0.1, 0.325, 0.86], [0.47, 0.265, 0.61, 0.695]]},
+    "children": [
+     {
+      "outline": "circle",
+      "frame": {"bezel": 0.03, "depth": 0.003},
+      "layout": {"kind": "single"},
+      "child": {"fill": 0.65, "emitter": {"kind": "lens", "colour": "blue"}},
+      "note": "One blue LED projection lens.",
+      "z": 0.0456
+     },
+     {
+      "outline": "circle",
+      "frame": {"bezel": 0.03, "depth": 0.003},
+      "layout": {"kind": "single"},
+      "child": {"fill": 0.66, "emitter": {"kind": "lens", "colour": "rg"}},
+      "note": "One shared exit for the red and green laser sources.",
+      "z": 0.0456
+     }
+    ]
+   }
+  }
+ ],
+ "deflector": {"element": "galvo"},
+ "cells": {"count": 1, "emitters": 2},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "native_cct_k": 5600,
+  "modes": [
+   {
+    "name": "1ch",
+    "options": {"channels": "1"},
+    "footprint": 1,
+    "channels": [{"attr": "fx/macro", "ranges": "t1"}],
+    "prov": {
+     "status": "conflict",
+     "agree": ["onyx"],
+     "conflict": {"qlc": "slot 0: control (want fx/macro)"},
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   },
+   {
+    "name": "7ch",
+    "options": {"channels": "7"},
+    "footprint": 7,
+    "channels": [
+     {"attr": "fx/macro", "ranges": "t2", "n": 1},
+     {"attr": "colour/red", "ranges": [{"dmx": [0, 4]}, {"dmx": [5, 255]}]},
+     {"attr": "colour/green", "ranges": [{"dmx": [0, 4]}, {"dmx": [5, 255]}]},
+     {"attr": "other", "ranges": "t3", "n": 1},
+     {"attr": "other", "ranges": "t3", "n": 2},
+     {"attr": "control", "ranges": [{"dmx": [0, 4]}, {"dmx": [5, 255]}]},
+     {"attr": "fx/macro", "ranges": "t4", "n": 2}
+    ],
+    "prov": {
+     "status": "conflict",
+     "agree": ["onyx"],
+     "conflict": {"qlc": "slot 0: control (want fx/macro)"},
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   }
+  ],
+  "prov": {"native_cct_k": {"agree": ["onyx"]}},
+  "tables": {
+   "t1": [
+    {"dmx": [0, 7]},
+    {"dmx": [8, 100], "state": "macro"},
+    {"dmx": [101, 170]},
+    {"dmx": [171, 255], "state": "macro"}
+   ],
+   "t2": [
+    {"dmx": [0, 51]},
+    {"dmx": [52, 102], "state": "macro"},
+    {"dmx": [103, 154]},
+    {"dmx": [155, 206], "state": "macro"},
+    {"dmx": [207, 255]}
+   ],
+   "t3": [{"dmx": [0, 4]}, {"dmx": [5, 127]}, {"dmx": [128, 133]}, {"dmx": [134, 255]}],
+   "t4": [
+    {"dmx": [0, 4], "state": "macro"},
+    {"dmx": [5, 127]},
+    {"dmx": [128, 254]},
+    {"dmx": [255, 255], "state": "macro"}
+   ]
+  }
+ }
+}

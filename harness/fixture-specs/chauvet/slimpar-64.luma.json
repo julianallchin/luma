@@ -1,0 +1,112 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "chauvet/slimpar-64",
+  "name": "Chauvet SlimPAR 64",
+  "manufacturer": "Chauvet",
+  "model": "SlimPAR 64",
+  "category": "par_can",
+  "description": "This is a Chauvet SlimPAR 64, a single round PAR-can fixture. Its cylindrical housing is probably about 27 cm wide and 22 cm across, with a flat circular front face. A U-shaped yoke, roughly 27 by 19 by 3.5 units, sits on a pan hinge at the base and carries the can on a tilt hinge, with tilt-lock knobs on each side. Both axes turn a full 360 degrees, but only by hand, as neither is DMX-driven. The front is a staggered grid of about 13 by 13 RGB LED domes masked to a circle, probably 110 to 130 cells, set in a narrow black bezel. All LEDs share one RGB group, so the fixture has a single controllable intensity cell.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "par",
+   "dims_src": "mesh",
+   "import": {"from": "depence", "old_id": "aeb51c1b-e064-4b46-a8c7-ec9d2f1b727a"},
+   "sources": [
+    {
+     "sha": "41c870675f520808c77da34844a41e41d47203f727c9dc54c1ee1ad745679584",
+     "kind": "manual",
+     "verdict": "verified"
+    },
+    {
+     "sha": "7237b2c57d2e3bf1c2dcd57a1c95a1962c4324a46998143fec75d8e41bbabb13",
+     "kind": "manual",
+     "verdict": "verified"
+    },
+    {"sha": "29bde551e110aec49b5b457bd0817c7332cdb0c643820d64a0f9def2c84ab981", "kind": "photo"},
+    {"sha": "2e81b1a1388cb07fb132d1dd1048c96d6c629bfe8ac4fd09438d9532e6b7b5ee", "kind": "photo"},
+    {"sha": "4fe44062aa10c11400b007a40a1f0117f19fbb4846e272902e663a6a31db7993", "kind": "photo"},
+    {"sha": "6793c11b2f277fa506a8f8adaa8bbeae68c645dae56e742a74b84ec7fa875f11", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.282, 0.33, 0.07]},
+ "optics": {"cct_k": {"v": 5600, "src": "control:onyx", "conf": "medium"}},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "yoke2", "legs": 0, "yoke": {"w": 0.282, "y1": 0.33, "d": 0.035}},
+  "joints": {
+   "pan": {"drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [0, 1, 0]},
+   "tilt": {"rest": 90, "drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [1, 0, 0]},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "can",
+   "profile": "straight",
+   "outline": "round",
+   "w": 0.246,
+   "len": 0.064,
+   "d": 0.246,
+   "off": 0,
+   "tilt_y": 0.127,
+   "lens_d": 0.22,
+   "features": []
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "outline": "circle",
+    "layout": {"kind": "hex", "n": 180},
+    "child": {"emitter": {"kind": "led", "colours": ["red", "green", "blue"]}}
+   }
+  }
+ ],
+ "cells": {"count": 1, "emitters": 180},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "native_cct_k": 5600,
+  "modes": [
+   {
+    "name": "3ch",
+    "options": {"channels": "3"},
+    "footprint": 3,
+    "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}],
+    "prov": {
+     "status": "agreed",
+     "agree": ["manual", "onyx", "depence", "gdtf", "qlc"],
+     "doc": "7237b2c57d2e",
+     "page": 8,
+     "note": "manual not_sure"
+    }
+   },
+   {
+    "name": "7ch",
+    "options": {"channels": "7"},
+    "footprint": 7,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "colour/macro"},
+     {"attr": "shutter", "ranges": [{"dmx": [16, 255], "state": "strobe"}]},
+     {"attr": "shutter/fx"},
+     {"attr": "dimmer"}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "conflict": {"onyx": "slot 3: fx/macro (want colour/macro)", "qlc": "slot 5: control (want shutter/fx)"},
+     "doc": "41c870675f52",
+     "page": 3,
+     "note": "manual not_sure",
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {"native_cct_k": {"agree": ["onyx"]}, "manual": {"doc": "7237b2c57d2e", "page": 8}}
+ }
+}

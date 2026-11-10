@@ -427,7 +427,7 @@ pub struct Gpu {
     composite_pipelines: [wgpu::RenderPipeline; 4],
     /// The composite pass writing scene-linear light for the post chain.
     composite_linear_pipeline: wgpu::RenderPipeline,
-    /// Exposure, lens glow, tone curve and glare (`post.rs`).
+    /// Exposure, tone curve and glare (`post.rs`).
     post: crate::post::Pipelines,
     /// Indexed by [`overlay_pipeline_index`]: the four output formats
     /// crossed with two topologies and two depth behaviours.

@@ -274,6 +274,34 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
             ),
         ));
     }
+    if let Some(aim) = selected.aim {
+        // Pan turns about the mount normal, tilt leans off it; `[0, 0]` is
+        // straight out of the surface it is clamped to.
+        for ((key, title, limit), value) in [("pan", "Pan", 180.0), ("tilt", "Tilt", 90.0)]
+            .into_iter()
+            .zip(aim)
+        {
+            let app = app.clone();
+            let node = selected.node.clone();
+            card = card.child(float::inline_field_row(
+                title,
+                float::scrub(
+                    format!("stage-{key}"),
+                    value,
+                    -limit,
+                    limit,
+                    5.0,
+                    SELECTED_CARD_CONTROL_W,
+                    move |value, _, cx| {
+                        let node = node.clone();
+                        app.update(cx, |this, cx| {
+                            this.stage_set_param(&node, key, value.to_radians(), cx);
+                        });
+                    },
+                ),
+            ));
+        }
+    }
     if let Some(span) = selected.span {
         let app = app.clone();
         let node = selected.node.clone();

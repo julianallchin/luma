@@ -1,0 +1,51 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "orbisfly/windch-9m-plus-25cm-ball",
+  "name": "Orbisfly Windch - 9m + 25cm Ball",
+  "manufacturer": "Orbisfly",
+  "model": "Windch - 9m + 25cm Ball ",
+  "category": "effect_light",
+  "description": "An Orbisfly Windch, a 9 m winch-suspended effect light with a 25 cm diffuse ball. A rectangular box, probably about 32 by 32 by 12.5 cm, forms the top, with the lift motor on its upper face. Below it, a short 5 cm stem and a flat disc of about 6.5 cm carry the sphere. The whole assembly pans a full 360 degrees about a vertical hinge at the top of the box, and the ball slides vertically on the winch over roughly 9 m. The front is one spherical diffuser with a single omnidirectional light at its centre, so the whole ball is one controllable cell. The hoist cable is not modelled.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "dome",
+   "dims_src": "median:dome",
+   "import": {"from": "depence", "old_id": "f357cb06-499c-4c56-8b49-17d1a7936d1e"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.32, 0.73, 0.32]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "stand", "legs": 0, "base": {"shape": "box", "w": 0.32, "h": 0.29, "d": 0.12}},
+  "joints": {"spin": [], "slide": [{"drive": "dmx", "range": [0.0, 0.03], "per_head": false, "axis": [0, 0, 1]}]},
+  "body": {
+   "shape": "dome",
+   "outline": "round",
+   "w": 0.25,
+   "len": 0.25,
+   "d": 0.25,
+   "off": 0.0,
+   "tilt_y": 0.6,
+   "features": [],
+   "sphere": true
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "zones": [
+    {
+     "layout": {"kind": "single", "n": 1, "stagger": false},
+     "cell": "circle",
+     "optic": "diffuser",
+     "cells": 1
+    }
+   ]
+  }
+ ],
+ "cells": {"count": 1, "emitters": 1},
+ "sources": [{"cell_ranges": [[0, 0]]}]
+}

@@ -216,6 +216,9 @@ const CHOOSER_SIZE: luma_ui::dialog::morph::MorphSize = luma_ui::dialog::morph::
 pub(crate) struct ChooserRow {
     pub(crate) label: String,
     pub(crate) section: &'static str,
+    /// What the preview says about it beyond its name: for a library
+    /// fixture, how well it is checked and the modes it can be patched in.
+    pub(crate) detail: Option<String>,
     pub(crate) take: Holding,
 }
 
@@ -244,6 +247,7 @@ pub(crate) fn chooser_rows(library: &FixtureLibrary) -> Vec<ChooserRow> {
         .map(|row| ChooserRow {
             label: row.label.clone(),
             section: row.group.as_str(),
+            detail: None,
             take: Holding::Piece {
                 catalog_ref: row.catalog_ref.to_string(),
                 kind: NodeKind::Piece,
@@ -258,6 +262,7 @@ pub(crate) fn chooser_rows(library: &FixtureLibrary) -> Vec<ChooserRow> {
         ChooserRow {
             label: label.clone(),
             section: "Fixtures",
+            detail: entry.library.as_ref().map(library_detail),
             take: Holding::Fixture {
                 path: entry.path.clone(),
                 label,
@@ -268,6 +273,27 @@ pub(crate) fn chooser_rows(library: &FixtureLibrary) -> Vec<ChooserRow> {
         }
     }));
     rows
+}
+
+/// A library fixture's line in the preview: `Fixture library · geometry
+/// verified · 3ch, 4ch, 14ch`.
+fn library_detail(entry: &luma_lib::fixtures::library::Entry) -> String {
+    let modes: Vec<String> = entry
+        .modes
+        .iter()
+        .map(|mode| {
+            if mode.name == format!("{}ch", mode.footprint) {
+                mode.name.clone()
+            } else {
+                format!("{} ({}ch)", mode.name, mode.footprint)
+            }
+        })
+        .collect();
+    format!(
+        "Fixture library · geometry {} · {}",
+        entry.quality.geometry,
+        modes.join(", ")
+    )
 }
 
 /// The width a fixture is assumed to be until its definition lands. The same
@@ -300,7 +326,10 @@ fn chooser_preview(row: Option<&ChooserRow>) -> Div {
         ),
         // The dialog never offers one — a duplicate comes off a selection.
         Holding::Duplicate { .. } => "A copy of what is selected".to_string(),
-        Holding::Fixture { .. } => "Placed as a row along a face".to_string(),
+        Holding::Fixture { .. } => row
+            .detail
+            .clone()
+            .unwrap_or_else(|| "Placed as a row along a face".to_string()),
     };
     let thumb = match &row.take {
         Holding::Piece { catalog_ref, .. } => {

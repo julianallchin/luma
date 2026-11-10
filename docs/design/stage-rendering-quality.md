@@ -187,10 +187,6 @@ with. The live stage defaults to `Look::STAGE` and persists the look as the
 device setting `stage_look`. Any look that needs more than the composite pass
 runs `post.rs`:
 
-- **Lens glow.** A camera-facing disc at each lit cone's lens, depth-tested
-  with 0.1 m of slack for the housing. Full brightness within half the beam
-  half-angle of the axis, gone at 1.5 times it (three quarters of the beam
-  angle), 2% from the side.
 - **Metering.** 128-bin log histogram of a quarter of the pixels,
   centre-weighted. The mean of the 60th–98th percentile of lit pixels is
   exposed to 0.5; the result is clamped to [-2.5, +1] EV before the

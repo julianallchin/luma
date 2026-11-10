@@ -52,6 +52,7 @@ pub fn build_index(root_path: &Path) -> Result<FixtureIndex, std::io::Error> {
                         manufacturer,
                         model,
                         path: path_str,
+                        library: None,
                     });
                 }
             }

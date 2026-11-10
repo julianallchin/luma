@@ -41,6 +41,7 @@ pub mod framing;
 pub mod gesture;
 pub mod gizmo;
 pub mod golden;
+pub mod library;
 pub mod graph;
 pub mod luminaire;
 pub mod mesh;

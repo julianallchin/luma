@@ -1,0 +1,125 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "prolights/evo-160f",
+  "name": "Prolights EVO 160F",
+  "manufacturer": "Prolights",
+  "model": "EVO 160F",
+  "category": "fresnel_static",
+  "description": "The Prolights EVO 160F is a static fresnel fixture with a square housing, probably about 0.21 by 0.28 by 0.18 metres. A pan hinge at the root carries a yoke arm, roughly 20.5 by 25 by 4 units, which holds a tilt hinge at its top. The square head mounts under that hinge as one unit with a single lens and light. Pan and tilt are both manual-aim axes with a nominal 360-degree range, and tilt swings the head, lens and emitter together. The front optic is one circular Fresnel lens disc filling the head face, with a single LED source centred behind it. There is one controllable intensity cell. A rear control panel is probably fitted but is not modelled.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "fresnel",
+   "dims_src": "mesh",
+   "ref_placeholder": true,
+   "import": {"from": "depence", "old_id": "28dbd168-0ac3-43c1-a9ca-4d4080253136"},
+   "sources": [
+    {
+     "sha": "0e87756f5a75b08a9a781755f3ab5b998fa498b9801a9e660865b4615a98ed6c",
+     "kind": "manual",
+     "verdict": "verified"
+    },
+    {"sha": "38008273a26fae1cdf953380272306c20f6b609a8a3e2e811ab0a89d6e2b51ea", "kind": "photo"},
+    {"sha": "7f04ef8898fbbf60d2d25d36aeed662cfeea7dbfafd06f8bd346344eb2a2f6a3", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.286, 0.26, 0.417]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "bail", "legs": 0, "yoke": {"w": 0.27, "y1": 0.2, "d": 0.04}},
+  "joints": {
+   "pan": {"drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [0, 1, 0]},
+   "tilt": {"drive": "manual", "rest": 90, "range": [-180.0, 180.0], "per_head": false, "axis": [1, 0, 0]},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "can",
+   "profile": "boxcan",
+   "outline": "square",
+   "w": 0.25,
+   "len": 0.4,
+   "d": 0.25,
+   "off": 0.0,
+   "tilt_y": 0.13,
+   "lens_d": 0.17,
+   "features": ["connectors"]
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "outline": "circle",
+    "cell": true,
+    "layout": {"kind": "grid", "rows": 4, "cols": 4},
+    "child": {"emitter": {"kind": "led", "colour": "white"}}
+   }
+  }
+ ],
+ "cells": {"count": 1, "emitters": 12},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "modes": [
+   {
+    "name": "1ch",
+    "options": {"channels": "1"},
+    "footprint": 1,
+    "channels": [{"attr": "dimmer"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "0e87756f5a75",
+     "page": 7,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "2ch",
+    "options": {"channels": "2"},
+    "footprint": 2,
+    "channels": [{"attr": "dimmer"}, {"attr": "dimmer", "rank": 1}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "0e87756f5a75",
+     "page": 7,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "5ch",
+    "options": {"channels": "5"},
+    "footprint": 5,
+    "channels": [
+     {"attr": "dimmer"},
+     {"attr": "dimmer", "rank": 1},
+     {"attr": "shutter", "ranges": "t1"},
+     {"attr": "beam/focus"},
+     {"attr": "control"}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "depence"],
+     "doc": "0e87756f5a75",
+     "page": 7,
+     "note": "manual verified",
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {"manual": {"doc": "0e87756f5a75", "page": 7}},
+  "tables": {
+   "t1": [
+    {"dmx": [0, 9], "state": "open"},
+    {"dmx": [10, 99], "state": "strobe"},
+    {"dmx": [100, 109], "state": "open"},
+    {"dmx": [110, 179], "state": "strobe"},
+    {"dmx": [180, 189], "state": "open"},
+    {"dmx": [190, 255], "state": "random"}
+   ]
+  }
+ }
+}
