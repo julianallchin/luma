@@ -85,7 +85,7 @@ pub use library::{
     TrackSource,
 };
 #[cfg(feature = "agent")]
-pub use library::{SourceAdapterFixture, SourceSearchFixtureResponse};
+pub use library::{SignInFixture, SourceAdapterFixture, SourceSearchFixtureResponse};
 pub use luma_lib::models::tracks::{TrackImportPhase, TrackImportProgress, TrackImportResult};
 pub use visualizer::warm_renderer;
 
@@ -290,9 +290,7 @@ impl Luma {
     /// something, which is what keeps "how did I get here" answerable from
     /// the click history alone.
     pub fn new(library: Library, cx: &mut Context<Self>) -> Self {
-        let running = cx.new(|_| RunningTurns::default());
-        let running_changed = cx.observe(&running, |_, _, cx| cx.notify());
-        let running_events = cx.subscribe(&running, Self::running_event);
+        let (running, heard) = Self::running_turns(cx);
         let mut app = Self {
             library,
             track_import: None,
@@ -335,7 +333,7 @@ impl Luma {
             overlay: luma_ui::dialog::Popup::default(),
             account_action: settings::AccountAction::default(),
             running,
-            _running: [running_changed, running_events],
+            _running: heard,
             chat_history_generation: 0,
             focus: cx.focus_handle(),
             dialog_focus: cx.focus_handle(),
@@ -376,6 +374,16 @@ impl Luma {
         app.watch_replica(cx);
         app.watch_updates(cx);
         app
+    }
+
+    /// An empty registry of running turns, and the app's ear on it.
+    pub(crate) fn running_turns(
+        cx: &mut Context<Self>,
+    ) -> (Entity<RunningTurns>, [gpui::Subscription; 2]) {
+        let running = cx.new(|_| RunningTurns::default());
+        let changed = cx.observe(&running, |_, _, cx| cx.notify());
+        let events = cx.subscribe(&running, Self::running_event);
+        (running, [changed, events])
     }
 
     /// Raise the gate the moment the backend learns the stored session is

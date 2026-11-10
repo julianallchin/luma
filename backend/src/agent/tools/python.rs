@@ -107,7 +107,7 @@ impl Tool for PythonTool {
 
         let principal = ctx
             .services()
-            .admitted_principal()
+            .require_session()
             .await
             .map_err(|error| error.to_string())?;
         let live = ctx.services().live_handles();
@@ -125,7 +125,7 @@ impl Tool for PythonTool {
             args.code,
             ctx.scope.clone(),
             Some(ctx.turn_message_id.to_string()),
-            principal.clone(),
+            &principal,
             ctx.execution_id.map(str::to_string),
             ctx.draft_id.map(str::to_string),
             &waiting,
@@ -145,7 +145,7 @@ impl Tool for PythonTool {
                 path: figures::store(
                     &ctx.services().db.0,
                     &ctx.services().storage,
-                    principal.as_deref(),
+                    &principal,
                     &png,
                 )
                 .await?,

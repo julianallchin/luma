@@ -195,6 +195,11 @@ pub struct Fixture {
     /// admission refuses them; `$PRINCIPAL` in a statement is replaced by it,
     /// and `$LIBRARY` by the library directory, for a row that names a file.
     sql: Vec<String>,
+    /// The accounts the sign-in screen admits, as address → principal, in
+    /// place of Supabase — see [`session::accounts`]. The library opens
+    /// signed in as [`session::PRINCIPAL`] either way; a second account's
+    /// rows are `sql`, under its own principal.
+    accounts: HashMap<String, String>,
     /// Files written into the library directory after the rows, by path
     /// relative to it: a fixture definition with a second mode over the rig's
     /// (`fixtures/Luma/Mover.qxf`), say.
@@ -375,6 +380,7 @@ impl Default for Fixture {
             graph_score: None,
             outside_clips: Vec::new(),
             sql: Vec::new(),
+            accounts: HashMap::new(),
             files: HashMap::new(),
             assets: HashMap::new(),
             library: None,
@@ -457,6 +463,7 @@ impl Fixture {
         let source_search_responses = self.source_search_responses.clone();
         let source_import_fixture_delay = self.source_import_fixture_delay;
         let venues_delay = self.venues_delay;
+        let accounts = self.accounts.clone();
         let model = self.model.clone();
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
@@ -492,6 +499,9 @@ impl Fixture {
                 }
                 if let Some(delay) = source_import_fixture_delay {
                     library.set_source_import_fixture_delay(delay);
+                }
+                if !accounts.is_empty() {
+                    library.set_sign_in_fixture(session::accounts(accounts.clone()));
                 }
                 if let Some(steps) = &model {
                     library.set_agent_model(Arc::new(agent::model(steps, model_cadence)));

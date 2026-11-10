@@ -55,7 +55,7 @@ pub async fn create_folder(
         name: name.to_owned(),
         track_ids: Vec::new(),
     };
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     sqlx::query("INSERT INTO folders (id, uid, venue_id, name) VALUES (?, ?, ?, ?)")
         .bind(&folder.id)
         .bind(uid)
@@ -127,7 +127,7 @@ pub async fn set_folder_track(
     if !is_song {
         return Err("The track is not a song of this venue".into());
     }
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     sqlx::query(
         "INSERT INTO folder_tracks (folder_id, track_id, uid, venue_id) VALUES (?, ?, ?, ?)
          ON CONFLICT (folder_id, track_id) DO NOTHING",

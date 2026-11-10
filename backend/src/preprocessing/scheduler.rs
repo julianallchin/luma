@@ -824,13 +824,14 @@ mod tests {
 
     /// A library holding track `t1`, with audio and no analysis.
     async fn library(directory: &std::path::Path) -> crate::dispatch::AppServices {
-        let services = crate::test_support::signed_out(directory, directory.to_path_buf()).await;
+        let services = crate::test_support::signed_in(directory, directory.to_path_buf()).await;
         let audio = directory.join("song.wav");
         std::fs::write(&audio, b"RIFF").unwrap();
         sqlx::query(
-            "INSERT INTO tracks (id, track_hash, title, duration_seconds, file_path)
-             VALUES ('t1', 'hash', 'Song', 1.0, ?)",
+            "INSERT INTO tracks (id, uid, track_hash, title, duration_seconds, file_path)
+             VALUES ('t1', ?, 'hash', 'Song', 1.0, ?)",
         )
+        .bind(crate::test_support::TEST_OWNER)
         .bind(audio.to_string_lossy())
         .execute(&services.db.0)
         .await
@@ -1203,10 +1204,11 @@ mod tests {
             .collect();
         for id in &tracks[1..] {
             sqlx::query(
-                "INSERT INTO tracks (id, track_hash, title, duration_seconds, file_path)
-                 VALUES (?, ?, 'Song', 1.0, '/audio/song.wav')",
+                "INSERT INTO tracks (id, uid, track_hash, title, duration_seconds, file_path)
+                 VALUES (?, ?, ?, 'Song', 1.0, '/audio/song.wav')",
             )
             .bind(id)
+            .bind(crate::test_support::TEST_OWNER)
             .bind(id)
             .execute(pool)
             .await

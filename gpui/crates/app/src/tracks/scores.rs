@@ -68,15 +68,18 @@ pub(crate) struct ScoreRow {
 /// and is preserved, so "which score is newest" is a property of the list and
 /// not something this level re-decides per venue.
 ///
-/// `user` only names the author: every listed score is in a venue the reader
-/// can open, and whoever can open a venue can edit all of it.
-pub(crate) fn rows(summaries: &[ScoreSummary], user: Option<&str>) -> Rc<[ScoreRow]> {
+/// `user` is the signed-in account, and only names the author: every listed
+/// score is in a venue the reader can open, and whoever can open a venue can
+/// edit all of it.
+pub(crate) fn rows(summaries: &[ScoreSummary], user: &str) -> Rc<[ScoreRow]> {
     summaries
         .iter()
         .map(|score| {
+            // Every score has an owner; the column is optional only in the
+            // row's type.
             let author = match score.uid.as_deref() {
-                Some(uid) if Some(uid) != user => SharedString::from(short_uid(uid)),
-                _ => SharedString::from("You"),
+                Some(uid) if uid == user => SharedString::from("You"),
+                uid => SharedString::from(short_uid(uid.unwrap_or_default())),
             };
             ScoreRow {
                 id: score.id.clone().into(),
@@ -364,16 +367,15 @@ impl Luma {
     /// minted in another window is exactly the thing this exists to show.
     pub(crate) fn load_track_scores(&mut self, track_id: &str, cx: &mut Context<Self>) {
         let pending = self.library.scores_across_venues(track_id);
-        let user = self.library.user_id();
         let track_id = track_id.to_string();
         cx.spawn(async move |this, cx| {
             let listing = pending.await;
             this.update(cx, |this, cx| {
-                this.with_scores(&track_id, cx, |level| {
+                this.with_scores(&track_id, cx, |level, user| {
                     level.loaded = true;
                     match listing {
                         Ok(summaries) => {
-                            level.rows = rows(&summaries, user.as_deref());
+                            level.rows = rows(&summaries, user);
                             level.load_failed = false;
                         }
                         Err(error) => level.listing_failed(error),
@@ -414,12 +416,14 @@ impl Luma {
     }
 
     /// Run `edit` against `track_id`'s scores, while it is still the selected
-    /// song — the same admission rule the venue's own reads take.
+    /// song — the same admission rule the venue's own reads take. `edit` also
+    /// gets the account the venue was opened for, which a listing's rows are
+    /// written for.
     fn with_scores(
         &mut self,
         track_id: &str,
         cx: &mut Context<Self>,
-        edit: impl FnOnce(&mut Scores),
+        edit: impl FnOnce(&mut Scores, &str),
     ) {
         let Some(songs) = &mut self.songs else {
             return;
@@ -431,7 +435,7 @@ impl Luma {
         else {
             return;
         };
-        edit(level);
+        edit(level, &songs.user);
         cx.notify();
     }
 
@@ -502,16 +506,15 @@ impl Luma {
             };
             let listing = listing.await;
             this.update(cx, |this, cx| {
-                let user = this.library.user_id();
-                let open = match (&created, &listing) {
-                    (Ok(score), Ok(summaries)) => rows(summaries, user.as_deref())
+                let open = match (&created, &listing, &this.songs) {
+                    (Ok(score), Ok(summaries), Some(songs)) => rows(summaries, songs.user())
                         .iter()
                         .find(|row| row.id == score.id)
                         .map(open_row),
                     _ => None,
                 };
-                this.with_scores(&track_id, cx, |level| match (&created, listing) {
-                    (Ok(_), Ok(summaries)) => level.rows = rows(&summaries, user.as_deref()),
+                this.with_scores(&track_id, cx, |level, user| match (&created, listing) {
+                    (Ok(_), Ok(summaries)) => level.rows = rows(&summaries, user),
                     (Err(_), _) => {}
                     (_, Err(error)) => level.listing_failed(error),
                 });
@@ -634,9 +637,8 @@ impl Luma {
             };
             let listing = listing.await;
             this.update(cx, |this, cx| {
-                let user = this.library.user_id();
-                this.with_scores(&track_id, cx, |level| match (&deleted, listing) {
-                    (Ok(()), Ok(summaries)) => level.rows = rows(&summaries, user.as_deref()),
+                this.with_scores(&track_id, cx, |level, user| match (&deleted, listing) {
+                    (Ok(()), Ok(summaries)) => level.rows = rows(&summaries, user),
                     (Err(_), _) => {}
                     (_, Err(error)) => level.listing_failed(error),
                 });
@@ -737,9 +739,8 @@ impl Luma {
                         editor.score_renamed(&score_id, &name);
                     }
                 }
-                let user = this.library.user_id();
-                this.with_scores(&track_id, cx, |level| match (&renamed, listing) {
-                    (Ok(()), Ok(summaries)) => level.rows = rows(&summaries, user.as_deref()),
+                this.with_scores(&track_id, cx, |level, user| match (&renamed, listing) {
+                    (Ok(()), Ok(summaries)) => level.rows = rows(&summaries, user),
                     (Err(_), _) => {}
                     (_, Err(error)) => level.listing_failed(error),
                 });

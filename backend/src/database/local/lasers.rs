@@ -47,7 +47,7 @@ pub async fn save_zone(
         turn,
         tilt,
     };
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     let query = if id.is_some() {
         "UPDATE laser_zones SET name = ?, turn_min = ?, turn_max = ?, tilt_min = ?, tilt_max = ?
          WHERE id = ? AND venue_id = ?"

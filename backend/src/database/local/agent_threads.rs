@@ -1,8 +1,8 @@
 //! Durable principal-bound agent threads and immutable transcript nodes. Every
-//! operation receives its trusted principal separately from caller-controlled payloads:
-//! `Some(uid)` can access only that owner's rows, while `None` can access only
-//! legacy rows whose owner is SQL `NULL` — everything written since sign-in
-//! became required carries one.
+//! operation receives its trusted principal — the signed-in account — separately
+//! from caller-controlled payloads, and reaches only that owner's rows. A row
+//! whose owner is SQL `NULL` predates required sign-in and belongs to nobody:
+//! no principal can name it, so nothing here reads or writes one.
 
 use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::HashSet;
@@ -32,8 +32,8 @@ const LIVE_THREADS_FOR_PRINCIPAL: &str = "FROM agent_threads thread
            AND admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
            AND admission.remote_writes = 0
-           AND thread.uid IS admission.active_uid
-           AND admission.active_uid IS ?";
+           AND thread.uid = admission.active_uid
+           AND admission.active_uid = ?";
 
 fn thread_not_found(thread_id: &str) -> String {
     format!("Agent thread not found: {thread_id}")
@@ -48,7 +48,7 @@ fn thread_not_found(thread_id: &str) -> String {
 pub async fn create_thread(
     pool: &SqlitePool,
     input: CreateAgentThreadInput,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<AgentThread, String> {
     let id = Uuid::new_v4().to_string();
     create_thread_with_id(pool, &id, input, owner_user_id).await
@@ -60,7 +60,7 @@ pub(crate) async fn create_thread_with_id(
     pool: &SqlitePool,
     id: &str,
     input: CreateAgentThreadInput,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<AgentThread, String> {
     input.route()?;
     let settings = super::settings::get_all_settings(pool).await?;
@@ -78,10 +78,10 @@ pub(crate) async fn create_thread_with_id(
              CASE WHEN parent.id IS NOT NULL THEN parent.provider ELSE ? END,
              CASE WHEN parent.id IS NOT NULL THEN parent.effort ELSE ? END
          FROM auth_write_admission admission
-         LEFT JOIN agent_threads parent ON parent.id = ? AND parent.uid IS admission.active_uid
+         LEFT JOIN agent_threads parent ON parent.id = ? AND parent.uid = admission.active_uid
          WHERE admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
-           AND admission.remote_writes = 0 AND admission.active_uid IS ?",
+           AND admission.remote_writes = 0 AND admission.active_uid = ?",
     )
     .bind(id)
     .bind(&input.agent_kind)
@@ -120,7 +120,7 @@ pub async fn fork_thread_with_id(
     source_thread_id: &str,
     at_message_id: Option<&str>,
     title: Option<&str>,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<AgentThread, String> {
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
@@ -151,7 +151,7 @@ pub(crate) async fn fork_thread_for_connection(
     source_thread_id: &str,
     at_message_id: Option<&str>,
     title: Option<&str>,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<AgentThread, String> {
     if new_thread_id.is_empty() || new_thread_id == source_thread_id {
         return Err("Agent thread fork requires a distinct non-empty thread id".into());
@@ -194,7 +194,7 @@ pub(crate) async fn fork_thread_for_connection(
          FROM auth_write_admission AS admission
          WHERE admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
-           AND admission.remote_writes = 0 AND admission.active_uid IS ?",
+           AND admission.remote_writes = 0 AND admission.active_uid = ?",
     )
     .bind(new_thread_id)
     .bind(&source.agent_kind)
@@ -219,7 +219,7 @@ pub(crate) async fn fork_thread_for_connection(
             "UPDATE agent_thread_transcript_heads
              SET head_message_id = ?, message_count = ?,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-             WHERE thread_id = ? AND uid IS ?
+             WHERE thread_id = ? AND uid = ?
                AND head_message_id IS NULL AND message_count = 0",
         )
         .bind(message_id)
@@ -244,7 +244,7 @@ pub(crate) async fn fork_thread_for_connection(
 pub async fn get_thread_row(
     pool: &SqlitePool,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<AgentThread, String> {
     let mut connection = pool
         .acquire()
@@ -256,7 +256,7 @@ pub async fn get_thread_row(
 async fn get_thread_row_for_connection(
     connection: &mut SqliteConnection,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
     active_only: bool,
 ) -> Result<AgentThread, String> {
     let lifecycle = if active_only {
@@ -271,8 +271,8 @@ async fn get_thread_row_for_connection(
            AND admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
            AND admission.remote_writes = 0
-           AND thread.uid IS admission.active_uid
-           AND admission.active_uid IS ?",
+           AND thread.uid = admission.active_uid
+           AND admission.active_uid = ?",
         THREAD_COLUMNS
             .split(", ")
             .map(|column| format!("thread.{column}"))
@@ -291,17 +291,17 @@ async fn get_thread_row_for_connection(
 pub(crate) async fn assert_thread_active(
     connection: &mut SqliteConnection,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<(), String> {
     let found = sqlx::query_scalar::<_, i64>(
         "SELECT 1 FROM agent_threads thread
          CROSS JOIN auth_write_admission admission
-         WHERE thread.id = ? AND thread.uid IS ?
+         WHERE thread.id = ? AND thread.uid = ?
            AND thread.lifecycle_state = 'active'
            AND admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
            AND admission.remote_writes = 0
-           AND thread.uid IS admission.active_uid",
+           AND thread.uid = admission.active_uid",
     )
     .bind(thread_id)
     .bind(owner_user_id)
@@ -316,7 +316,7 @@ pub(crate) async fn assert_thread_active(
 pub async fn get_thread(
     pool: &SqlitePool,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<AgentThreadDetail, String> {
     let mut transaction = pool
         .begin()
@@ -337,7 +337,7 @@ pub async fn get_thread(
 pub async fn list_messages(
     pool: &SqlitePool,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Vec<AgentThreadMessage>, String> {
     let mut transaction = pool
         .begin()
@@ -355,7 +355,7 @@ pub async fn list_messages(
 async fn list_messages_for_connection(
     connection: &mut SqliteConnection,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Vec<AgentThreadMessage>, String> {
     let messages = sqlx::query_as::<_, AgentThreadMessage>(
         "WITH RECURSIVE lineage(
@@ -366,7 +366,7 @@ async fn list_messages_for_connection(
              FROM agent_thread_transcript_heads AS head
              JOIN agent_thread_messages AS message
                ON message.id = head.head_message_id
-             WHERE head.thread_id = ? AND head.uid IS ?
+             WHERE head.thread_id = ? AND head.uid = ?
              UNION ALL
              SELECT parent.id, parent.parent_message_id, parent.depth,
                     parent.role, parent.parts_json, parent.created_at
@@ -385,7 +385,7 @@ async fn list_messages_for_connection(
     .map_err(|e| format!("Failed to load agent thread messages: {e}"))?;
     let expected = sqlx::query_scalar::<_, i64>(
         "SELECT message_count FROM agent_thread_transcript_heads
-         WHERE thread_id = ? AND uid IS ?",
+         WHERE thread_id = ? AND uid = ?",
     )
     .bind(thread_id)
     .bind(owner_user_id)
@@ -407,7 +407,7 @@ async fn list_messages_for_connection(
 pub async fn transcript_head(
     pool: &SqlitePool,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<AgentThreadTranscriptHead, String> {
     let mut connection = pool
         .acquire()
@@ -426,12 +426,12 @@ pub async fn transcript_head(
 async fn transcript_head_for_connection(
     connection: &mut SqliteConnection,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<(Option<String>, i64), String> {
     sqlx::query_as(
         "SELECT head_message_id, message_count
          FROM agent_thread_transcript_heads
-         WHERE thread_id = ? AND uid IS ?",
+         WHERE thread_id = ? AND uid = ?",
     )
     .bind(thread_id)
     .bind(owner_user_id)
@@ -455,7 +455,7 @@ pub async fn list_threads(
     agent_kind: Option<&str>,
     subject_kind: Option<&str>,
     subject_id: Option<&str>,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Vec<AgentThread>, String> {
     let columns = THREAD_COLUMNS
         .split(", ")
@@ -491,7 +491,7 @@ pub async fn list_threads(
 /// id. A subagent's lines are not separate hits; see [`TOP_LEVEL`].
 pub async fn list_history_messages(
     pool: &SqlitePool,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Vec<AgentThreadMessage>, String> {
     let sql = format!(
         "WITH RECURSIVE lineage(
@@ -502,7 +502,7 @@ pub async fn list_history_messages(
              FROM agent_thread_transcript_heads AS head
              JOIN agent_thread_messages AS message
                ON message.id = head.head_message_id
-             WHERE head.uid IS ?
+             WHERE head.uid = ?
                AND head.thread_id IN (
                    SELECT thread.id {LIVE_THREADS_FOR_PRINCIPAL} {TOP_LEVEL}
                )
@@ -532,7 +532,7 @@ pub async fn append_messages(
     pool: &SqlitePool,
     thread_id: &str,
     input: AppendAgentThreadMessagesInput,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Vec<AgentThreadMessage>, String> {
     match append_messages_at_head(pool, thread_id, input, owner_user_id).await? {
         AgentThreadAppendOutcome::Appended { messages, .. } => Ok(messages),
@@ -554,7 +554,7 @@ pub async fn append_messages_at_head(
     pool: &SqlitePool,
     thread_id: &str,
     input: AppendAgentThreadMessagesInput,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<AgentThreadAppendOutcome, String> {
     validate_append_operation_id(&input.operation_id)?;
     if input.messages.is_empty() {
@@ -678,7 +678,7 @@ pub async fn append_messages_at_head(
         "UPDATE agent_thread_transcript_heads
          SET head_message_id = ?, message_count = ?,
              updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-         WHERE thread_id = ? AND uid IS ?
+         WHERE thread_id = ? AND uid = ?
            AND head_message_id IS ? AND message_count = ?",
     )
     .bind(&result_head)
@@ -712,7 +712,7 @@ async fn update_message_parts(
     thread_id: &str,
     message_id: &str,
     parts: &serde_json::Value,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<(), String> {
     let parts_json = serde_json::to_string(parts)
         .map_err(|e| format!("Failed to serialize message parts: {e}"))?;
@@ -723,7 +723,7 @@ async fn update_message_parts(
     ensure_thread_access(&mut tx, thread_id, owner_user_id).await?;
     let updated = sqlx::query(
         "UPDATE agent_thread_messages SET parts_json = ?
-         WHERE id = ? AND created_in_thread_id = ? AND uid IS ?",
+         WHERE id = ? AND created_in_thread_id = ? AND uid = ?",
     )
     .bind(&parts_json)
     .bind(message_id)
@@ -759,7 +759,7 @@ pub async fn save_open_message(
     pool: &SqlitePool,
     thread_id: &str,
     open: &OpenMessage,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<(), String> {
     let parts_json = serde_json::to_string(&open.message.parts)
         .map_err(|e| format!("Failed to serialize message parts: {e}"))?;
@@ -788,11 +788,11 @@ pub async fn save_open_message(
 pub async fn open_message(
     pool: &SqlitePool,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Option<OpenMessage>, String> {
     let row: Option<(String, Option<String>, String, String)> = sqlx::query_as(
         "SELECT message_id, parent_message_id, role, parts_json
-         FROM agent_open_messages WHERE thread_id = ? AND uid IS ?",
+         FROM agent_open_messages WHERE thread_id = ? AND uid = ?",
     )
     .bind(thread_id)
     .bind(owner_user_id)
@@ -821,7 +821,7 @@ pub async fn close_message(
     pool: &SqlitePool,
     thread_id: &str,
     open: OpenMessage,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<bool, String> {
     let id = open
         .message
@@ -867,9 +867,9 @@ pub async fn close_message(
 /// The threads `owner_user_id`'s turns left a row in progress on.
 pub async fn open_message_threads(
     pool: &SqlitePool,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Vec<String>, String> {
-    sqlx::query_scalar("SELECT thread_id FROM agent_open_messages WHERE uid IS ?")
+    sqlx::query_scalar("SELECT thread_id FROM agent_open_messages WHERE uid = ?")
         .bind(owner_user_id)
         .fetch_all(pool)
         .await
@@ -883,7 +883,7 @@ pub async fn open_message_threads(
 pub async fn recover_open_message(
     pool: &SqlitePool,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<(), String> {
     let Some(open) = open_message(pool, thread_id, owner_user_id).await? else {
         return Ok(());
@@ -994,7 +994,7 @@ async fn append_test_messages(
     pool: &SqlitePool,
     thread_id: &str,
     messages: Vec<NewAgentThreadMessage>,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Vec<AgentThreadMessage>, String> {
     let expected_head_message_id = transcript_head(pool, thread_id, owner_user_id)
         .await?
@@ -1037,14 +1037,14 @@ fn validate_append_operation_id(operation_id: &str) -> Result<(), String> {
 pub async fn delete_thread(
     pool: &SqlitePool,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<Vec<String>, String> {
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|error| format!("Failed to begin agent thread deletion: {error}"))?;
     let children: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM agent_threads WHERE parent_thread_id = ? AND uid IS ?")
+        sqlx::query_scalar("SELECT id FROM agent_threads WHERE parent_thread_id = ? AND uid = ?")
             .bind(thread_id)
             .bind(owner_user_id)
             .fetch_all(&mut *transaction)
@@ -1095,8 +1095,8 @@ pub async fn delete_thread(
     }
     let deleted = sqlx::query(
         "DELETE FROM agent_threads
-         WHERE (id = ? OR parent_thread_id = ?) AND uid IS ?
-           AND uid IS (
+         WHERE (id = ? OR parent_thread_id = ?) AND uid = ?
+           AND uid = (
                SELECT active_uid FROM auth_write_admission
                WHERE singleton = 1 AND armed = 1 AND accepting = 1
                  AND maintenance = 0 AND remote_writes = 0
@@ -1196,7 +1196,7 @@ pub async fn set_thread_selection(
     pool: &SqlitePool,
     thread_id: &str,
     selection: &crate::agent::engine::catalog::Selection,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<AgentThread, String> {
     selection.validate().map_err(|e| e.to_string())?;
     let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
@@ -1240,12 +1240,12 @@ pub async fn set_thread_actor(
     pool: &SqlitePool,
     thread_id: &str,
     actor: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<(), String> {
     let result = sqlx::query(
         "UPDATE agent_threads SET actor = ?
-         WHERE id = ? AND uid IS ? AND lifecycle_state = 'active'
-           AND uid IS (
+         WHERE id = ? AND uid = ? AND lifecycle_state = 'active'
+           AND uid = (
                SELECT active_uid FROM auth_write_admission
                WHERE singleton = 1 AND armed = 1 AND accepting = 1
                  AND maintenance = 0 AND remote_writes = 0
@@ -1266,7 +1266,7 @@ pub async fn set_thread_actor(
 async fn ensure_thread_access(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<(), String> {
     assert_thread_active(&mut *tx, thread_id, owner_user_id).await
 }
@@ -1277,12 +1277,12 @@ async fn ensure_thread_access(
 async fn touch(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     thread_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<(), String> {
     let result = sqlx::query(
         "UPDATE agent_threads SET updated_at = updated_at
-         WHERE id = ? AND uid IS ? AND lifecycle_state = 'active'
-           AND uid IS (
+         WHERE id = ? AND uid = ? AND lifecycle_state = 'active'
+           AND uid = (
                SELECT active_uid FROM auth_write_admission
                WHERE singleton = 1 AND armed = 1 AND accepting = 1
                  AND maintenance = 0 AND remote_writes = 0
@@ -1303,7 +1303,7 @@ async fn touch(
 #[cfg(test)]
 /// Write `updated_at` the way a sync pull does — with the stamping trigger
 /// off — so a test can say "this row is the newest" without a clock. Needs a
-/// signed-in admission: the table refuses remote writes for a guest.
+/// signed-in admission: the table refuses remote writes when nobody is signed in.
 pub(crate) async fn stamp_updated_at(pool: &SqlitePool, thread_id: &str, at: &str) {
     let mut tx = pool.begin().await.unwrap();
     let admission = "UPDATE auth_write_admission SET remote_writes = ? WHERE singleton = 1";
@@ -1369,9 +1369,7 @@ mod tests {
             .await
             .expect("pool");
 
-        crate::database::local::auth::arm_write_admission(&pool, None)
-            .await
-            .expect("arm guest admission");
+        admit(&pool, OWNER).await;
 
         (dir, pool)
     }
@@ -1395,23 +1393,33 @@ mod tests {
         }
     }
 
-    async fn admit(pool: &SqlitePool, principal: Option<&str>) {
-        crate::database::local::auth::arm_write_admission(pool, principal)
+    /// The principal [`test_pool`] is signed in as.
+    const OWNER: &str = "alice";
+
+    async fn admit(pool: &SqlitePool, principal: &str) {
+        crate::database::local::auth::arm_write_admission(pool, Some(principal))
             .await
             .expect("arm test admission");
+    }
+
+    /// Nobody signed in: the interval between a sign-out and the next sign-in.
+    async fn sign_out(pool: &SqlitePool) {
+        crate::database::local::auth::arm_write_admission(pool, None)
+            .await
+            .expect("arm signed-out admission");
     }
 
     #[tokio::test]
     async fn engine_selection_is_owned_and_inherited_without_changing_other_threads() {
         let (_dir, pool) = test_pool().await;
-        admit(&pool, Some("alice")).await;
+        admit(&pool, "alice").await;
         crate::database::local::settings::update_setting(&pool, "agent_engine", "claude")
             .await
             .unwrap();
-        let first = create_thread(&pool, track_thread("track"), Some("alice"))
+        let first = create_thread(&pool, track_thread("track"), "alice")
             .await
             .unwrap();
-        let second = create_thread(&pool, track_thread("track"), Some("alice"))
+        let second = create_thread(&pool, track_thread("track"), "alice")
             .await
             .unwrap();
         assert_eq!(first.engine, "claude");
@@ -1426,11 +1434,11 @@ mod tests {
             model: Some("unknown".into()),
             effort: None,
         };
-        set_thread_selection(&pool, &first.id, &selected, Some("alice"))
+        set_thread_selection(&pool, &first.id, &selected, "alice")
             .await
             .unwrap();
         assert_eq!(
-            get_thread_row(&pool, &second.id, Some("alice"))
+            get_thread_row(&pool, &second.id, "alice")
                 .await
                 .unwrap()
                 .engine,
@@ -1442,7 +1450,7 @@ mod tests {
             &first.id,
             None,
             None,
-            Some("alice"),
+            "alice",
         )
         .await
         .unwrap();
@@ -1452,24 +1460,20 @@ mod tests {
         let mut child = track_thread("track");
         child.parent_thread_id = Some(first.id.clone());
         child.parent_call_id = Some("call".into());
-        let child = create_thread(&pool, child, Some("alice")).await.unwrap();
+        let child = create_thread(&pool, child, "alice").await.unwrap();
         assert_eq!(child.engine, "codex");
         assert_eq!(child.model, selected.model);
         assert_eq!(child.effort, selected.effort);
-        assert!(
-            set_thread_selection(&pool, &first.id, &invalid, Some("alice"))
-                .await
-                .is_err()
-        );
-        admit(&pool, Some("bob")).await;
-        assert!(
-            set_thread_selection(&pool, &first.id, &selected, Some("bob"))
-                .await
-                .is_err()
-        );
-        admit(&pool, Some("alice")).await;
+        assert!(set_thread_selection(&pool, &first.id, &invalid, "alice")
+            .await
+            .is_err());
+        admit(&pool, "bob").await;
+        assert!(set_thread_selection(&pool, &first.id, &selected, "bob")
+            .await
+            .is_err());
+        admit(&pool, "alice").await;
         assert_eq!(
-            get_thread_row(&pool, &first.id, Some("alice"))
+            get_thread_row(&pool, &first.id, "alice")
                 .await
                 .unwrap()
                 .engine,
@@ -1481,7 +1485,7 @@ mod tests {
     async fn model_preference_survives_restart_and_seeds_other_views() {
         use crate::agent::engine::catalog::{Selection, Service};
         let (dir, pool) = test_pool().await;
-        let first = create_thread(&pool, track_thread("first"), None)
+        let first = create_thread(&pool, track_thread("first"), OWNER)
             .await
             .unwrap();
         let selected = Selection {
@@ -1489,7 +1493,7 @@ mod tests {
             model: Some("test-model".into()),
             effort: Some("high".into()),
         };
-        set_thread_selection(&pool, &first.id, &selected, None)
+        set_thread_selection(&pool, &first.id, &selected, OWNER)
             .await
             .unwrap();
         let other = Selection {
@@ -1497,7 +1501,7 @@ mod tests {
             model: None,
             effort: None,
         };
-        assert!(set_thread_selection(&pool, "missing", &other, None)
+        assert!(set_thread_selection(&pool, "missing", &other, OWNER)
             .await
             .is_err());
         pool.close().await;
@@ -1513,7 +1517,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(Selection::configured(&settings).unwrap(), selected);
-        let next = create_thread(&pool, track_thread("another-view"), None)
+        let next = create_thread(&pool, track_thread("another-view"), OWNER)
             .await
             .unwrap();
         assert_eq!(Selection::from_thread(&next).unwrap(), selected);
@@ -1526,7 +1530,7 @@ mod tests {
         use crate::agent::engine::catalog::{Selection, Service};
         use crate::settings::key;
         let (_dir, pool) = test_pool().await;
-        let first = create_thread(&pool, track_thread("first"), None)
+        let first = create_thread(&pool, track_thread("first"), OWNER)
             .await
             .unwrap();
         let picked = Selection {
@@ -1534,18 +1538,21 @@ mod tests {
             model: Some("test-model".into()),
             effort: None,
         };
-        set_thread_selection(&pool, &first.id, &picked, None)
+        set_thread_selection(&pool, &first.id, &picked, OWNER)
             .await
             .unwrap();
         crate::settings::write(&pool, key::AGENT_ENGINE, "claude")
             .await
             .unwrap();
-        let next = create_thread(&pool, track_thread("next"), None)
+        let next = create_thread(&pool, track_thread("next"), OWNER)
             .await
             .unwrap();
         assert_eq!(next.engine, "claude");
         assert_eq!(
-            get_thread_row(&pool, &first.id, None).await.unwrap().engine,
+            get_thread_row(&pool, &first.id, OWNER)
+                .await
+                .unwrap()
+                .engine,
             "codex",
             "a default is for new threads, not the ones already running"
         );
@@ -1554,32 +1561,32 @@ mod tests {
     #[tokio::test]
     async fn principal_isolation_covers_reads_and_mutations() {
         let (_dir, pool) = test_pool().await;
-        admit(&pool, Some("alice")).await;
-        let alice = create_thread(&pool, track_thread("track-1"), Some("alice"))
+        admit(&pool, "alice").await;
+        let alice = create_thread(&pool, track_thread("track-1"), "alice")
             .await
             .unwrap();
         append_test_messages(
             &pool,
             &alice.id,
             vec![msg("user", json!([{"type": "text", "text": "private"}]))],
-            Some("alice"),
+            "alice",
         )
         .await
         .unwrap();
 
-        admit(&pool, Some("bob")).await;
-        let bob = create_thread(&pool, track_thread("track-1"), Some("bob"))
+        admit(&pool, "bob").await;
+        let bob = create_thread(&pool, track_thread("track-1"), "bob")
             .await
             .unwrap();
 
-        assert_eq!(alice.owner_user_id.as_deref(), Some("alice"));
-        assert_eq!(bob.owner_user_id.as_deref(), Some("bob"));
-        assert!(list_threads(&pool, None, None, None, Some("alice"))
+        assert_eq!(alice.owner_user_id, "alice");
+        assert_eq!(bob.owner_user_id, "bob");
+        assert!(list_threads(&pool, None, None, None, "alice")
             .await
             .unwrap()
             .is_empty());
         assert_eq!(
-            list_threads(&pool, None, None, None, Some("bob"))
+            list_threads(&pool, None, None, None, "bob")
                 .await
                 .unwrap()
                 .iter()
@@ -1587,12 +1594,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![bob.id.as_str()]
         );
-        assert!(list_threads(&pool, None, None, None, None)
-            .await
-            .unwrap()
-            .is_empty());
 
-        for wrong_principal in [Some("alice"), Some("bob"), None] {
+        for wrong_principal in ["alice", "bob"] {
             assert!(get_thread_row(&pool, &alice.id, wrong_principal)
                 .await
                 .is_err());
@@ -1610,23 +1613,16 @@ mod tests {
             .is_err());
         }
 
-        assert!(delete_thread(&pool, &alice.id, Some("alice"))
-            .await
-            .is_err());
-        assert!(fork_thread_with_id(
-            &pool,
-            "cross-principal-fork",
-            &alice.id,
-            None,
-            None,
-            Some("bob"),
-        )
-        .await
-        .is_err());
+        assert!(delete_thread(&pool, &alice.id, "alice").await.is_err());
+        assert!(
+            fork_thread_with_id(&pool, "cross-principal-fork", &alice.id, None, None, "bob",)
+                .await
+                .is_err()
+        );
 
-        admit(&pool, Some("alice")).await;
+        admit(&pool, "alice").await;
         assert_eq!(
-            list_threads(&pool, None, None, None, Some("alice"))
+            list_threads(&pool, None, None, None, "alice")
                 .await
                 .unwrap()
                 .iter()
@@ -1634,7 +1630,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![alice.id.as_str()]
         );
-        let unchanged = get_thread(&pool, &alice.id, Some("alice")).await.unwrap();
+        let unchanged = get_thread(&pool, &alice.id, "alice").await.unwrap();
         assert_eq!(unchanged.thread.title, None);
         assert_eq!(unchanged.messages.len(), 1);
         let fork = fork_thread_with_id(
@@ -1643,20 +1639,43 @@ mod tests {
             &alice.id,
             None,
             Some("Fork"),
-            Some("alice"),
+            "alice",
         )
         .await
         .unwrap();
-        assert_eq!(fork.owner_user_id.as_deref(), Some("alice"));
-        assert!(list_messages(&pool, &fork.id, Some("alice"))
+        assert_eq!(fork.owner_user_id, "alice");
+        assert!(list_messages(&pool, &fork.id, "alice")
             .await
             .unwrap()
             .is_empty());
+
+        // Signed out, naming an account admits nobody: its threads are not
+        // read and none is written.
+        sign_out(&pool).await;
+        for named in ["alice", "bob"] {
+            assert!(list_threads(&pool, None, None, None, named)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(list_history_messages(&pool, named)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(get_thread(&pool, &alice.id, named).await.is_err());
+            assert!(create_thread(&pool, track_thread("track-1"), named)
+                .await
+                .is_err());
+            assert!(delete_thread(&pool, &alice.id, named).await.is_err());
+        }
     }
 
+    /// A thread written before sign-in was required has no owner. No
+    /// principal can name it, so it is in nobody's library, signed in or out,
+    /// and nothing here removes it.
     #[tokio::test]
-    async fn legacy_null_threads_belong_only_to_the_signed_out_principal() {
+    async fn a_thread_nobody_owns_is_in_nobodys_library() {
         let (_dir, pool) = test_pool().await;
+        sign_out(&pool).await;
         sqlx::query(
             "INSERT INTO agent_threads
                 (id, agent_kind, subject_kind, subject_id, venue_id, score_id)
@@ -1667,43 +1686,49 @@ mod tests {
         .await
         .unwrap();
 
-        let legacy = get_thread_row(&pool, "legacy-thread", None).await.unwrap();
-        assert_eq!(legacy.owner_user_id, None);
-        assert!(get_thread_row(&pool, "legacy-thread", Some("alice"))
-            .await
-            .is_err());
-        assert_eq!(
-            list_threads(&pool, None, None, None, None)
+        for signed_in in [false, true] {
+            if signed_in {
+                admit(&pool, "alice").await;
+            }
+            assert!(get_thread_row(&pool, "legacy-thread", "alice")
+                .await
+                .is_err());
+            assert!(list_threads(&pool, None, None, None, "alice")
                 .await
                 .unwrap()
-                .iter()
-                .map(|thread| thread.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["legacy-thread"]
-        );
-        assert!(list_threads(&pool, None, None, None, Some("alice"))
+                .is_empty());
+            assert!(delete_thread(&pool, "legacy-thread", "alice")
+                .await
+                .is_err());
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM agent_threads WHERE id = 'legacy-thread'"
+            )
+            .fetch_one(&pool)
             .await
-            .unwrap()
-            .is_empty());
+            .unwrap(),
+            1
+        );
     }
 
     /// History includes every transcript owned by the principal across subjects.
     #[tokio::test]
     async fn history_walks_transcripts_across_subjects() {
         let (_dir, pool) = test_pool().await;
-        let first = create_thread(&pool, track_thread("track-a"), None)
+        let first = create_thread(&pool, track_thread("track-a"), OWNER)
             .await
             .unwrap();
         // A second conversation about the SAME track is its own transcript.
-        let second = create_thread(&pool, track_thread("track-a"), None)
+        let second = create_thread(&pool, track_thread("track-a"), OWNER)
             .await
             .unwrap();
         // …an empty one contributes no rows and breaks nothing.
-        create_thread(&pool, track_thread("track-a"), None)
+        create_thread(&pool, track_thread("track-a"), OWNER)
             .await
             .unwrap();
         // A conversation about another track belongs to the same history.
-        let other = create_thread(&pool, track_thread("track-b"), None)
+        let other = create_thread(&pool, track_thread("track-b"), OWNER)
             .await
             .unwrap();
         // Only one of the same-scope threads gets an assistant turn: a
@@ -1718,12 +1743,12 @@ mod tests {
                 .iter()
                 .map(|role| msg(role, json!([{"type": "text", "text": "said"}])))
                 .collect();
-            append_test_messages(&pool, &thread.id, messages, None)
+            append_test_messages(&pool, &thread.id, messages, OWNER)
                 .await
                 .unwrap();
         }
 
-        let rows = list_history_messages(&pool, None).await.unwrap();
+        let rows = list_history_messages(&pool, OWNER).await.unwrap();
         let mut by_thread: Vec<(&str, i64, &str)> = rows
             .iter()
             .map(|row| (row.thread_id.as_str(), row.seq, row.role.as_str()))
@@ -1746,28 +1771,25 @@ mod tests {
     #[tokio::test]
     async fn history_only_serves_its_own_principal() {
         let (_dir, pool) = test_pool().await;
-        admit(&pool, Some("alice")).await;
-        let thread = create_thread(&pool, track_thread("track-a"), Some("alice"))
+        admit(&pool, "alice").await;
+        let thread = create_thread(&pool, track_thread("track-a"), "alice")
             .await
             .unwrap();
         append_test_messages(
             &pool,
             &thread.id,
             vec![msg("user", json!([{"type": "text", "text": "mine"}]))],
-            Some("alice"),
+            "alice",
         )
         .await
         .unwrap();
 
         assert_eq!(
-            list_history_messages(&pool, Some("alice"))
-                .await
-                .unwrap()
-                .len(),
+            list_history_messages(&pool, "alice").await.unwrap().len(),
             1
         );
         assert!(
-            list_history_messages(&pool, Some("bob"))
+            list_history_messages(&pool, "bob")
                 .await
                 .unwrap()
                 .is_empty(),
@@ -1779,10 +1801,10 @@ mod tests {
     async fn two_threads_for_one_subject_are_independent() {
         let (_dir, pool) = test_pool().await;
 
-        let a = create_thread(&pool, track_thread("track-1"), None)
+        let a = create_thread(&pool, track_thread("track-1"), OWNER)
             .await
             .unwrap();
-        let b = create_thread(&pool, track_thread("track-1"), None)
+        let b = create_thread(&pool, track_thread("track-1"), OWNER)
             .await
             .unwrap();
         assert_ne!(a.id, b.id);
@@ -1791,17 +1813,25 @@ mod tests {
             &pool,
             &a.id,
             vec![msg("user", json!([{"type": "text", "text": "a"}]))],
-            None,
+            OWNER,
         )
         .await
         .unwrap();
 
         assert_eq!(
-            get_thread(&pool, &a.id, None).await.unwrap().messages.len(),
+            get_thread(&pool, &a.id, OWNER)
+                .await
+                .unwrap()
+                .messages
+                .len(),
             1
         );
         assert_eq!(
-            get_thread(&pool, &b.id, None).await.unwrap().messages.len(),
+            get_thread(&pool, &b.id, OWNER)
+                .await
+                .unwrap()
+                .messages
+                .len(),
             0
         );
 
@@ -1810,18 +1840,16 @@ mod tests {
             Some("track_copilot"),
             Some("track"),
             Some("track-1"),
-            None,
+            OWNER,
         )
         .await
         .unwrap();
         assert_eq!(listed.len(), 2);
-        assert!(list_threads(&pool, Some("venue_rig"), None, None, None)
+        assert!(list_threads(&pool, Some("venue_rig"), None, None, OWNER)
             .await
             .unwrap()
             .is_empty());
     }
-
-    const OWNER: Option<&str> = Some("alice");
 
     /// A subagent's thread is its parent's, not a chat of its own: listings
     /// and search skip it even when it is the newest row, while a direct read
@@ -1830,7 +1858,7 @@ mod tests {
     async fn listings_and_search_skip_subagent_threads() {
         let (_dir, pool) = test_pool().await;
         // A signed-in principal: a sync pull only ever writes as one.
-        admit(&pool, Some("alice")).await;
+        admit(&pool, "alice").await;
         let parent = create_thread(&pool, track_thread("track-1"), OWNER)
             .await
             .unwrap();
@@ -1897,7 +1925,7 @@ mod tests {
     #[tokio::test]
     async fn fork_shares_an_exact_prefix_then_diverges_without_copying_nodes() {
         let (_dir, pool) = test_pool().await;
-        let source = create_thread(&pool, track_thread("track-1"), None)
+        let source = create_thread(&pool, track_thread("track-1"), OWNER)
             .await
             .unwrap();
         sqlx::query("UPDATE agent_threads SET title = 'Original' WHERE id = ?")
@@ -1925,7 +1953,7 @@ mod tests {
                     parts: json!([{"type": "text", "text": "two"}]),
                 },
             ],
-            None,
+            OWNER,
         )
         .await
         .unwrap();
@@ -1936,7 +1964,7 @@ mod tests {
             &source.id,
             Some("source-1"),
             None,
-            None,
+            OWNER,
         )
         .await
         .unwrap();
@@ -1947,7 +1975,7 @@ mod tests {
         assert_eq!(fork.forked_at_message_id.as_deref(), Some("source-1"));
         assert_eq!(fork.title.as_deref(), Some("Original"));
         assert_eq!(
-            list_messages(&pool, &fork.id, None)
+            list_messages(&pool, &fork.id, OWNER)
                 .await
                 .unwrap()
                 .iter()
@@ -1971,12 +1999,12 @@ mod tests {
                 role: "user".into(),
                 parts: json!([{"type": "text", "text": "alternate two"}]),
             }],
-            None,
+            OWNER,
         )
         .await
         .unwrap();
         assert_eq!(
-            list_messages(&pool, &source.id, None)
+            list_messages(&pool, &source.id, OWNER)
                 .await
                 .unwrap()
                 .iter()
@@ -1985,7 +2013,7 @@ mod tests {
             vec!["source-0", "source-1", "source-2"]
         );
         assert_eq!(
-            list_messages(&pool, &fork.id, None)
+            list_messages(&pool, &fork.id, OWNER)
                 .await
                 .unwrap()
                 .iter()
@@ -2003,8 +2031,11 @@ mod tests {
 
         // Deleting the source takes only what nothing else stands on: the
         // fork keeps the prefix it shares, and loses the node past its cut.
-        delete_thread(&pool, &source.id, None).await.unwrap();
-        assert_eq!(list_messages(&pool, &fork.id, None).await.unwrap().len(), 3);
+        delete_thread(&pool, &source.id, OWNER).await.unwrap();
+        assert_eq!(
+            list_messages(&pool, &fork.id, OWNER).await.unwrap().len(),
+            3
+        );
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_thread_messages")
                 .fetch_one(&pool)
@@ -2017,10 +2048,10 @@ mod tests {
     #[tokio::test]
     async fn fork_rejects_a_cut_point_outside_the_source_lineage() {
         let (_dir, pool) = test_pool().await;
-        let source = create_thread(&pool, track_thread("track-1"), None)
+        let source = create_thread(&pool, track_thread("track-1"), OWNER)
             .await
             .unwrap();
-        let unrelated = create_thread(&pool, track_thread("track-2"), None)
+        let unrelated = create_thread(&pool, track_thread("track-2"), OWNER)
             .await
             .unwrap();
         append_test_messages(
@@ -2031,7 +2062,7 @@ mod tests {
                 role: "user".into(),
                 parts: json!([]),
             }],
-            None,
+            OWNER,
         )
         .await
         .unwrap();
@@ -2043,7 +2074,7 @@ mod tests {
                 role: "user".into(),
                 parts: json!([]),
             }],
-            None,
+            OWNER,
         )
         .await
         .unwrap();
@@ -2054,18 +2085,18 @@ mod tests {
             &source.id,
             Some("unrelated-message"),
             None,
-            None,
+            OWNER,
         )
         .await
         .unwrap_err();
         assert!(error.contains("not in the source transcript"), "{error}");
-        assert!(get_thread_row(&pool, "invalid-fork", None).await.is_err());
+        assert!(get_thread_row(&pool, "invalid-fork", OWNER).await.is_err());
     }
 
     #[tokio::test]
     async fn full_tool_history_survives_round_trip() {
         let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1"), None)
+        let thread = create_thread(&pool, track_thread("track-1"), OWNER)
             .await
             .unwrap();
 
@@ -2098,13 +2129,13 @@ mod tests {
                 role: "assistant".into(),
                 parts: parts.clone(),
             }],
-            None,
+            OWNER,
         )
         .await
         .unwrap();
         assert_eq!(appended[0].id, "msg-fixed-id");
 
-        let loaded = get_thread(&pool, &thread.id, None).await.unwrap();
+        let loaded = get_thread(&pool, &thread.id, OWNER).await.unwrap();
         assert_eq!(loaded.messages.len(), 1);
         assert_eq!(loaded.messages[0].role, "assistant");
         assert_eq!(loaded.messages[0].seq, 0);
@@ -2114,7 +2145,7 @@ mod tests {
     #[tokio::test]
     async fn transcript_append_is_one_atomic_dense_mutation() {
         let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1"), None)
+        let thread = create_thread(&pool, track_thread("track-1"), OWNER)
             .await
             .unwrap();
         append_test_messages(
@@ -2132,7 +2163,7 @@ mod tests {
                     parts: json!([{"type": "text", "text": "old"}]),
                 },
             ],
-            None,
+            OWNER,
         )
         .await
         .unwrap();
@@ -2156,12 +2187,12 @@ mod tests {
                     },
                 ],
             },
-            None,
+            OWNER,
         )
         .await
         .unwrap_err();
         assert!(failed.contains("already exists"));
-        let unchanged = list_messages(&pool, &thread.id, None).await.unwrap();
+        let unchanged = list_messages(&pool, &thread.id, OWNER).await.unwrap();
         assert_eq!(
             unchanged
                 .iter()
@@ -2190,7 +2221,7 @@ mod tests {
                     },
                 ],
             },
-            None,
+            OWNER,
         )
         .await
         .unwrap();
@@ -2198,7 +2229,7 @@ mod tests {
             appended.iter().map(|row| row.seq).collect::<Vec<_>>(),
             vec![2, 3]
         );
-        let stored = list_messages(&pool, &thread.id, None).await.unwrap();
+        let stored = list_messages(&pool, &thread.id, OWNER).await.unwrap();
         assert_eq!(
             stored.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
             vec!["keep", "edit", "after-edit", "next"]
@@ -2209,7 +2240,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_same_head_appends_have_one_atomic_winner() {
         let (_dir, pool) = test_pool().await;
-        let thread = create_thread(&pool, track_thread("track-1"), None)
+        let thread = create_thread(&pool, track_thread("track-1"), OWNER)
             .await
             .unwrap();
 
@@ -2230,7 +2261,7 @@ mod tests {
                             parts: json!([{"type": "text", "text": format!("q{i}")}]),
                         }],
                     },
-                    None,
+                    OWNER,
                 )
                 .await
                 .unwrap()
@@ -2254,7 +2285,7 @@ mod tests {
         assert_eq!(winners, 1);
         assert_eq!(losers, 7);
 
-        let messages = list_messages(&pool, &thread.id, None).await.unwrap();
+        let messages = list_messages(&pool, &thread.id, OWNER).await.unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].seq, 0);
         let node_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_thread_messages")

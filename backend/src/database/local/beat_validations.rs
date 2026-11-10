@@ -7,12 +7,12 @@ use crate::models::tracks::{BeatValidation, BeatValidationReason, BeatValidation
 
 pub async fn get(pool: &SqlitePool, track_id: &str) -> Result<Option<BeatValidation>, String> {
     let mut access = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
-    let principal = access.principal().map(str::to_owned);
+    let principal = access.principal().to_owned();
     let row: Option<(String, BeatValidationVerdict, Option<BeatValidationReason>)> =
         sqlx::query_as(
             "SELECT v.grid_json, v.verdict, v.reason FROM track_beat_validations v
          JOIN tracks t ON t.id = v.track_id AND t.track_hash = v.track_hash
-         WHERE v.track_id = ? AND v.uid IS ? AND v.verdict != 'unreviewed'",
+         WHERE v.track_id = ? AND v.uid = ? AND v.verdict != 'unreviewed'",
         )
         .bind(track_id)
         .bind(principal)
@@ -42,9 +42,9 @@ pub async fn set(
     // The ownership check, grid comparison and snapshot share a write transaction:
     // reanalysis or an account switch cannot race the grid the person reviewed.
     let mut access = VisibleTrackAccess::<Operate>::operate(pool, track_id).await?;
-    let principal = access.principal().map(str::to_owned);
+    let principal = access.principal().to_owned();
     let owns: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tracks WHERE id = ? AND uid IS ?)")
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tracks WHERE id = ? AND uid = ?)")
             .bind(track_id)
             .bind(&principal)
             .fetch_one(access.connection())

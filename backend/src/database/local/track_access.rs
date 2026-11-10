@@ -5,14 +5,17 @@ use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 pub struct Read;
 pub struct Operate;
 
-/// Transaction-bound proof that one track is visible through the canonical
-/// `auth_visible_tracks` capability. File/audio readers snapshot every path
-/// through this connection; live operations use an IMMEDIATE transaction so
-/// an account switch cannot cross the final effect boundary.
+/// Transaction-bound proof that one track is visible to the signed-in
+/// principal through the canonical `auth_visible_tracks` capability. Nobody
+/// signed in is refused with
+/// [`SIGN_IN_REQUIRED`](crate::database::local::auth::SIGN_IN_REQUIRED).
+/// File/audio readers snapshot every path through this connection; live
+/// operations use an IMMEDIATE transaction so an account switch cannot cross
+/// the final effect boundary.
 pub struct VisibleTrackAccess<'a, Mode> {
     transaction: Transaction<'a, Sqlite>,
     track_id: String,
-    principal: Option<String>,
+    principal: String,
     _mode: PhantomData<Mode>,
 }
 
@@ -59,8 +62,8 @@ impl<Mode> VisibleTrackAccess<'_, Mode> {
         &self.track_id
     }
 
-    pub fn principal(&self) -> Option<&str> {
-        self.principal.as_deref()
+    pub fn principal(&self) -> &str {
+        &self.principal
     }
 
     pub fn connection(&mut self) -> &mut SqliteConnection {
@@ -72,19 +75,17 @@ async fn authorize<'a, Mode>(
     mut transaction: Transaction<'a, Sqlite>,
     track_id: &str,
 ) -> Result<VisibleTrackAccess<'a, Mode>, String> {
-    let row: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT visible.track_id, admission.active_uid
-         FROM auth_visible_tracks visible
-         CROSS JOIN auth_write_admission admission
-         WHERE visible.track_id = ? AND admission.singleton = 1",
-    )
-    .bind(track_id)
-    .fetch_optional(&mut *transaction)
-    .await
-    .map_err(|error| format!("Failed to authorize track access: {error}"))?;
-    let Some((track_id, principal)) = row else {
-        return Err("Track not found".into());
-    };
+    let not_found = || "Track not found".to_string();
+    let principal = crate::database::local::auth::signed_in_principal(&mut transaction)
+        .await?
+        .ok_or_else(not_found)?;
+    let track_id: String =
+        sqlx::query_scalar("SELECT track_id FROM auth_visible_tracks WHERE track_id = ?")
+            .bind(track_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|error| format!("Failed to authorize track access: {error}"))?
+            .ok_or_else(not_found)?;
     Ok(VisibleTrackAccess {
         transaction,
         track_id,
@@ -111,7 +112,9 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "CREATE TABLE auth_write_admission (singleton INTEGER PRIMARY KEY, active_uid TEXT)",
+            "CREATE TABLE auth_write_admission (
+                 singleton INTEGER PRIMARY KEY, armed INTEGER, accepting INTEGER,
+                 maintenance INTEGER, remote_writes INTEGER, active_uid TEXT)",
         )
         .execute(&pool)
         .await
@@ -120,7 +123,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO auth_write_admission (singleton, active_uid) VALUES (1, NULL)")
+        sqlx::query("INSERT INTO auth_write_admission VALUES (1, 1, 1, 0, 0, 'alice')")
             .execute(&pool)
             .await
             .unwrap();

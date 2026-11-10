@@ -95,7 +95,7 @@ pub async fn file_fast_import(
     pool: &SqlitePool,
     storage: &StorageRoot,
     file_path: &str,
-    uid: Option<String>,
+    uid: &str,
 ) -> Result<(String, bool), String> {
     storage.ensure_track_storage()?;
     let tracks_dir = storage.tracks_dir();
@@ -319,7 +319,7 @@ impl Importer<'_> {
             self.progress(&import, done, None, name.clone(), None);
             let imported = match &request {
                 ImportRequest::File(path) => {
-                    file_fast_import(self.pool, self.storage, path, Some(principal.clone())).await
+                    file_fast_import(self.pool, self.storage, path, &principal).await
                 }
                 ImportRequest::Library(track) => {
                     library_fast_import(self.pool, self.storage, source, track, &principal).await
@@ -413,9 +413,7 @@ impl Importer<'_> {
     async fn rollback(&self, track_ids: &[String], principal: &str, cause: String) -> String {
         let mut failures = Vec::new();
         for track_id in track_ids.iter().rev() {
-            if let Err(error) =
-                delete_track(self.pool, self.storage, track_id, Some(principal)).await
-            {
+            if let Err(error) = delete_track(self.pool, self.storage, track_id, principal).await {
                 failures.push(format!("{track_id}: {error}"));
             }
         }
@@ -475,7 +473,7 @@ async fn library_fast_import(
         &audio_path.to_string_lossy(),
         &album_art_path,
         &album_art_mime,
-        Some(uid.to_string()),
+        uid,
         Some(source_type),
         Some(&track.source_id),
         track.filename.as_deref(),
@@ -638,7 +636,7 @@ pub async fn delete_track(
     pool: &SqlitePool,
     storage: &StorageRoot,
     track_id: &str,
-    owner_user_id: Option<&str>,
+    owner_user_id: &str,
 ) -> Result<(), String> {
     recover_track_deletions(pool, storage).await?;
     let mut transaction = pool
@@ -1203,7 +1201,7 @@ mod deletion_tests {
         let db = crate::database::local::database::init_app_db_at(directory.path())
             .await
             .unwrap();
-        crate::database::local::auth::arm_write_admission(&db.0, None)
+        crate::database::local::auth::arm_write_admission(&db.0, Some("alice"))
             .await
             .unwrap();
         let storage = StorageRoot::from_path(directory.path().to_path_buf());
@@ -1212,8 +1210,8 @@ mod deletion_tests {
         let source = source.to_string_lossy().into_owned();
 
         let (left, right) = tokio::join!(
-            file_fast_import(&db.0, &storage, &source, None),
-            file_fast_import(&db.0, &storage, &source, None),
+            file_fast_import(&db.0, &storage, &source, "alice"),
+            file_fast_import(&db.0, &storage, &source, "alice"),
         );
         let left = left.unwrap();
         let right = right.unwrap();
@@ -1252,7 +1250,7 @@ mod deletion_tests {
                 path,
                 &empty,
                 &empty,
-                None,
+                "alice",
                 Some("engine_dj"),
                 Some("library:42"),
                 None,
@@ -1264,7 +1262,7 @@ mod deletion_tests {
         let db = crate::database::local::database::init_app_db_at(directory.path())
             .await
             .unwrap();
-        crate::database::local::auth::arm_write_admission(&db.0, None)
+        crate::database::local::auth::arm_write_admission(&db.0, Some("alice"))
             .await
             .unwrap();
         let (left, right) = tokio::join!(

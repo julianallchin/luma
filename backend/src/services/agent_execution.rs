@@ -249,7 +249,7 @@ pub async fn run_python_cell_inner(
     code: String,
     requested_scope: PythonScopeInput,
     turn_message_id: Option<String>,
-    current_user_id: Option<String>,
+    current_user_id: &str,
     execution_id: Option<String>,
     draft_id: Option<String>,
     waiting: &(dyn Fn(bool) + Sync),
@@ -261,13 +261,10 @@ pub async fn run_python_cell_inner(
     let lease = service.claim_cell(&execution_id)?;
     let cancel = lease.cancel_token();
 
-    let thread = crate::database::local::agent_threads::get_thread(
-        pool,
-        &thread_id,
-        current_user_id.as_deref(),
-    )
-    .await
-    .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
+    let thread =
+        crate::database::local::agent_threads::get_thread(pool, &thread_id, current_user_id)
+            .await
+            .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
 
     let operation_scope = match turn_message_id.as_deref() {
         Some(turn_message_id) => {
@@ -297,9 +294,7 @@ pub async fn run_python_cell_inner(
         }
         None => None,
     };
-    let thread =
-        crate::agent::context::execution_thread(pool, &thread_id, current_user_id.as_deref())
-            .await?;
+    let thread = crate::agent::context::execution_thread(pool, &thread_id, current_user_id).await?;
 
     let mut resolved = resolve_scope(pool, &thread, requested_scope).await?;
     if let Some(draft) = draft_id.as_deref() {
@@ -531,7 +526,7 @@ mod tests {
     fn pinned_track_thread() -> AgentThread {
         AgentThread {
             id: "thread".into(),
-            owner_user_id: Some("owner".into()),
+            owner_user_id: "owner".into(),
             agent_kind: "track_copilot".into(),
             subject_kind: Some("track".into()),
             subject_id: Some("track".into()),
@@ -648,10 +643,7 @@ mod tests {
         directory: &Path,
         state: tokio::sync::watch::Receiver<crate::runtime::python::PythonSetup>,
     ) -> (crate::dispatch::AppServices, String) {
-        let services = crate::test_support::signed_out(directory, directory.to_path_buf()).await;
-        crate::database::local::auth::arm_write_admission(&services.db.0, None)
-            .await
-            .unwrap();
+        let services = crate::test_support::signed_in(directory, directory.to_path_buf()).await;
         let thread = crate::database::local::agent_threads::create_thread(
             &services.db.0,
             crate::models::agent_threads::CreateAgentThreadInput {
@@ -659,7 +651,7 @@ mod tests {
                 agent_kind: "unbound".into(),
                 ..Default::default()
             },
-            None,
+            crate::test_support::TEST_OWNER,
         )
         .await
         .unwrap();
@@ -688,7 +680,7 @@ mod tests {
             "1".to_string(),
             PythonScopeInput::default(),
             None,
-            None,
+            crate::test_support::TEST_OWNER,
             None,
             None,
             waiting,

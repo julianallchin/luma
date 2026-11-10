@@ -761,7 +761,7 @@ fn lanes(first: usize, last: usize) -> String {
 pub async fn execution_thread(
     pool: &SqlitePool,
     thread_id: &str,
-    principal: Option<&str>,
+    principal: &str,
 ) -> Result<AgentThread, String> {
     let mut thread =
         crate::database::local::agent_threads::get_thread_row(pool, thread_id, principal).await?;
@@ -770,7 +770,7 @@ pub async fn execution_thread(
             SELECT message.id, message.parent_message_id, message.depth, message.role, message.parts_json
             FROM agent_thread_messages message
             JOIN agent_thread_transcript_heads head ON head.head_message_id = message.id
-            WHERE head.thread_id = ? AND head.uid IS ?
+            WHERE head.thread_id = ? AND head.uid = ?
             UNION ALL
             SELECT parent.id, parent.parent_message_id, parent.depth, parent.role, parent.parts_json
             FROM agent_thread_messages parent JOIN lineage child ON parent.id = child.parent_message_id

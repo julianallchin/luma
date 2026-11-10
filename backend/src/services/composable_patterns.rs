@@ -30,7 +30,7 @@ pub(crate) async fn preview(
     }
     let mut access =
         VenueAccess::<Read>::read(pool, VenueResource::Venue(&request.venue_id)).await?;
-    let principal = access.principal().map(str::to_owned);
+    let principal = access.principal().to_owned();
     let beat_grid = crate::database::local::tracks::get_track_beats_for_connection(
         access.connection(),
         &request.track_id,
@@ -109,7 +109,7 @@ pub(crate) async fn preview(
     // A sign-out during preparation must not publish data under a new identity.
     let final_access =
         VenueAccess::<Read>::read(pool, VenueResource::Venue(&request.venue_id)).await?;
-    if final_access.principal() != principal.as_deref() {
+    if final_access.principal() != principal {
         return Err("authenticated identity changed during pattern preview".into());
     }
     Ok(ComposablePreview {

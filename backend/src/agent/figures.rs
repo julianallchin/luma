@@ -17,13 +17,8 @@ use crate::sync::supabase::Storage;
 /// The Storage bucket, and the first segment of every figure `path`.
 pub const BUCKET: &str = "agent-figures";
 
-/// A thread with no owner files its figures under this name in place of a
-/// uid. Such a figure stays in the local cache and is never uploaded: no
-/// session can write to a folder that no uid owns.
-const UNOWNED: &str = "local";
-
-/// Cache `png` and return its stored `path`. An owned figure is also queued
-/// for upload.
+/// Cache `png`, queue it for upload to `owner`'s folder, and return its
+/// stored `path`.
 ///
 /// # Errors
 ///
@@ -31,17 +26,15 @@ const UNOWNED: &str = "local";
 pub async fn store(
     pool: &SqlitePool,
     storage: &StorageRoot,
-    owner: Option<&str>,
+    owner: &str,
     png: &[u8],
 ) -> Result<String, String> {
     let path = path(owner, &cache(storage, png)?);
-    if owner.is_some() {
-        sqlx::query("INSERT OR IGNORE INTO agent_figure_uploads (path) VALUES (?)")
-            .bind(&path)
-            .execute(pool)
-            .await
-            .map_err(|error| format!("queue figure upload: {error}"))?;
-    }
+    sqlx::query("INSERT OR IGNORE INTO agent_figure_uploads (path) VALUES (?)")
+        .bind(&path)
+        .execute(pool)
+        .await
+        .map_err(|error| format!("queue figure upload: {error}"))?;
     Ok(path)
 }
 
@@ -67,8 +60,8 @@ pub fn sha(png: &[u8]) -> String {
 
 /// The stored path of the figure whose PNG hashes to `sha`.
 #[must_use]
-pub fn path(owner: Option<&str>, sha: &str) -> String {
-    format!("{BUCKET}/{}/{sha}.png", owner.unwrap_or(UNOWNED))
+pub fn path(owner: &str, sha: &str) -> String {
+    format!("{BUCKET}/{owner}/{sha}.png")
 }
 
 /// Where a figure's bytes sit on this machine, whether or not they are there.
@@ -130,7 +123,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn a_figure_is_cached_by_its_hash_and_queued_only_when_owned() {
+    async fn a_figure_is_cached_by_its_hash_and_queued_once() {
         let dir = tempfile::tempdir().unwrap();
         let storage = StorageRoot::from_path(dir.path().to_path_buf());
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -139,18 +132,20 @@ mod tests {
             .await
             .unwrap();
 
-        let owned = store(&pool, &storage, Some("u1"), b"png").await.unwrap();
-        let again = store(&pool, &storage, Some("u1"), b"png").await.unwrap();
-        let guest = store(&pool, &storage, None, b"png").await.unwrap();
+        let owned = store(&pool, &storage, "u1", b"png").await.unwrap();
+        let again = store(&pool, &storage, "u1", b"png").await.unwrap();
+        let theirs = store(&pool, &storage, "u2", b"png").await.unwrap();
 
         assert_eq!(owned, again, "the same bytes name the same object");
         assert!(owned.starts_with("agent-figures/u1/") && owned.ends_with(".png"));
-        assert_eq!(cached(&storage, &owned), cached(&storage, &guest));
+        assert_ne!(owned, theirs, "each account's figure is its own object");
+        assert_eq!(cached(&storage, &owned), cached(&storage, &theirs));
         assert_eq!(std::fs::read(cached(&storage, &owned)).unwrap(), b"png");
         let queued: Vec<String> = sqlx::query_scalar("SELECT path FROM agent_figure_uploads")
             .fetch_all(&pool)
             .await
             .unwrap();
-        assert_eq!(queued, vec![owned]);
+        assert_eq!(queued.len(), 2);
+        assert!(queued.contains(&owned) && queued.contains(&theirs));
     }
 }

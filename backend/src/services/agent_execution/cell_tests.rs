@@ -262,7 +262,7 @@ impl Fixture {
                 score_id: Some(ANALYSIS_SCORE_ID.to_string()),
                 ..Default::default()
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .expect("create thread")
@@ -279,7 +279,7 @@ impl Fixture {
                     parts: json!([{ "type": "text", "text": "Session opened." }]),
                 }],
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .expect("open the thread's session");
@@ -320,7 +320,7 @@ impl Fixture {
                 score_id: Some(SCORE_ID.into()),
                 ..Default::default()
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .unwrap()
@@ -376,7 +376,7 @@ impl Fixture {
             code.to_string(),
             scope,
             turn,
-            Some("owner".into()),
+            "owner",
             None,
             None,
             waiting,
@@ -559,7 +559,7 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
         "1 + 1".into(),
         scope,
         None,
-        Some("another-user".into()),
+        "another-user",
         None,
         None,
         &|_| {},
@@ -595,7 +595,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
                 parts: json!([{ "type": "text", "text": "Done." }]),
             }],
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("an assistant row appends like any other");
@@ -613,7 +613,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
             "1 + 1".into(),
             scope.clone(),
             Some(turn_message_id.into()),
-            Some("owner".into()),
+            "owner",
             None,
             None,
             &|_| {},
@@ -635,7 +635,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         "1 + 1".into(),
         scope,
         Some("assistant-turn".into()),
-        Some("owner".into()),
+        "owner",
         None,
         None,
         &|_| {},
@@ -666,7 +666,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
                 parts: json!([{ "type": "text", "text": "Session opened on Aurora." }]),
             }],
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("a session turn appends like any other row — no trigger gates it");
@@ -682,7 +682,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         "1 + 1".into(),
         session_scope,
         Some("session-turn".into()),
-        Some("owner".into()),
+        "owner",
         None,
         None,
         &|_| {},
@@ -804,7 +804,7 @@ impl Fixture {
                 venue_id: Some(venue_id.clone()),
                 ..Default::default()
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .expect("create venue thread")
@@ -1118,7 +1118,7 @@ async fn a_perform_thread_changes_the_set_and_a_venue_thread_cannot() {
             venue_id: Some(venue_id.clone()),
             ..Default::default()
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("create Perform thread")
@@ -1300,7 +1300,7 @@ async fn a_python_laser_clip_draws_beams_on_the_stage() {
             venue_id: Some(f.venue_id.clone()),
             ..Default::default()
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("create venue thread")
@@ -1339,7 +1339,7 @@ projector.path
                 parts: json!([{ "type": "text", "text": "Session opened." }]),
             }],
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .unwrap();
@@ -1367,7 +1367,7 @@ lit, dark = light(v.render(edit=edit, t=1.0)), light(v.render(t=1.0))
         .into(),
         scope,
         Some("laser-session".into()),
-        Some("owner".into()),
+        "owner",
         None,
         None,
         &|_| {},

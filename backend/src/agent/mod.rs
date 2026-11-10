@@ -750,12 +750,10 @@ impl AgentService {
         let pool = &self.services.db().0;
         let principal = self.principal().await?;
         let threads = self.list_threads(scope).await?;
-        let messages = crate::database::local::agent_threads::list_history_messages(
-            pool,
-            principal.as_deref(),
-        )
-        .await
-        .map_err(AgentError::Storage)?;
+        let messages =
+            crate::database::local::agent_threads::list_history_messages(pool, &principal)
+                .await
+                .map_err(AgentError::Storage)?;
         Ok(History::build(threads, messages))
     }
 
@@ -775,7 +773,7 @@ impl AgentService {
         crate::database::local::agent_threads::get_thread(
             &self.services.db().0,
             thread_id,
-            principal.as_deref(),
+            &principal,
         )
         .await
         .map_err(AgentError::Storage)
@@ -796,7 +794,7 @@ impl AgentService {
         let created = crate::database::local::agent_threads::create_thread(
             &self.services.db().0,
             scope.create_input(uuid::Uuid::new_v4().to_string()),
-            principal.as_deref(),
+            &principal,
         )
         .await
         .map_err(AgentError::Storage)?;
@@ -823,25 +821,21 @@ impl AgentService {
             Some(scope.agent_kind.as_str()),
             Some(scope.subject_kind.as_str()),
             Some(&scope.subject_id),
-            principal.as_deref(),
+            &principal,
         )
         .await
         .map_err(AgentError::Storage)?;
 
         if let Some(thread) = threads.iter().find(|thread| scope.matches(thread)) {
-            return crate::database::local::agent_threads::get_thread(
-                pool,
-                &thread.id,
-                principal.as_deref(),
-            )
-            .await
-            .map_err(AgentError::Storage);
+            return crate::database::local::agent_threads::get_thread(pool, &thread.id, &principal)
+                .await
+                .map_err(AgentError::Storage);
         }
 
         let created = crate::database::local::agent_threads::create_thread(
             pool,
             scope.create_input(uuid::Uuid::new_v4().to_string()),
-            principal.as_deref(),
+            &principal,
         )
         .await
         .map_err(AgentError::Storage)?;
@@ -863,7 +857,7 @@ impl AgentService {
             Some(scope.agent_kind.as_str()),
             Some(scope.subject_kind.as_str()),
             Some(&scope.subject_id),
-            principal.as_deref(),
+            &principal,
         )
         .await
         .map_err(AgentError::Storage)?;
@@ -923,9 +917,10 @@ impl AgentService {
             .map_err(AgentError::Storage)
     }
 
-    pub(crate) async fn principal(&self) -> Result<Option<String>, AgentError> {
+    /// The signed-in account every thread and turn here belongs to.
+    pub(crate) async fn principal(&self) -> Result<String, AgentError> {
         self.services
-            .admitted_principal()
+            .require_session()
             .await
             .map_err(|error| AgentError::Storage(error.to_string()))
     }
@@ -941,15 +936,17 @@ impl AgentService {
 /// Holding the lease while closing keeps a turn from starting on the row.
 pub(crate) async fn recover_open_rows(
     services: &AppServices,
-    principal: Option<&str>,
+    principal: &str,
 ) -> Result<(), String> {
     let pool = &services.db().0;
     for thread_id in
         crate::database::local::agent_threads::open_message_threads(pool, principal).await?
     {
-        let Ok(_lease) =
-            engine::state::RunLease::acquire(services.storage().path(), &thread_id, principal)
-        else {
+        let Ok(_lease) = engine::state::RunLease::acquire(
+            services.storage().path(),
+            &thread_id,
+            Some(principal),
+        ) else {
             continue;
         };
         crate::database::local::agent_threads::recover_open_message(pool, &thread_id, principal)

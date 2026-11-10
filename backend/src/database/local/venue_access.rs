@@ -25,8 +25,7 @@ pub struct Owner;
 /// open has no row, so no `Standing`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Standing {
-    /// The principal's own venue: an account's, or the guest namespace's
-    /// while signed out.
+    /// The principal's own venue.
     pub owner: bool,
     pub capability: VenueCapability,
 }
@@ -62,14 +61,17 @@ pub enum VenueResource<'a> {
     AgentThread(&'a str),
 }
 
-/// Opaque, transaction-bound proof that the app database admitted the current
-/// host principal to one venue. Mutations use an IMMEDIATE transaction so the
-/// proof and write serialize with identity switches; reads keep one deferred
-/// snapshot and may finish if they were admitted before a switch began.
+/// Opaque, transaction-bound proof that the app database admitted the
+/// signed-in principal to one venue. Nobody signed in is refused with
+/// [`SIGN_IN_REQUIRED`](crate::database::local::auth::SIGN_IN_REQUIRED): a
+/// venue has an owner, and a venue nobody owns opens for no one. Mutations
+/// use an IMMEDIATE transaction so the proof and write serialize with identity
+/// switches; reads keep one deferred snapshot and may finish if they were
+/// admitted before a switch began.
 pub struct VenueAccess<'a, Mode> {
     transaction: Transaction<'a, Sqlite>,
     venue_id: String,
-    principal: Option<String>,
+    principal: String,
     standing: Standing,
     /// Whether the writes are an agent's, and so must be given back to the
     /// person before commit. See [`crate::sync::triggers::attribute`].
@@ -85,7 +87,7 @@ mod sealed {
 /// either a read snapshot or the write transaction already held by a mutation.
 pub trait AuthorizedVenue: sealed::Sealed {
     fn venue_id(&self) -> &str;
-    fn principal(&self) -> Option<&str>;
+    fn principal(&self) -> &str;
     fn standing(&self) -> Standing;
     fn connection(&mut self) -> &mut SqliteConnection;
 }
@@ -97,8 +99,8 @@ impl<Mode> AuthorizedVenue for VenueAccess<'_, Mode> {
         &self.venue_id
     }
 
-    fn principal(&self) -> Option<&str> {
-        self.principal.as_deref()
+    fn principal(&self) -> &str {
+        &self.principal
     }
 
     fn standing(&self) -> Standing {
@@ -180,8 +182,8 @@ impl<Mode> VenueAccess<'_, Mode> {
         &self.venue_id
     }
 
-    pub fn principal(&self) -> Option<&str> {
-        self.principal.as_deref()
+    pub fn principal(&self) -> &str {
+        &self.principal
     }
 
     /// What the admitted principal may do with this venue.
@@ -203,14 +205,19 @@ async fn authorize<'a, Mode>(
     resource: VenueResource<'_>,
     admits: fn(VenueCapability) -> bool,
 ) -> Result<VenueAccess<'a, Mode>, String> {
+    let principal = crate::database::local::auth::signed_in_principal(&mut transaction)
+        .await?
+        .ok_or_else(not_found)?;
     let venue_id = resolve_venue_id(&mut transaction, resource)
         .await?
         .ok_or_else(not_found)?;
 
     let row = sqlx::query(
-        "SELECT principal, owner, edit, manage FROM auth_venue_access WHERE venue_id = ?",
+        "SELECT owner, edit, manage FROM auth_venue_access
+         WHERE venue_id = ? AND principal = ?",
     )
     .bind(&venue_id)
+    .bind(&principal)
     .fetch_optional(&mut *transaction)
     .await
     .map_err(|error| format!("Failed to authorize venue access: {error}"))?
@@ -219,8 +226,6 @@ async fn authorize<'a, Mode>(
     if !admits(standing.capability) {
         return Err(not_found());
     }
-    let principal: Option<String> = sqlx::Row::try_get(&row, "principal")
-        .map_err(|error| format!("Failed to read the admitted principal: {error}"))?;
 
     Ok(VenueAccess {
         transaction,
@@ -320,10 +325,11 @@ mod tests {
             .await
             .unwrap();
         membership.commit().await.unwrap();
+        // A venue from before sign-in was required: nobody owns it.
         crate::database::local::auth::arm_write_admission(&pool, None)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('guest', NULL, 'Guest')")
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('unowned', NULL, 'Unowned')")
             .execute(&pool)
             .await
             .unwrap();
@@ -401,7 +407,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            VenueAccess::<Read>::read(&pool, VenueResource::Venue("guest"))
+            VenueAccess::<Read>::read(&pool, VenueResource::Venue("unowned"))
                 .await
                 .is_err()
         );
@@ -409,25 +415,23 @@ mod tests {
         crate::database::local::auth::arm_write_admission(&pool, None)
             .await
             .unwrap();
-        // Signed out, the guest's own venue opens for reading, and nothing
-        // in it changes: there is no signed-out owner to write as.
-        assert!(
-            VenueAccess::<Read>::read(&pool, VenueResource::Venue("guest"))
-                .await
-                .is_ok()
-        );
-        assert!(
-            VenueAccess::<Write>::write(&pool, VenueResource::Venue("guest"))
-                .await
-                .is_err(),
-            "a signed-out guest edited a venue"
-        );
-        assert!(
-            VenueAccess::<Owner>::owner(&pool, VenueResource::Venue("guest"))
-                .await
-                .is_err(),
-            "a guest venue has no door to manage: nobody can join one"
-        );
+        // Signed out, nothing opens — an account's venue, a venue nobody
+        // owns, or one that does not exist — and the refusal says to sign in.
+        for venue in ["unowned", "alice", "shared", "missing"] {
+            let resource = VenueResource::Venue(venue);
+            let refusals = [
+                VenueAccess::<Read>::read(&pool, resource).await.err(),
+                VenueAccess::<Write>::write(&pool, resource).await.err(),
+                VenueAccess::<Owner>::owner(&pool, resource).await.err(),
+            ];
+            for refusal in refusals {
+                assert_eq!(
+                    refusal.as_deref(),
+                    Some(crate::database::local::auth::SIGN_IN_REQUIRED),
+                    "a signed-out caller reached venue {venue}"
+                );
+            }
+        }
         assert!(
             VenueAccess::<Read>::read(&pool, VenueResource::Fixture("alice-fixture"),)
                 .await
@@ -437,6 +441,12 @@ mod tests {
         crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
             .await
             .unwrap();
+        assert!(
+            VenueAccess::<Read>::read(&pool, VenueResource::Venue("unowned"))
+                .await
+                .is_err(),
+            "a venue nobody owns opened for a signed-in account"
+        );
         assert!(
             VenueAccess::<Write>::write(&pool, VenueResource::Group("shared-group"))
                 .await

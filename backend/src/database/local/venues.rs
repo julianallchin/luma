@@ -64,7 +64,7 @@ pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, Strin
 }
 
 /// List exactly the venues admitted for the app database's current host-bound
-/// principal. Signed-out guest state never includes cached account venues.
+/// principal.
 pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> {
     sqlx::query(concat!(
         admitted_venues!(),
@@ -207,7 +207,7 @@ pub const SHARE_CODE_TAKEN: &str = "share code already in use";
 /// the order they joined.
 pub async fn venue_members(access: &mut impl AuthorizedVenue) -> Result<Vec<VenueMember>, String> {
     let venue_id = access.venue_id().to_string();
-    let you = access.principal().map(str::to_owned);
+    let you = access.principal().to_owned();
     let rows: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT uid, 'owner', created_at FROM venues WHERE id = ?1 AND uid IS NOT NULL
          UNION ALL
@@ -225,7 +225,7 @@ pub async fn venue_members(access: &mut impl AuthorizedVenue) -> Result<Vec<Venu
     Ok(rows
         .into_iter()
         .map(|(uid, role, since)| VenueMember {
-            is_you: you.as_deref() == Some(uid.as_str()),
+            is_you: you == uid,
             uid,
             role,
             since,

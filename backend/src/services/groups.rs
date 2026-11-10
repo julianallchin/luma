@@ -1160,7 +1160,7 @@ pub async fn snapshot_generated_groups(
     sources.derived = group_derivation::derive_groups(&sources.solved.facts);
     sources.manual.clear();
     let nodes = sources.tree();
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     for (order, node) in nodes.iter().enumerate() {
         if node.name.is_empty() || sources.authored.iter().any(|g| g.id == node.id) {
             continue;

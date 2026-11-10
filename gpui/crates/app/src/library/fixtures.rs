@@ -1,6 +1,6 @@
 //! The agent harness's stand-ins at the library boundary: raw DJ-source
-//! answers, navigation timing, and outside writes. The shipped app never
-//! installs one.
+//! answers, navigation timing, outside writes, and the far end of sign-in.
+//! The shipped app never installs one.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use luma_lib::dispatch::{
     handlers, ArtworkRef, EngineDjPlaylist, EngineDjTrack, RekordboxLibraryInfo, RekordboxPlaylist,
-    RekordboxTrack, TrackSources,
+    RekordboxTrack, SharedServices, TrackSources,
 };
 
 use super::sources::engine_source_track;
@@ -48,6 +48,21 @@ pub struct NavigationFixture {
     /// Woken by every score read, for [`Self::outside_score_edit`].
     pub score_reads: Arc<tokio::sync::Notify>,
 }
+
+/// Supabase's half of email sign-in, for a harness with no network: handed
+/// the library's services and the address a code was mailed to, it installs
+/// that account's session and answers with its principal, or refuses in the
+/// words the sign-in screen shows. With one installed no code is mailed and
+/// none is checked; everything after the exchange — the cached account, the
+/// screen leaving, the shell opening — is the app's own.
+pub type SignInFixture = Arc<
+    dyn Fn(
+            SharedServices,
+            String,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Raw adapter answers used only by the GPUI agent harness, decoded into the
 /// adapters' own row types so the public Library methods normalize them
@@ -273,6 +288,11 @@ impl Library {
         work: Arc<Mutex<luma_lib::models::background::BackgroundWork>>,
     ) {
         self.background_work_fixture = Some(work);
+    }
+
+    /// Sign in against `fixture` instead of Supabase — see [`SignInFixture`].
+    pub fn set_sign_in_fixture(&mut self, fixture: SignInFixture) {
+        self.sign_in_fixture = Some(fixture);
     }
 
     /// Supply live sync snapshots to the harness without enabling networking.

@@ -22,7 +22,7 @@ pub async fn insert_fixture(
 ) -> Result<PatchedFixture, String> {
     let id = Uuid::new_v4().to_string();
     let venue_id = access.venue_id().to_owned();
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
 
     sqlx::query(
         "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned)
@@ -46,7 +46,7 @@ pub async fn insert_fixture(
 
     Ok(PatchedFixture {
         id,
-        uid,
+        uid: Some(uid),
         venue_id,
         universe,
         address,
@@ -70,7 +70,7 @@ pub async fn insert_fixture_row(
     row: &PatchedFixture,
 ) -> Result<(), String> {
     let venue_id = access.venue_id().to_owned();
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     sqlx::query(
         "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

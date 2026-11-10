@@ -49,7 +49,7 @@ pub async fn save(
         venue_id: access.venue_id().to_owned(),
         ..pattern
     };
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     let done = sqlx::query(
         "INSERT INTO perform_patterns (id, uid, venue_id, name, selection_json, z_index,
              blend_mode, seed, graph_json)
@@ -107,7 +107,7 @@ pub async fn save_layout(
     layout: &PerformLayout,
 ) -> Result<(), String> {
     let venue_id = access.venue_id().to_owned();
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     sqlx::query(
         "INSERT INTO perform_layouts (id, uid, venue_id, layout_json) VALUES (?1, ?2, ?1, ?3)
          ON CONFLICT (id) DO UPDATE SET layout_json = excluded.layout_json",

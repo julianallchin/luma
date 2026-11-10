@@ -160,8 +160,8 @@ pub async fn load_score(
 /// Write `candidate` onto the score's rows, touching only what differs.
 ///
 /// Runs in the caller's transaction. Whoever edits the score, the rows it
-/// writes carry the score's own `uid` — NULL for a guest score — read off the
-/// score row in [`insert_clip`], the one place a clip gets its owner.
+/// writes carry the score's own `uid`, read off the score row in
+/// [`insert_clip`], the one place a clip gets its owner.
 pub async fn save_score(
     connection: &mut SqliteConnection,
     score_id: &str,

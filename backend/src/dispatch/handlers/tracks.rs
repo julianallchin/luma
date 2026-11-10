@@ -9,6 +9,7 @@ pub async fn get_track_beats(
     services: &AppServices,
     track_id: String,
 ) -> Result<Option<BeatGrid>, CommandError> {
+    services.require_session().await?;
     Ok(crate::database::local::tracks::get_track_beats(&services.db.0, &track_id).await?)
 }
 
@@ -48,6 +49,7 @@ pub async fn list_tracks_enriched(
     services: &AppServices,
     venue_id: Option<String>,
 ) -> Result<Vec<TrackBrowserRow>, CommandError> {
+    services.require_session().await?;
     Ok(track_service::list_tracks_enriched(&services.db.0, venue_id.as_deref()).await?)
 }
 
