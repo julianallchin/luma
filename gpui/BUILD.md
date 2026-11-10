@@ -211,6 +211,14 @@ idle machine) and `--example resize_probe` (what a per-frame viewport size
 change costs; it fails when the median frame of a drag costs over 1.3× a still
 one, and `LUMA_RESIZE_PASSES=1` shows which passes and CPU spans a drag grows).
 Run them with `cargo run -p luma-render --release`.
+`--example profile_scene` replays a real score moment through the renderer
+alone: `luma-cli profile SCORE OUT.json 1 1 1 snapshot TIMES.json` writes the
+venue and the score's state, and the example reports each pass's GPU time at
+any quality, size, camera and lit-cone count, or with `--paced=120` the
+delivered frame rate when frames are driven as the stage drives them. A
+renderer change rebuilds only `luma-render`, where `luma-app`'s
+`--example profile_camera` (the same report from a stage "Export camera" file
+and a library) rebuilds the app.
 
 To add a test file to a group, add one `mod` line to that group's `main.rs`.
 Members use `use super::support;`. Do not declare a second `mod support;`,
