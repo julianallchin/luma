@@ -603,7 +603,7 @@ const DETAIL_CLOUDINESS: f32 = 0.5;
 // integrand is smooth apart from the cloud field's low contrast, and the cap
 // keeps long spans from paying for detail the image cannot show.
 fn quadrature_pieces(a: f32, b: f32, th0: f32, th1: f32) -> u32 {
-    let angular = (th1 - th0) / 0.4;
+    let angular = angular_pieces(th0, th1);
     let cloud = (b - a) / max(haze.medium.shape.y * 0.5, 0.1);
     let full = clamp(u32(ceil(max(cloud, angular))), 1u, 32u);
     if haze.medium.shape.x >= DETAIL_CLOUDINESS { return full; }
@@ -612,6 +612,13 @@ fn quadrature_pieces(a: f32, b: f32, th0: f32, th1: f32) -> u32 {
 
 // Pieces that resolve light `li`'s gobo along `[a, b]`, three per cycle of
 // its pattern. A ray crosses the aperture along a straight line (a line seen
+// Pieces for a span of the equiangular angle about a source: along the ray
+// the direction from the source turns by that angle, and the haze's forward
+// peak (`haze_phase.rs`) with it.
+fn angular_pieces(th0: f32, th1: f32) -> f32 {
+    return (th1 - th0) / 0.4;
+}
+
 // from the apex), so the endpoints bound the cycles: the spokes' twelve per
 // turn of polar angle, the breakup's fifteen per radian of aperture.
 fn gobo_pieces(li: u32, ray: SceneRay, a: f32, b: f32) -> u32 {

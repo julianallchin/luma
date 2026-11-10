@@ -17,9 +17,11 @@
 @group(2) @binding(0) var analytic_out: texture_storage_2d<rgba16float, write>;
 
 // A face of cells (`panel.wgsl`) has no closed form: its light along the ray
-// is whatever cells the ray passes. The same Gauss rule, a piece per cell
-// passed, in the equiangular angle about the face's middle; far from the face
-// that is one piece, as for a cone.
+// is whatever cells the ray passes. The same Gauss rule in the equiangular
+// angle about the face's middle, a piece per cell passed and no fewer than
+// the angle the ray turns through about the face calls for. One piece for
+// every ray the cells did not ask more of drew the edge of where they did,
+// an arc around the face, across a strobe's glow.
 fn analytic_panel(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
     let rest = light_rest[li];
     let core = light_core[li];
@@ -29,7 +31,10 @@ fn analytic_panel(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
     let h = sqrt(max(dot(oc, oc) - delta * delta, 1e-4));
     let th0 = atan((span.x - delta) / h);
     let th1 = atan((span.y - delta) / h);
-    let pieces = panel_pieces(rest.panel, rest.direction, oc + ray.dir * span.x, oc + ray.dir * span.y);
+    let pieces = max(
+        panel_pieces(rest.panel, rest.direction, oc + ray.dir * span.x, oc + ray.dir * span.y),
+        clamp(u32(ceil(angular_pieces(th0, th1))), 1u, 32u),
+    );
     let half = 0.5 * (th1 - th0) / f32(pieces);
     let nodes = array<f32, 3>(-0.7745966692, 0.0, 0.7745966692);
     let weights = array<f32, 3>(0.5555555556, 0.8888888889, 0.5555555556);
