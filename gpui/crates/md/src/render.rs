@@ -176,6 +176,17 @@ impl RenderCache {
             .retain(|(r, top, _), _| r.as_ref() != row || *top < from);
     }
 
+    /// Keep only the rows laid out in the last viewport, overdraw included.
+    /// Scrolling back regenerates a dropped row's flattened text and code-line
+    /// runs; the cache is derived data, so this trades CPU for memory.
+    ///
+    /// The caller owns "which rows were visible": the transcript knows its
+    /// list's rendered range, this module does not.
+    pub fn retain_rows(&mut self, rows: &std::collections::HashSet<SharedString>) {
+        self.flats.retain(|(row, _, _), _| rows.contains(row));
+        self.code.retain(|(row, _, _), _| rows.contains(row));
+    }
+
     pub fn clear(&mut self) {
         self.flats.clear();
         self.code.clear();
@@ -1309,6 +1320,36 @@ pub fn runs_for_syntax_line_with_plain(
 mod tests {
     use super::*;
     use crate::parser::InlineStyle;
+
+    #[test]
+    fn retain_rows_releases_rows_outside_the_viewport() {
+        let mut cache = RenderCache::default();
+        for row in ["visible", "offscreen"] {
+            cache.flats.insert(
+                (row.into(), 0, 0),
+                Rc::new(FlatText {
+                    text: "text".into(),
+                    runs: Vec::new(),
+                    links: Vec::new(),
+                    code_ranges: Vec::new(),
+                }),
+            );
+            cache.code.insert(
+                (row.into(), 0, 0),
+                Rc::new(CachedCode {
+                    code_len: 0,
+                    hl_key: (0, 0),
+                    lines: Vec::new(),
+                }),
+            );
+        }
+        cache.retain_rows(&std::collections::HashSet::from(["visible".into()]));
+        assert!(cache.flats.keys().all(|(row, _, _)| row == "visible"));
+        assert!(cache.code.keys().all(|(row, _, _)| row == "visible"));
+        assert_eq!((cache.flats.len(), cache.code.len()), (1, 1));
+        cache.retain_rows(&std::collections::HashSet::new());
+        assert!(cache.flats.is_empty() && cache.code.is_empty());
+    }
 
     fn register(surface: u64, key: &str) {
         REGISTRY.with(|r| {
