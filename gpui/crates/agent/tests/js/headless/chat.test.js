@@ -229,9 +229,9 @@ test("a model choice is kept per conversation and carried into new chats", () =>
   app.click(select(app.snapshot()));
   nav.step("the model menu", "button", "Choose model");
   // Any model but the current one. A row is labelled by its name, then its
-  // service; the chip by its service, then the name. A name may hold " · ".
-  const current = original.split(" · ").slice(1).join(" · ");
-  const rowName = (n) => n.label.split(" · ").slice(0, -1).join(" · ");
+  // service; the chip by its service, then the name.
+  const current = original.split(" · ")[1];
+  const rowName = (n) => n.label.split(" · ")[0];
   const other = (s) => {
     const search = s.find({ role: "input", label: "Search models…" });
     return search && s.findAll({ role: "button" }).find((n) =>

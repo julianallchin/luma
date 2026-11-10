@@ -859,16 +859,20 @@ impl Turn {
             settings.insert(key, model.clone());
         }
         if engine != Engine::Api {
-            let model = self
-                .service
-                .model_name
-                .as_ref()
-                .or(thread.model.as_ref())
-                .cloned();
+            let mut selection = engine::catalog::Selection::from_thread(thread)?;
+            if let Some(model) = &self.service.model_name {
+                selection.model = Some(model.clone());
+            }
+            // A thread that names no model runs the one its picker shows
+            // first, never whatever the CLI falls back to.
+            if selection.model.is_none() {
+                let models = self.service.models(selection.service).await?;
+                selection = selection.resolve(&models);
+            }
             return Ok(Execution::External {
                 engine,
-                model,
-                effort: thread.effort.clone(),
+                model: selection.model,
+                effort: selection.effort,
             });
         }
         let (client, model, reasoning) = if let Some(client) = &self.service.client {

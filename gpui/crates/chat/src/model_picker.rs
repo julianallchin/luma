@@ -102,11 +102,7 @@ impl Row {
     }
 
     fn key(&self) -> String {
-        format!(
-            "model-{:?}-{}",
-            self.service,
-            self.model.id.as_deref().unwrap_or("default")
-        )
+        format!("model-{:?}-{}", self.service, self.model.id)
     }
 }
 
@@ -335,7 +331,7 @@ impl ModelPicker {
         // A cursor still where the models opened it — on the chosen model, or
         // on nothing yet — follows the chosen model as lists land above it.
         let anchored = self.list.query().trim().is_empty()
-            && match (self.list.current(), &self.seen.selection) {
+            && match (self.list.current(), &self.shown()) {
                 (None, _) => true,
                 (Some(row), Some(selection)) => row.is(selection),
                 (Some(_), None) => false,
@@ -426,7 +422,7 @@ impl ModelPicker {
     /// the service before it showing above, when the model is near its start;
     /// else the model in the middle.
     fn seek(&mut self) {
-        let Some(selection) = self.seen.selection.clone() else {
+        let Some(selection) = self.shown() else {
             return;
         };
         let Some(at) = self.list.seek(|row| row.is(&selection)) else {
@@ -504,7 +500,9 @@ impl ModelPicker {
 
     /// A model runs at one of its own levels: a saved level it does not offer
     /// (or none) becomes its default, as Zeron's picker clamps a model moved
-    /// to. Once the model's list is held.
+    /// to. Once the model's list is held, and only for a model the thread
+    /// names: one that names none follows its service's first row until a
+    /// pick names one, and a turn clamps its level as it resolves it.
     fn clamp_effort(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(selection) = self.seen.selection.clone() else {
             return;
@@ -536,8 +534,7 @@ impl ModelPicker {
     /// Save the level the slider shows.
     fn commit_effort(&mut self, cx: &mut gpui::Context<Self>) {
         self.dragging = false;
-        let (Some(fraction), Some(mut selection)) = (self.preview, self.seen.selection.clone())
-        else {
+        let (Some(fraction), Some(mut selection)) = (self.preview, self.shown()) else {
             return;
         };
         let levels = self.efforts(&selection);
@@ -555,17 +552,17 @@ impl ModelPicker {
         if self.expanded || self.seen.streaming {
             return;
         }
-        let Some(selection) = &self.seen.selection else {
+        let Some(selection) = self.shown() else {
             return;
         };
-        let levels = self.efforts(selection);
+        let levels = self.efforts(&selection);
         if levels.len() < 2 {
             return;
         }
         let index = self
             .preview
             .map(|fraction| effort_index(fraction, levels.len()))
-            .unwrap_or_else(|| self.level_index(selection, &levels));
+            .unwrap_or_else(|| self.level_index(&selection, &levels));
         let next = match key {
             "home" => 0,
             "end" => levels.len() - 1,
@@ -574,6 +571,20 @@ impl ModelPicker {
         };
         self.preview = Some(next as f32 / (levels.len() - 1) as f32);
         self.commit_effort(cx);
+    }
+
+    /// `selection` with the model it runs: one that names none runs its
+    /// service's first row, as a turn does ([`Selection::resolve`]).
+    fn resolve(&self, selection: &Selection) -> Selection {
+        match self.catalogs.get(&selection.service) {
+            Some(Ok(models)) => selection.clone().resolve(models),
+            _ => selection.clone(),
+        }
+    }
+
+    /// The thread's selection, resolved: what the card shows as chosen.
+    fn shown(&self) -> Option<Selection> {
+        self.seen.selection.as_ref().map(|s| self.resolve(s))
     }
 
     fn model(&self, selection: &Selection) -> Option<&ModelChoice> {
@@ -604,7 +615,10 @@ impl ModelPicker {
             .unwrap_or(0)
     }
 
+    /// The model's name; until its service's list lands, the model table's
+    /// name, the saved id, or the service's for a model not yet named.
     fn label(&self, selection: &Selection) -> String {
+        let selection = &self.resolve(selection);
         self.model(selection)
             .map(|model| model.label.clone())
             .or_else(|| {
@@ -613,7 +627,12 @@ impl ModelPicker {
                     .find(|model| Some(model.key) == selection.model.as_deref())
                     .map(|model| model.display.into())
             })
-            .unwrap_or_else(|| selection.model.clone().unwrap_or_else(|| "Default".into()))
+            .unwrap_or_else(|| {
+                selection
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| selection.service.label().into())
+            })
     }
 }
 
@@ -627,6 +646,7 @@ pub(crate) fn chip(
     cx: &gpui::App,
 ) -> AnyElement {
     let state = picker.read(cx);
+    let selection = &state.resolve(selection);
     let label = state.label(selection);
     let toggle = picker.clone();
     let moved = picker.clone();
@@ -680,8 +700,7 @@ impl Render for ModelPicker {
         let root = div()
             .size_0()
             .child(luma_ui::node::render_count("Picker", self.renders));
-        let (true, Some(selection), Some(anchor)) =
-            (self.open, self.seen.selection.clone(), self.anchor.get())
+        let (true, Some(selection), Some(anchor)) = (self.open, self.shown(), self.anchor.get())
         else {
             return root;
         };
@@ -1111,11 +1130,7 @@ impl ModelPicker {
         let row = self.list.get(index)?.clone();
         let chosen = row.is(selection);
         let key = row.key();
-        let wire = row
-            .model
-            .resolved_model
-            .as_deref()
-            .or(row.model.id.as_deref());
+        let wire = Some(row.model.resolved_model.as_str());
         let detail = detail(&row.model);
         let tip = match &detail {
             Some(detail) => format!("{} · {}\n{detail}", row.model.label, row.service.label()),
@@ -1381,7 +1396,7 @@ fn matches(row: &Row, query: &str) -> bool {
     let haystack = format!(
         "{} {} {}",
         row.model.label,
-        row.model.resolved_model.as_deref().unwrap_or_default(),
+        row.model.resolved_model,
         row.service.label()
     )
     .to_lowercase();
@@ -1562,9 +1577,9 @@ mod tests {
         assert_eq!(tokens(2_000_000), "2M");
         assert_eq!(tokens(262_144), "262K");
         let model = |price| ModelChoice {
-            id: Some("openai/gpt-5.6-sol".into()),
+            id: "openai/gpt-5.6-sol".into(),
             label: "GPT-5.6 Sol".into(),
-            resolved_model: Some("openai/gpt-5.6-sol".into()),
+            resolved_model: "openai/gpt-5.6-sol".into(),
             effort_levels: Vec::new(),
             context_window: Some(400_000),
             price,

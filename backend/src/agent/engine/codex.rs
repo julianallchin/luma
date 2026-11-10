@@ -410,27 +410,39 @@ async fn initialize(process: &mut Process) -> Result<(), AgentError> {
         .await
 }
 
+/// Codex's models, the one new chats start on first: the `model` the user's
+/// Codex config sets, which is what Codex runs when it is told none, else the
+/// one Codex calls its default. There is no "Default" row.
 pub(super) async fn models(
     cwd: &std::path::Path,
 ) -> Result<Vec<super::catalog::ModelChoice>, AgentError> {
     let mut process = start_process(cwd)?;
     initialize(&mut process).await?;
-    let mut models = vec![super::catalog::ModelChoice {
-        id: None,
-        label: "Default".into(),
-        resolved_model: None,
-        effort_levels: Vec::new(),
-        context_window: None,
-        price: None,
-    }];
+    let mut models = Vec::new();
+    let mut configured = None;
+    let mut recommended = None;
     loop {
         let frame = process.read().await?;
+        let id = frame.get("id").and_then(Value::as_u64);
         if let Some(error) = frame.get("error") {
-            return Err(protocol(format!("Codex: {error}")));
+            // A config that cannot be read costs only the user's default.
+            if id != Some(5) {
+                return Err(protocol(format!("Codex: {error}")));
+            }
+            log::warn!("[agent] Codex config unavailable: {error}");
         }
-        match frame.get("id").and_then(Value::as_u64) {
+        match id {
             Some(1) => {
                 process.send(json!({"method":"initialized"})).await?;
+                process
+                    .send(json!({"id":5,"method":"config/read","params":{}}))
+                    .await?;
+            }
+            Some(5) => {
+                configured = frame
+                    .pointer("/result/config/model")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 process
                     .send(json!({"id":2,"method":"model/list","params":{}}))
                     .await?;
@@ -441,10 +453,14 @@ pub(super) async fn models(
                     .and_then(Value::as_array)
                     .ok_or_else(|| protocol("Codex did not return its model catalog"))?;
                 for model in page.iter().filter(|model| model["hidden"] != true) {
+                    let id = text(model, "model")?;
+                    if model["isDefault"] == true {
+                        recommended.get_or_insert_with(|| id.clone());
+                    }
                     models.push(super::catalog::ModelChoice {
-                        id: Some(text(model, "model")?),
+                        resolved_model: id.clone(),
+                        id,
                         label: text(model, "displayName")?,
-                        resolved_model: Some(text(model, "model")?),
                         effort_levels: model["supportedReasoningEfforts"]
                             .as_array()
                             .into_iter()
@@ -456,19 +472,6 @@ pub(super) async fn models(
                         price: None,
                     });
                 }
-                if let Some(default) = page.iter().find(|model| model["isDefault"] == true) {
-                    if let Some(choice) = models
-                        .iter()
-                        .find(|choice| choice.id.as_deref() == default["model"].as_str())
-                        .cloned()
-                    {
-                        models[0] = super::catalog::ModelChoice {
-                            id: None,
-                            label: format!("Default · {}", choice.label),
-                            ..choice
-                        };
-                    }
-                }
                 if let Some(cursor) = frame.pointer("/result/nextCursor").and_then(Value::as_str) {
                     process
                         .send(json!({"id":2,"method":"model/list","params":{"cursor":cursor}}))
@@ -479,22 +482,31 @@ pub(super) async fn models(
                     match windows(cwd).await {
                         Ok(windows) => {
                             for model in &mut models {
-                                model.context_window = model
-                                    .resolved_model
-                                    .as_deref()
-                                    .and_then(|id| windows.get(id))
-                                    .copied();
+                                model.context_window = windows.get(&model.id).copied();
                             }
                         }
                         Err(error) => {
                             log::warn!("[agent] Codex model windows unavailable: {error}");
                         }
                     }
+                    first(&mut models, [configured, recommended]);
                     return Ok(models);
                 }
             }
             _ => {}
         }
+    }
+}
+
+/// Move the first of `defaults` that `models` lists to the top.
+fn first(models: &mut Vec<super::catalog::ModelChoice>, defaults: [Option<String>; 2]) {
+    let at = defaults
+        .iter()
+        .flatten()
+        .find_map(|id| models.iter().position(|model| &model.id == id));
+    if let Some(at) = at {
+        let model = models.remove(at);
+        models.insert(0, model);
     }
 }
 
@@ -560,6 +572,37 @@ pub(super) fn reply_frame(id: Value, outcome: ToolOutcome) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The user's configured model leads, else Codex's own default; one the
+    /// list lacks is passed over. Reordering drops no row.
+    #[test]
+    fn the_users_codex_model_leads_the_list() {
+        let list = || -> Vec<_> {
+            ["listed-first", "recommended", "configured"]
+                .map(|id| super::super::catalog::ModelChoice {
+                    id: id.into(),
+                    label: id.into(),
+                    resolved_model: id.into(),
+                    effort_levels: Vec::new(),
+                    context_window: None,
+                    price: None,
+                })
+                .into()
+        };
+        let lead = |defaults: [Option<&str>; 2]| {
+            let mut models = list();
+            first(&mut models, defaults.map(|d| d.map(str::to_string)));
+            assert_eq!(models.len(), list().len());
+            models[0].id.clone()
+        };
+        assert_eq!(
+            lead([Some("configured"), Some("recommended")]),
+            "configured"
+        );
+        assert_eq!(lead([None, Some("recommended")]), "recommended");
+        assert_eq!(lead([Some("unlisted"), Some("recommended")]), "recommended");
+        assert_eq!(lead([None, None]), "listed-first");
+    }
 
     /// The picker's Codex window is the one a turn reports: 272,000 at 95%
     /// is 258,400. A model with no window gets none.
