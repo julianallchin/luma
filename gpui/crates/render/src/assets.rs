@@ -27,6 +27,7 @@ pub struct Library {
     environments: HashMap<String, HdrImage>,
     procedural: HashMap<String, MeshData>,
     floors: HashMap<(String, bool), crate::floor::Maps>,
+    footprints: HashMap<[u32; 2], crate::panel::Footprint>,
 }
 
 impl Library {
@@ -39,7 +40,20 @@ impl Library {
             environments: HashMap::new(),
             procedural: HashMap::new(),
             floors: HashMap::new(),
+            footprints: HashMap::new(),
         }
+    }
+
+    /// The footprint of a beam with these edges
+    /// ([`crate::panel::Footprint::of`]), worked out once. A rig's faces
+    /// share a handful of beams, and the table behind one is thousands of
+    /// samples of the profile: a venue of sixty bars spent 3 ms of every
+    /// frame's build on theirs.
+    pub(crate) fn footprint(&mut self, cos_beam: f32, cos_field: f32) -> crate::panel::Footprint {
+        self.footprints
+            .entry([cos_beam.to_bits(), cos_field.to_bits()])
+            .or_insert_with(|| crate::panel::Footprint::of(cos_beam, cos_field))
+            .clone()
     }
 
     /// Generated geometry under a key that already names every parameter

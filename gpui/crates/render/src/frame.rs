@@ -11,7 +11,7 @@ use glam::{Mat4, Vec2, Vec3};
 
 use crate::assets::{HdrImage, Library};
 use crate::overlay::Overlay;
-use crate::panel::{Footprint, Panel};
+use crate::panel::Panel;
 use crate::scene_desc::{Geometry, PrimitiveState, Scene};
 use luma_scene::coords::{three_pose_from_data, three_to_world_basis, world_from_three};
 use luma_scene::definition::Definition;
@@ -1064,7 +1064,7 @@ pub fn build_at(
             // it leaves the middle of them, through an opening that holds
             // them all.
             let faces = luma_scene::library::faces(built);
-            let footprint = Footprint::of(luminaire.cos_beam, luminaire.cos_field);
+            let footprint = lib.footprint(luminaire.cos_beam, luminaire.cos_field);
             let count = faces
                 .iter()
                 .map(|face| face.cells.len())
