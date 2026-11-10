@@ -47,7 +47,8 @@ use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::{ladder, mark, pill, Enabled};
 
-use crate::{chrome, keymap, Luma};
+use crate::workspace::{self, Modes};
+use crate::{background_work, chrome, keymap, sync_status, Luma};
 
 /// What Supabase mails. Anything longer is a paste of something else.
 const CODE_LENGTH: usize = 6;
@@ -179,11 +180,18 @@ impl SignIn {
 // a submit is a `Library` call and a screen transition, and `Luma` owns both.
 
 impl Luma {
-    /// Show the sign-in screen. Whatever the shell was showing stays in state
-    /// and comes back untouched when the screen leaves — except any dialog,
-    /// which goes now rather than animating out later over a shell the user
-    /// has not looked at since, and the settings page, whose Account section
-    /// is the one route here besides the venue menu.
+    /// Show the sign-in screen, in place of the shell, and let go of
+    /// everything the shell holds: whoever signs in next starts from an empty
+    /// one, so nothing of one account's is on screen, within reach, or still
+    /// running under another. The same account coming back is restored the
+    /// way a launch is, from what this device saved.
+    ///
+    /// Every route here: a launch with nobody signed in ([`Luma::new`]); a
+    /// launch whose stored session could not be renewed
+    /// ([`Luma::refresh_session`] on a refusal, and "Sign in again" when the
+    /// network would not say); a session revoked while the app runs
+    /// ([`Luma::watch_session`]); and a sign-out, from Settings' Account
+    /// section or the venue menu. Only the last two arrive holding anything.
     ///
     /// `expired` is why: a session this machine held stopped proving anyone,
     /// as opposed to a sign-out or a first launch.
@@ -191,6 +199,24 @@ impl Luma {
         if self.sign_in.is_some() {
             return;
         }
+        // Every body in every venue, through its own exit rites; then the
+        // venues' parked modes, and the venue itself.
+        self.close_bodies_where(|_| false, cx);
+        self.workspace = Modes::default();
+        self.venues = workspace::Venues::default();
+        self.songs = None;
+        self.visualizer = None;
+        self.agent_stale.clear();
+        // A turn belongs to its thread, not to the body that showed it, so
+        // closing the bodies stopped none. Dropping the registry does.
+        let (running, heard) = Self::running_turns(cx);
+        self.running = running;
+        self._running = heard;
+        self.stop_source_preview(cx);
+        self.track_import = None;
+        // The status bar's two reports are read again within a second.
+        self.sync_status = sync_status::SyncState::default();
+        self.background = background_work::BackgroundState::default();
         // The gate is the whole window: nothing the shell was floating gets
         // to play its exit over a shell that is no longer rendered.
         self.overlay = luma_ui::dialog::Popup::default();

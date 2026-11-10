@@ -79,7 +79,13 @@ impl Library {
         email: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         let email = email.to_owned();
-        self.call("send_login_code", |services| async move {
+        #[cfg(feature = "agent")]
+        let fixture = self.sign_in_fixture.is_some();
+        self.call("send_login_code", move |services| async move {
+            #[cfg(feature = "agent")]
+            if fixture {
+                return Ok(());
+            }
             handlers::auth::send_login_code(&services, email).await
         })
     }
@@ -97,7 +103,13 @@ impl Library {
         code: &str,
     ) -> impl Future<Output = Result<String, LibraryError>> + use<> {
         let (asked, code) = (email.to_owned(), code.to_owned());
-        let pending = self.call("verify_login_code", |services| async move {
+        #[cfg(feature = "agent")]
+        let fixture = self.sign_in_fixture.clone();
+        let pending = self.call("verify_login_code", move |services| async move {
+            #[cfg(feature = "agent")]
+            if let Some(fixture) = fixture {
+                return fixture(services, asked).await.map_err(Into::into);
+            }
             handlers::auth::verify_login_code(&services, asked, code).await
         });
         let cache = Arc::clone(&self.account);
