@@ -551,7 +551,8 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                                             // this level can hold.
                                             if window_active {
                                                 stage.dynamic.observe(
-                                                    completed.draw_ms,
+                                                    stage.last_work.total_ms() + completed.draw_ms,
+                                                    stage.last_gpu_ms,
                                                     key_controls.quality.frame_rate(),
                                                 );
                                             }

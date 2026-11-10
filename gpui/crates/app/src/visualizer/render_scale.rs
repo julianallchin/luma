@@ -13,40 +13,56 @@ use super::*;
 /// stays native.
 const RENDER_BUDGET_PIXELS: f64 = 2227.0 * 1391.0;
 
+/// The fewest pixels a level's frame rate leaves a stage that has more: what
+/// the reduced levels render (`QualityBudget::pixel_budget`). Under it beams
+/// and edges are visibly stepped once the compositor has scaled them up, so
+/// a level already there, or a small window, has none to give.
+const LEAST_PIXELS: f64 = 1.0e6;
+
 /// A quality level's dynamic resolution: the share of its pixels the stage
 /// renders, driven by how long its frames take against the frame rate the
 /// level holds.
 ///
-/// A frame's time is from its submission to its completion, since one frame
-/// is in flight at a time and a frame that is not home by the refresh it was
-/// meant for is shown a whole refresh late. So the stage keeps clear of the
-/// time a frame is allowed: a second of frames that use more than
-/// [`Self::LATE`] of it take pixels away, as many as the overrun calls for,
-/// and two seconds of frames under [`Self::EARLY`] of it give a tenth back.
-/// A second, so that a venue loading or a window coming forward costs
-/// nothing. Between the two nothing moves, and a step either way lands there,
-/// because a resize discards the haze caches and a size that hunts would
-/// never settle. A quarter of the pixels is the floor.
+/// A frame's time is from the start of its build on the UI thread to its
+/// completion, since one frame is in flight at a time and a frame that is not
+/// home by the refresh it was meant for is shown a whole refresh late. Of
+/// that time only the GPU's own scales with the pixels; the rest (the score,
+/// the build, the encode, the wait for the GPU) is the same at any size.
 ///
-/// Pixels are only given up while they are what the frame waits on. A step
-/// that buys less than [`Self::WORTH`] of what its pixels would, were the
-/// whole frame's time theirs, is taken back, and frames that slow at that
-/// size are left alone after it.
+/// So the stage keeps clear of the time a frame is allowed: a second of
+/// frames that use more than [`Self::LATE`] of it take away the pixels that
+/// bring the frame to [`Self::AIM`] of it, by the GPU's time, and two
+/// seconds of frames that would still be within the aim with a tenth more
+/// pixels get that tenth back. A second, so that a venue loading or a window
+/// coming forward costs nothing. Between the two nothing moves, because a
+/// resize discards the haze caches and a size that hunts would never settle.
+/// A quarter of the pixels is the floor.
+///
+/// Pixels are only given up while they are what the frame waits on. A late
+/// frame whose GPU time is under [`Self::WORTH`] of it keeps them all, since
+/// no size would bring it home. And the GPU's time is not all its pixels': a
+/// rig of hundreds of lights costs much the same at any size. So a step that
+/// takes less than [`Self::WORTH`] of the GPU's time for the pixels it gave
+/// up is taken back, and frames that slow at that size are left alone after
+/// it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct DynamicBudget {
     factor: f64,
-    /// Late frames in a row, and their time together.
+    /// Late frames in a row, with their time and their GPU time together.
     late: u32,
     late_ms: f32,
-    /// Early frames in a row.
-    early: u32,
+    late_gpu_ms: f32,
+    /// Frames since the stage last looked at giving pixels back, and how many
+    /// of them had room for more.
+    seen: u32,
+    roomy: u32,
     /// Frames still to pass over after a step: those already in flight at
     /// the old size, and the first at the new one, which rebuild caches.
     settling: u32,
-    /// The share and the late frames' mean time the last step down started
-    /// from, while nothing but late frames has followed it.
+    /// The share and the late frames' mean GPU time the last step down
+    /// started from, while nothing but late frames has followed it.
     stepped: Option<(f64, f32)>,
-    /// The share and mean frame time at which fewer pixels bought nothing.
+    /// The share and mean GPU time at which fewer pixels bought nothing.
     futile: Option<(f64, f32)>,
 }
 
@@ -56,7 +72,9 @@ impl Default for DynamicBudget {
             factor: 1.0,
             late: 0,
             late_ms: 0.0,
-            early: 0,
+            late_gpu_ms: 0.0,
+            seen: 0,
+            roomy: 0,
             settling: 0,
             stepped: None,
             futile: None,
@@ -65,16 +83,20 @@ impl Default for DynamicBudget {
 }
 
 impl DynamicBudget {
-    /// The share of a frame's allowed time past which it counts as late,
-    /// under which it counts as early, and that a step down aims for.
+    /// The share of a frame's allowed time past which it counts as late, and
+    /// that a step either way aims for.
     const LATE: f32 = 0.9;
-    const EARLY: f32 = 0.65;
     const AIM: f32 = 0.8;
-    /// The least of a frame's time its pixels may account for, for giving
-    /// some up to be worth it.
+    /// The least of a late frame's time the GPU may account for, and the
+    /// least of the GPU's time its pixels may, for giving some up to be worth
+    /// it.
     const WORTH: f32 = 0.3;
     /// The fewest pixels kept, as a share.
     const FLOOR: f64 = 0.25;
+    /// What a step up gives back, and the share of two seconds' frames that
+    /// must have room for it: a stray slow frame does not hold the rest down.
+    const BACK: f32 = 0.1;
+    const MOST: f32 = 0.9;
     /// Frames passed over after a step.
     const SETTLE: u32 = 6;
 
@@ -82,9 +104,10 @@ impl DynamicBudget {
         self.factor
     }
 
-    /// One delivered frame took `frame_ms` from submission to completion, at
-    /// a level that holds `rate` frames a second.
-    pub(super) fn observe(&mut self, frame_ms: f32, rate: f32) {
+    /// One delivered frame took `frame_ms` from the start of its build to
+    /// its completion, `gpu_ms` of it on the GPU where that is known, at a
+    /// level that holds `rate` frames a second.
+    pub(super) fn observe(&mut self, frame_ms: f32, gpu_ms: Option<f32>, rate: f32) {
         if !frame_ms.is_finite() || rate <= 0.0 {
             return;
         }
@@ -93,42 +116,51 @@ impl DynamicBudget {
             return;
         }
         let allowed = 1_000.0 / rate;
+        // The part of the frame its pixels account for: all of it, for
+        // giving pixels back, until the GPU's time is known.
+        let pixels_ms = gpu_ms.map_or(frame_ms, |gpu| gpu.clamp(0.0, frame_ms));
         if frame_ms > allowed * Self::LATE {
             self.late += 1;
             self.late_ms += frame_ms;
-            self.early = 0;
+            self.late_gpu_ms += gpu_ms.map_or(0.0, |gpu| gpu.clamp(0.0, frame_ms));
         } else {
-            (self.late, self.late_ms, self.stepped) = (0, 0.0, None);
-            self.early = if frame_ms < allowed * Self::EARLY {
-                self.early + 1
-            } else {
-                0
-            };
+            (self.late, self.late_ms, self.late_gpu_ms) = (0, 0.0, 0.0);
+            self.stepped = None;
         }
+        self.seen += 1;
+        self.roomy += u32::from(frame_ms + pixels_ms * Self::BACK <= allowed * Self::AIM);
         // Counted in frames at the level's own rate: late frames come
         // slower than that, so this is a second at the least.
         if self.late as f32 >= rate {
-            let mean = self.late_ms / self.late as f32;
-            (self.late, self.late_ms) = (0, 0.0);
-            self.late_run(mean, allowed);
-        } else if self.early as f32 >= rate * 2.0 {
-            self.early = 0;
-            self.resize((self.factor * 1.1).min(1.0));
+            let (mean, gpu) = (
+                self.late_ms / self.late as f32,
+                self.late_gpu_ms / self.late as f32,
+            );
+            (self.late, self.late_ms, self.late_gpu_ms) = (0, 0.0, 0.0);
+            self.late_run(mean, gpu, allowed);
+        }
+        if self.seen as f32 >= rate * 2.0 {
+            let most = self.roomy as f32 >= self.seen as f32 * Self::MOST;
+            (self.seen, self.roomy) = (0, 0);
+            if most {
+                self.resize((self.factor * f64::from(1.0 + Self::BACK)).min(1.0));
+            }
         }
     }
 
-    /// A run of late frames, `mean` milliseconds each.
-    fn late_run(&mut self, mean: f32, allowed: f32) {
+    /// A run of late frames, `mean` milliseconds each, `gpu` of them on the
+    /// GPU.
+    fn late_run(&mut self, mean: f32, gpu: f32, allowed: f32) {
         let same =
-            |(share, time): (f64, f32)| share == self.factor && (mean / time - 1.0).abs() < 0.2;
-        if self.futile.is_some_and(same) {
+            |(share, time): (f64, f32)| share == self.factor && (gpu / time - 1.0).abs() < 0.2;
+        if gpu < mean * Self::WORTH || self.futile.is_some_and(same) {
             return;
         }
         self.futile = None;
         if let Some((share, before)) = self.stepped.take() {
-            // What the step bought, against what it would have were the
-            // whole frame's time its pixels'.
-            let bought = (before - mean) / before;
+            // What the step took off the GPU's time, against what it would
+            // have were all of that time its pixels'.
+            let bought = (before - gpu) / before;
             let gave = (1.0 - self.factor / share) as f32;
             if bought < Self::WORTH * gave {
                 self.futile = Some((share, before));
@@ -136,13 +168,14 @@ impl DynamicBudget {
                 return;
             }
         }
-        // A frame's time goes with its pixels at most, so this many fewer
-        // bring the mean late frame to the aim or short of it.
-        let keep = (allowed * Self::AIM / mean).clamp(0.5, 0.8);
+        // The GPU's time goes with the pixels and the rest stays, so this
+        // share of them brings the mean late frame to the aim. No more than
+        // half go at once: the estimate is of the size it was measured at.
+        let keep = ((allowed * Self::AIM - (mean - gpu)) / gpu).clamp(0.5, 0.9);
         let from = self.factor;
         self.resize((from * f64::from(keep)).max(Self::FLOOR));
         if self.factor != from {
-            self.stepped = Some((from, mean));
+            self.stepped = Some((from, gpu));
         }
     }
 
@@ -150,6 +183,7 @@ impl DynamicBudget {
         if factor != self.factor {
             self.factor = factor;
             self.settling = Self::SETTLE;
+            (self.seen, self.roomy) = (0, 0);
         }
     }
 }
@@ -218,9 +252,8 @@ impl RenderScale {
     /// 4K window because `LUMA_RENDER_BUDGET=off` was set for a desktop.
     ///
     /// `share` is the part of those pixels the level's frame rate leaves it
-    /// ([`DynamicBudget::factor`]), whatever the size of the element: a small
-    /// window whose frames are late gives up pixels too. A fixed scale stays
-    /// fixed.
+    /// ([`DynamicBudget::factor`]), down to [`LEAST_PIXELS`]: a stage with no
+    /// more than that keeps them all. A fixed scale stays fixed.
     pub(super) fn size(
         self,
         percent: u8,
@@ -237,7 +270,9 @@ impl RenderScale {
         let env = limit.map_or(env, |pixels| env.min((pixels / area).sqrt()));
         let env = match self {
             Self::Fixed(_) => env,
-            Self::Native | Self::Budget => env * share.sqrt(),
+            Self::Native | Self::Budget => {
+                (env * share.sqrt()).max(env.min((LEAST_PIXELS / area).sqrt()))
+            }
         };
         let scale = env * f64::from(clamp_render_scale(i64::from(percent))) / 100.0;
         let fit = |side: u32| ((f64::from(side) * scale).round() as u32).clamp(1, side.max(1));
@@ -276,8 +311,9 @@ mod render_scale_tests {
         let (mut times, mut steps) = (Vec::new(), 0);
         for _ in 0..frames {
             let before = budget.factor();
-            let time = fixed + full * before as f32;
-            budget.observe(time, rate);
+            let gpu = full * before as f32;
+            let time = fixed + gpu;
+            budget.observe(time, Some(gpu), rate);
             steps += u32::from(budget.factor() != before);
             times.push(time);
         }
@@ -318,7 +354,7 @@ mod render_scale_tests {
         let (_, steps) = run(&mut budget, (2.0, 3.0), 120.0, 10_000);
         assert_eq!((steps, budget.factor()), (0, 1.0));
         for _ in 0..50 {
-            budget.observe(400.0, 120.0);
+            budget.observe(400.0, Some(3.0), 120.0);
             run(&mut budget, (2.0, 3.0), 120.0, 500);
         }
         assert_eq!(budget.factor(), 1.0);
@@ -342,35 +378,89 @@ mod render_scale_tests {
     }
 
     /// Frames that are late for something other than their pixels keep
-    /// them: the one step that bought nothing is taken back, and frames
-    /// that slow are left alone after it.
+    /// every one of them, however long that goes on.
     #[test]
     fn frames_that_do_not_wait_on_their_pixels_keep_them() {
         let mut budget = DynamicBudget::default();
-        let (_, steps) = run(&mut budget, (40.0, 4.0), 30.0, 2_000);
-        assert_eq!(budget.factor(), 1.0);
-        assert!(steps <= 2, "{steps} changes of size");
         let (_, steps) = run(&mut budget, (40.0, 4.0), 30.0, 200_000);
+        assert_eq!((steps, budget.factor()), (0, 1.0));
+        // Low at 120: a frame the UI thread and the encode hold up.
+        let (_, steps) = run(&mut budget, (7.5, 1.7), 120.0, 200_000);
         assert_eq!((steps, budget.factor()), (0, 1.0));
         // A heavier load that is its pixels' is another matter.
         run(&mut budget, (40.0, 400.0), 30.0, 2_000);
         assert!(budget.factor() < 1.0);
     }
 
-    /// The level's share takes pixels from a window of any size, at its own
-    /// aspect; a fixed scale stays fixed.
+    /// A rig whose GPU time is its lights', not its pixels', keeps its
+    /// pixels: the one step that bought nothing is taken back and not tried
+    /// again.
     #[test]
-    fn a_share_of_the_pixels_applies_to_a_small_window_too() {
+    fn gpu_time_that_does_not_fall_with_the_pixels_keeps_them() {
+        let mut budget = DynamicBudget::default();
+        let mut steps = 0;
+        for frame in 0..200_000 {
+            let before = budget.factor();
+            // 5.5 ms of the GPU's time is the same at any size.
+            let gpu = 5.5 + 0.5 * before as f32;
+            budget.observe(5.0 + gpu, Some(gpu), 120.0);
+            steps += u32::from(budget.factor() != before);
+            if frame == 2_000 {
+                assert!(steps <= 2, "{steps} changes of size");
+            }
+        }
+        assert_eq!((steps <= 2, budget.factor()), (true, 1.0));
+    }
+
+    /// Pixels a rough patch took come back once it is over, though a frame
+    /// in twenty still runs long.
+    #[test]
+    fn pixels_come_back_through_the_odd_slow_frame() {
+        let mut budget = DynamicBudget::default();
+        run(&mut budget, (2.0, 30.0), 120.0, 2_000);
+        let cut = budget.factor();
+        assert!(cut < 1.0);
+        for frame in 0..20_000 {
+            let gpu = 2.0 * budget.factor() as f32;
+            let stray = if frame % 20 == 0 { 6.0 } else { 0.0 };
+            budget.observe(3.0 + gpu + stray, Some(gpu), 120.0);
+        }
+        assert_eq!(budget.factor(), 1.0, "from {cut}");
+    }
+
+    /// Before the GPU's time is known nothing is taken away.
+    #[test]
+    fn nothing_is_given_up_before_the_gpu_time_is_known() {
+        let mut budget = DynamicBudget::default();
+        for _ in 0..5_000 {
+            budget.observe(50.0, None, 60.0);
+        }
+        assert_eq!(budget.factor(), 1.0);
+    }
+
+    /// The level's share takes pixels from a stage at its own aspect, down
+    /// to the fewest worth showing; a stage with no more than that keeps
+    /// them, and a fixed scale stays fixed.
+    #[test]
+    fn a_share_takes_pixels_down_to_the_fewest_worth_showing() {
+        let pixels = |(w, h): (u32, u32)| f64::from(w) * f64::from(h);
         for scale in [RenderScale::Budget, RenderScale::Native] {
-            let whole = scale.size(FULL, Some(1.0e6), 1.0, (800, 600));
-            let half = scale.size(FULL, Some(1.0e6), 0.5, (800, 600));
-            let pixels = |(w, h): (u32, u32)| f64::from(w) * f64::from(h);
-            assert_eq!(whole, (800, 600));
+            let whole = scale.size(FULL, Some(3.0e6), 1.0, (3000, 2000));
+            let half = scale.size(FULL, Some(3.0e6), 0.5, (3000, 2000));
             assert!(
                 (pixels(half) / pixels(whole) - 0.5).abs() < 0.01,
                 "{half:?}"
             );
-            assert!((f64::from(half.0) / f64::from(half.1) - 800.0 / 600.0).abs() < 0.01);
+            assert!((f64::from(half.0) / f64::from(half.1) - 1.5).abs() < 0.01);
+            // A quarter would be fewer than the reduced levels render.
+            let least = scale.size(FULL, Some(3.0e6), 0.25, (3000, 2000));
+            assert!((pixels(least) / 1.0e6 - 1.0).abs() < 0.01, "{least:?}");
+            // A level at its own million, and a small window, have none to give.
+            assert_eq!(
+                scale.size(FULL, Some(1.0e6), 0.5, (3000, 2000)),
+                scale.size(FULL, Some(1.0e6), 1.0, (3000, 2000))
+            );
+            assert_eq!(scale.size(FULL, Some(1.0e6), 0.5, (800, 600)), (800, 600));
         }
         assert_eq!(
             RenderScale::Fixed(0.5).size(FULL, None, 0.5, (800, 600)),
