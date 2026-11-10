@@ -198,7 +198,7 @@ pub type CodeHighlight<'a> = Option<&'a HighlightedCode>;
 
 /// Render a whole tree stacked with the md block gap.
 ///
-/// `highlighter` is asked only about fenced blocks; [`crate::NoHighlight`]
+/// `highlighter` is asked only about fenced blocks; one that answers `None`
 /// paints them plain, and the layout is identical either way.
 pub fn render_tree(
     tree: &BlockTree,

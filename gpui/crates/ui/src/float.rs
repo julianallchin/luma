@@ -785,24 +785,6 @@ pub fn segment(
     }
 }
 
-/// A [`segmented`] track as a capsule, for a one-of-N switch that stands
-/// alone in a head band rather than in a row of fields: alone, its ends are
-/// its whole outline, and round ends say "switch" where a box says "field".
-/// Build its cells with [`pill_segment`] — a square cell in a round track
-/// leaves a notch of the track showing at each end.
-pub fn pill_segmented() -> Div {
-    segmented().rounded_full()
-}
-
-/// One cell of a [`pill_segmented`] track: [`segment`], rounded to match.
-pub fn pill_segment(
-    label_text: impl Into<SharedString>,
-    chosen: bool,
-    fade_key: impl Into<SharedString>,
-) -> Div {
-    segment(label_text, chosen, fade_key).rounded_full()
-}
-
 /// An on/off switch: a rounded track with a knob. `on` runs from 0 (off) to
 /// 1 (on), so a caller can pass a value that animates between the two.
 ///
@@ -1006,8 +988,8 @@ const SCRUB_FILL: f32 = 0.07;
 
 /// The padded column a popover's rows sit in: a menu's, a select's, a
 /// picker's. Layout only — the surface under it is [`frosted_card`], which
-/// every anchored host already draws, so a combo box or any other content
-/// that wants its edges flush skips this and gets the same card.
+/// every anchored host already draws, so content that wants its edges flush
+/// skips this and gets the same card.
 pub fn popover_card() -> Div {
     div()
         .flex()
@@ -1023,8 +1005,8 @@ pub fn popover_card() -> Div {
 /// a notice, a drag ghost) calls it directly.
 ///
 /// The rim is painted over the content and takes no layout, so a width set
-/// on the content is the card's width, and content that runs to the edge —
-/// a combo box's header band — still gets an edge.
+/// on the content is the card's width, and content that runs to the edge
+/// still gets an edge.
 ///
 /// It sets its own text colour. A popover is often a child of its trigger,
 /// and a light chip would otherwise give it its dark ink.
@@ -1299,26 +1281,7 @@ pub fn anchored_at(
     dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    at_point(id, at, content, Phase::Open(dismiss))
-}
-
-/// [`anchored_at`] while its exit plays, `progress` from 0 to 1.
-pub fn anchored_at_closing(
-    id: impl Into<SharedString>,
-    at: gpui::Point<gpui::Pixels>,
-    content: AnyElement,
-    progress: f32,
-) -> AnyElement {
-    at_point(id, at, content, Phase::Closing(progress))
-}
-
-fn at_point(
-    id: impl Into<SharedString>,
-    at: gpui::Point<gpui::Pixels>,
-    content: AnyElement,
-    phase: Phase,
-) -> AnyElement {
-    let (card, closing) = card(content, phase);
+    let (card, closing) = card(content, Phase::Open(dismiss));
     lift(
         id.into(),
         gpui::anchored()

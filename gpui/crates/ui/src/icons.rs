@@ -26,15 +26,11 @@ pub enum IconName {
     Minimize,
     Minus,
     Music,
-    Cpu,
     Network,
     PanelLeft,
-    PanelRight,
     Pause,
     Play,
     Plus,
-    SquareTerminal,
-    Stage,
     Search,
     ThumbsUp,
     ThumbsDown,
@@ -42,7 +38,6 @@ pub enum IconName {
     User,
     RotateLeft,
     RotateRight,
-    Sliders,
 }
 
 impl IconNamed for IconName {
@@ -69,15 +64,11 @@ impl IconNamed for IconName {
             Self::Minimize => "nucleo/minimize.svg".into(),
             Self::Minus => "nucleo/minus.svg".into(),
             Self::Music => "nucleo/music-note.svg".into(),
-            Self::Cpu => "nucleo/microchip.svg".into(),
             Self::Network => "nucleo/nodes.svg".into(),
             Self::PanelLeft => "nucleo/sidebar-left.svg".into(),
-            Self::PanelRight => "nucleo/sidebar-right.svg".into(),
             Self::Pause => "nucleo/media-pause.svg".into(),
             Self::Play => "nucleo/media-play.svg".into(),
             Self::Plus => "nucleo/plus.svg".into(),
-            Self::SquareTerminal => "nucleo/square-terminal.svg".into(),
-            Self::Stage => "nucleo/stage.svg".into(),
             Self::Search => "nucleo/magnifier.svg".into(),
             Self::ThumbsDown => "nucleo/thumbs-down.svg".into(),
             Self::ThumbsUp => "nucleo/thumbs-up.svg".into(),
@@ -85,7 +76,6 @@ impl IconNamed for IconName {
             Self::User => "nucleo/user.svg".into(),
             Self::RotateLeft => "nucleo/arrow-rotate-anticlockwise.svg".into(),
             Self::RotateRight => "nucleo/arrow-rotate-clockwise.svg".into(),
-            Self::Sliders => "nucleo/sliders-vertical.svg".into(),
         }
     }
 }
@@ -101,10 +91,6 @@ impl AssetSource for Assets {
             "nucleo/expand.svg" => Some(include_bytes!("../assets/nucleo/expand.svg")),
             "nucleo/minimize.svg" => Some(include_bytes!("../assets/nucleo/minimize.svg")),
             "nucleo/minus.svg" => Some(include_bytes!("../assets/nucleo/minus.svg")),
-            "nucleo/stage.svg" => Some(include_bytes!("../assets/nucleo/stage.svg")),
-            "nucleo/sliders-vertical.svg" => {
-                Some(include_bytes!("../assets/nucleo/sliders-vertical.svg"))
-            }
             "nucleo/magnifier.svg" => Some(include_bytes!("../assets/nucleo/magnifier.svg")),
             "nucleo/gear.svg" => Some(include_bytes!("../assets/nucleo/gear.svg")),
             "nucleo/folder.svg" => Some(include_bytes!("../assets/nucleo/folder.svg")),
@@ -152,9 +138,6 @@ impl AssetSource for Assets {
             "nucleo/media-play.svg" | "icons/play.svg" => {
                 Some(include_bytes!("../assets/nucleo/media-play.svg"))
             }
-            "nucleo/microchip.svg" | "icons/cpu.svg" => {
-                Some(include_bytes!("../assets/nucleo/microchip.svg"))
-            }
             "nucleo/nodes.svg" | "icons/network.svg" => {
                 Some(include_bytes!("../assets/nucleo/nodes.svg"))
             }
@@ -166,12 +149,6 @@ impl AssetSource for Assets {
             }
             "nucleo/sidebar-left.svg" | "icons/panel-left.svg" => {
                 Some(include_bytes!("../assets/nucleo/sidebar-left.svg"))
-            }
-            "nucleo/sidebar-right.svg" | "icons/panel-right.svg" => {
-                Some(include_bytes!("../assets/nucleo/sidebar-right.svg"))
-            }
-            "nucleo/square-terminal.svg" | "icons/square-terminal.svg" => {
-                Some(include_bytes!("../assets/nucleo/square-terminal.svg"))
             }
             "nucleo/undo.svg" | "icons/undo-2.svg" => {
                 Some(include_bytes!("../assets/nucleo/undo.svg"))
@@ -212,7 +189,6 @@ impl AssetSource for Assets {
                 "nucleo/keyboard.svg",
                 "nucleo/media-pause.svg",
                 "nucleo/media-play.svg",
-                "nucleo/microchip.svg",
                 "nucleo/minimize.svg",
                 "nucleo/minus.svg",
                 "nucleo/music-note.svg",
@@ -220,9 +196,6 @@ impl AssetSource for Assets {
                 "nucleo/plus.svg",
                 "nucleo/robot.svg",
                 "nucleo/sidebar-left.svg",
-                "nucleo/sidebar-right.svg",
-                "nucleo/sliders-vertical.svg",
-                "nucleo/square-terminal.svg",
                 "nucleo/thumbs-up.svg",
                 "nucleo/thumbs-down.svg",
                 "nucleo/undo.svg",

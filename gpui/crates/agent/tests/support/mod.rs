@@ -9,14 +9,10 @@
 use std::path::{Path, PathBuf};
 
 use luma_ui::runtime::Runtime;
-use serde_json::{json, Value};
 
 // Each binary uses a different subset.
 #[allow(unused_imports)]
-pub use gpui_agent::fixture::{
-    config_dir, seeded_prompt, wav, Clip, Fixture, MOVER_PATH, SKEW_DEPTH_M, TRACK, TRACK_NAME,
-    VENUE, VENUE_NAME,
-};
+pub use gpui_agent::fixture::{config_dir, wav, Fixture, TRACK_NAME, VENUE_NAME};
 
 #[allow(unused_imports)] // each binary uses a different subset
 pub use gpui_agent::{NAV, UNTIL};
@@ -112,34 +108,6 @@ pub fn runtime(config_dir: impl Into<PathBuf>) -> Runtime {
         reduced_motion: true,
         ..Runtime::default()
     }
-}
-
-/// A whole score document from clips spelled by the caller.
-#[must_use]
-pub fn score(clips: Value) -> Value {
-    json!({ "clips": clips })
-}
-
-/// The score the fixture seeded, read back from its `scores` and `clips` rows
-/// as the `luma_patterns::Score` they load into.
-pub async fn stored_score(dir: &Path) -> luma_patterns::Score {
-    let pool = sqlx::SqlitePool::connect(&format!(
-        "sqlite:{}",
-        gpui_agent::fixture::library_db(dir).display()
-    ))
-    .await
-    .expect("open the fixture library");
-    let id: String = sqlx::query_scalar("SELECT score_id FROM clips LIMIT 1")
-        .fetch_one(&pool)
-        .await
-        .expect("the fixture seeded a score with something in it");
-    let mut connection = pool.acquire().await.expect("a connection");
-    let score = luma_lib::database::local::scores::rows::load_score(&mut connection, &id)
-        .await
-        .expect("load the seeded score");
-    drop(connection);
-    pool.close().await;
-    score
 }
 
 #[cfg(feature = "pixel")]
