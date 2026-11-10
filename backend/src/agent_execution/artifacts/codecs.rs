@@ -158,16 +158,6 @@ pub fn write_npy_f32(path: &Path, data: &[f32], shape: &[usize]) -> Result<u64> 
     })
 }
 
-/// Write a C-order v1.0 `.npy`, returning the total byte length.
-pub fn write_npy_f64(path: &Path, data: &[f64], shape: &[usize]) -> Result<u64> {
-    write_npy(path, DType::F64, shape, data.len(), |w| {
-        for v in data {
-            w.write_all(&v.to_le_bytes())?;
-        }
-        Ok(())
-    })
-}
-
 fn write_npy<F>(
     path: &Path,
     dtype: DType,
@@ -347,11 +337,14 @@ mod tests {
     }
 
     #[test]
-    fn npy_round_trips_f64_2d() {
+    fn npy_header_reads_f64_2d() {
         let d = dir();
         let p = d.path().join("a.npy");
-        let data: Vec<f64> = (0..6).map(|i| i as f64).collect();
-        write_npy_f64(&p, &data, &[2, 3]).unwrap();
+        write_raw_npy(
+            &p,
+            "{'descr': '<f8', 'fortran_order': False, 'shape': (2, 3), }\n",
+            &[0u8; 48],
+        );
         let h = read_npy_header(&p).unwrap();
         assert_eq!(h.dtype, DType::F64);
         assert_eq!(h.shape, vec![2, 3]);

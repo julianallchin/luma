@@ -47,7 +47,6 @@ pub struct Output {
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Binding {
     Value { value: Value },
-    Input { input: String },
     Connection { node: String, output: String },
 }
 impl From<Value> for Binding {
