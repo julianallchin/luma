@@ -339,11 +339,6 @@ impl Waveform {
         })
     }
 
-    /// Resident hierarchy bytes, including row padding (excludes temporary build scratch).
-    pub fn hierarchy_bytes(&self) -> u64 {
-        u64::from(self.atlas.width()) * u64::from(self.atlas.height()) * 8
-    }
-
     /// The widest strip [`Waveform::render`] takes, in physical pixels.
     pub fn max_width(&self) -> u32 {
         self.context.device.limits().max_texture_dimension_2d
