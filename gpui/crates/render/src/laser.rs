@@ -532,10 +532,9 @@ impl Pipelines {
 /// follows its distance from the camera and from the projector.
 const BEAM_PIECES: u32 = 16;
 
-/// Radiance per unit of a projector's light: puts a full-white beam on the
-/// same scale as a stage beam in the same haze — four ninths of the beam
-/// gain, the ratio the two were matched at by eye.
-pub(crate) const GAIN: f32 = crate::photometry::BEAM_GAIN * 4.0 / 9.0;
+/// Radiance per unit of a projector's light, in real terms
+/// ([`crate::photometry::LASER_GAIN`]).
+pub(crate) const GAIN: f32 = crate::photometry::LASER_GAIN;
 
 #[cfg(test)]
 mod tests {

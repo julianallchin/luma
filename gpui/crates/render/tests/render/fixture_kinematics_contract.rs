@@ -54,6 +54,7 @@ fn mover_definition() -> Definition {
                 radius_m: None,
                 offset_m: None,
             }),
+            bulb: None,
         }),
     }
 }

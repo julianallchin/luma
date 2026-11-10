@@ -31,11 +31,16 @@ pub struct Luminaire {
 /// (`luma_render::photometry`).
 pub const LUMENS_PER_UNIT: f32 = 10_000.0;
 
-/// Per-pixel emitter of a procedural LED bar / matrix — not a lensed fixture.
-pub const PIXEL: Luminaire = Luminaire {
-    field_angle_deg: 60.0,
-    lumens: 0.6,
-};
+/// The opening of one pixel of a procedural LED bar or matrix — not a
+/// lensed fixture. Its light is its share of the bar's
+/// ([`output_lumens`] over the pixels).
+pub const PIXEL_FIELD_DEG: f32 = 60.0;
+
+/// Output lumens per lamp lumen, for a definition that states only its lamp
+/// (QLC+ `Bulb@Lumens` is the source): Chauvet Rogue R2X Spot, 23,000 source
+/// to 11,000 output lumens; Rogue R2E Spot, 24,500 to 16,345 (Chauvet
+/// datasheets). Optics, colour mixing and gobos lose about half.
+const OUTPUT_PER_LAMP_LUMEN: f32 = 0.5;
 
 /// Quoted lens degrees are the *beam* angle (the 50%-intensity core); the
 /// visible field extends to roughly twice that.
@@ -48,14 +53,41 @@ fn clamp_opening(deg: f32) -> f32 {
 }
 
 /// Fallback *beam* angles, used only when `Physical.Lens` is missing or blank.
-fn fallback(kind: Option<ModelKind>) -> (f32, f32) {
+fn fallback(kind: Option<ModelKind>) -> f32 {
     match kind {
-        Some(ModelKind::MovingHead) => (18.0, 1.0),
-        Some(ModelKind::Scanner) => (16.0, 1.0),
-        Some(ModelKind::Strobe) => (78.0, 3.0),
+        Some(ModelKind::MovingHead) => 18.0,
+        Some(ModelKind::Scanner) => 16.0,
+        Some(ModelKind::Strobe) => 78.0,
         // Pars, and anything unrecognised, land on the library median.
-        _ => (25.0, 1.0),
+        _ => 25.0,
     }
+}
+
+/// The one answer to "how much light does this fixture put out", in real
+/// lumens out of the front of the whole fixture (every cell or pixel
+/// together).
+///
+/// A measured output (`Bulb@OutputLumens`, which a library fixture carries
+/// from its datasheet) wins; then a QLC+ lamp rating times
+/// [`OUTPUT_PER_LAMP_LUMEN`]; then the fixture's class
+/// ([`LensClass::output_lumens`]).
+#[must_use]
+pub fn output_lumens(def: &Definition, kind: Option<ModelKind>) -> f32 {
+    let bulb = def.physical.as_ref().and_then(|p| p.bulb.as_ref());
+    let usable = |v: f32| (v.is_finite() && v > 0.0).then_some(v);
+    bulb.and_then(|b| b.output_lumens.and_then(usable))
+        .or_else(|| {
+            bulb.and_then(|b| b.lumens.and_then(usable))
+                .map(|lamp| lamp * OUTPUT_PER_LAMP_LUMEN)
+        })
+        .unwrap_or_else(|| {
+            if is_procedural(def) {
+                LensClass::PixelCell
+            } else {
+                LensClass::of(def, kind)
+            }
+            .output_lumens()
+        })
 }
 
 /// QLC+ writes `DegreesMin="0" DegreesMax="0"` for "unknown", so zero means
@@ -87,7 +119,7 @@ fn lens_beam_angle(def: &Definition) -> Option<f32> {
 pub fn beam_angle_deg(def: Option<&Definition>, kind: Option<ModelKind>) -> f32 {
     clamp_opening(
         def.and_then(lens_beam_angle)
-            .unwrap_or_else(|| fallback(kind).0),
+            .unwrap_or_else(|| fallback(kind)),
     )
 }
 
@@ -96,7 +128,7 @@ pub fn beam_angle_deg(def: Option<&Definition>, kind: Option<ModelKind>) -> f32 
 pub fn luminaire_for(def: &Definition, kind: Option<ModelKind>) -> Luminaire {
     Luminaire {
         field_angle_deg: clamp_opening(beam_angle_deg(Some(def), kind) * FIELD_PER_BEAM),
-        lumens: fallback(kind).1,
+        lumens: output_lumens(def, kind) / LUMENS_PER_UNIT,
     }
 }
 
@@ -251,6 +283,39 @@ impl LensClass {
             Self::PixelCell => (0.012, 0.05),
         }
     }
+
+    /// Output lumens of a whole fixture of this class, for a definition that
+    /// states none: a typical current product's datasheet figure, as the
+    /// bundled fixture library carries it unless noted.
+    ///
+    /// - Beam: Clay Paky Sharpy 7,950; ACME Sana Beam 5,500.
+    /// - Spot: [`LUMENS_PER_UNIT`], the stock head.
+    /// - Profile: Prolights Astra Profile 400 17,598; Martin ERA 600
+    ///   Performance 19,000.
+    /// - Wash: Clay Paky A.leda B-EYE K10 5,500; Robe Robin 800 LEDWash 5,620.
+    /// - Scanner: Chauvet Intimidator Scan 360, 4,050 lx at 2 m in a 21 degree
+    ///   beam (Chauvet), about 2,500 lumens.
+    /// - Par: ADJ Encore LP7 IP 2,500; Cameo Dura Spot 100 2,800; Showtec
+    ///   Compact Par 7 Q4 1,100.
+    /// - Strobe: Eurolite LED Strobe COB PRO 8x20W 4,800 — a club LED strobe
+    ///   bar, not a 3 kW xenon or a stadium Stormy (80,000).
+    /// - Blinder (all its cells): Prolights Sunrise 2IP 10,088.
+    /// - Pixel bar (all its pixels): Martin StageBar 54 1,900; Showtec Pixel
+    ///   Bar 12 1,380.
+    #[must_use]
+    pub fn output_lumens(self) -> f32 {
+        match self {
+            Self::Beam => 7_000.0,
+            Self::Spot => LUMENS_PER_UNIT,
+            Self::Profile => 18_000.0,
+            Self::Wash => 5_500.0,
+            Self::Scanner => 2_500.0,
+            Self::Par => 2_500.0,
+            Self::Strobe => 5_000.0,
+            Self::BlinderCell => 10_000.0,
+            Self::PixelCell => 1_900.0,
+        }
+    }
 }
 
 /// Smallest lens the stand-in returns, metres: a 16 mm LED optic.
@@ -316,8 +381,57 @@ pub struct Cone {
     pub range: f32,
     /// 0 for a hard beam, 1 for a near-isotropic wash.
     pub wash: f32,
-    /// Intensity multiplier: lumens x solid-angle concentration.
+    /// Peak intensity in relative lumens per steradian: the lumens over the
+    /// profile's solid angle ([`profile_solid_angle`]), so every opening
+    /// emits exactly its lumens.
     pub gain: f32,
+}
+
+/// `fixture_light.wgsl`'s `angular_profile`, term for term: Gaussian in angle
+/// with its half point at the beam edge, faded to zero at the field edge.
+#[must_use]
+pub fn angular_profile(cos_angle: f32, cos_beam: f32, cos_field: f32) -> f32 {
+    if cos_angle <= cos_field {
+        return 0.0;
+    }
+    let t = (1.0 - cos_angle) / (1.0 - cos_beam).max(1e-5);
+    let peak = (-std::f32::consts::LN_2 * t).exp();
+    peak * smoothstep01(cos_field, profile_edge(cos_beam, cos_field), cos_angle)
+}
+
+/// Where the profile's fade at the field edge ends.
+fn profile_edge(cos_beam: f32, cos_field: f32) -> f32 {
+    cos_field + (cos_beam - cos_field) * 0.35
+}
+
+/// Solid angle of a cone's angular profile, steradians: the integral of
+/// [`angular_profile`] over the sphere. A cone whose peak intensity is `I`
+/// emits `I` times this.
+///
+/// Closed form inside the fade, where the profile is a plain exponential in
+/// `cos`; Simpson's rule across the fade.
+#[must_use]
+pub fn profile_solid_angle(cos_beam: f32, cos_field: f32) -> f32 {
+    let a = std::f32::consts::LN_2 / (1.0 - cos_beam).max(1e-5);
+    let edge = profile_edge(cos_beam, cos_field);
+    let core = (1.0 - (-a * (1.0 - edge)).exp()) / a;
+    const N: usize = 32;
+    let h = (edge - cos_field) / N as f32;
+    let fade: f32 = (0..=N)
+        .map(|i| {
+            let w = if i == 0 || i == N {
+                1.0
+            } else if i % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            w * angular_profile(cos_field + i as f32 * h, cos_beam, cos_field)
+        })
+        .sum::<f32>()
+        * h
+        / 3.0;
+    std::f32::consts::TAU * (core + fade)
 }
 
 fn cone_solid_angle(full_angle_deg: f32) -> f32 {
@@ -343,15 +457,16 @@ pub fn cone_from_opening(l: Luminaire) -> Cone {
     let wash = smoothstep01(20.0, 80.0, field_deg);
     let beam_ratio = 0.6 - 0.25 * wash;
     let half = field_deg.to_radians() / 2.0;
+    let (cos_field, cos_beam) = (half.cos(), (half * beam_ratio).cos());
     Cone {
-        cos_field: half.cos(),
-        cos_beam: (half * beam_ratio).cos(),
+        cos_field,
+        cos_beam,
         // This is a numerical integration bound, not an optical throw.
         // Wide washes still illuminate distant surfaces; cutting their support
         // to three metres produced a visible glowing ball around the lens.
         range: (30.0 * concentration.sqrt()).clamp(24.0, 60.0),
         wash,
-        gain: 1.5 * l.lumens * concentration.clamp(0.1, 6.0),
+        gain: l.lumens / profile_solid_angle(cos_beam, cos_field),
     }
 }
 
@@ -601,6 +716,7 @@ mod tests {
                     radius_m: None,
                     offset_m: None,
                 }),
+                bulb: None,
             }),
         }
     }
@@ -656,6 +772,32 @@ mod tests {
         let bar = typed("LED Bar (Pixels)");
         assert!((pixel_lens(&bar, 0.1, 0.3).radius - 0.012 * 1.25).abs() < 1e-6);
         assert!((pixel_lens(&bar, 0.02, 0.3).radius - 0.009).abs() < 1e-6);
+    }
+
+    /// A datasheet's output wins over a lamp rating, which loses about half
+    /// to the optics, which wins over the class; a strobe bar with no data is
+    /// a club strobe, not a stadium one.
+    #[test]
+    fn a_fixture_puts_out_what_its_data_says() {
+        let mut def = sized("Moving Head", 400.0, 450.0, 18.0);
+        let class = output_lumens(&def, Some(ModelKind::MovingHead));
+        assert_eq!(class, LUMENS_PER_UNIT);
+        def.physical.as_mut().unwrap().bulb = Some(crate::definition::Bulb {
+            lumens: Some(20_000.0),
+            output_lumens: None,
+        });
+        let lamp = output_lumens(&def, Some(ModelKind::MovingHead));
+        assert!(lamp < 20_000.0 && lamp > 0.0);
+        def.physical
+            .as_mut()
+            .unwrap()
+            .bulb
+            .as_mut()
+            .unwrap()
+            .output_lumens = Some(14_000.0);
+        assert_eq!(output_lumens(&def, Some(ModelKind::MovingHead)), 14_000.0);
+        let strobe = sized("Strobe", 500.0, 200.0, 0.0);
+        assert!(output_lumens(&strobe, Some(ModelKind::Strobe)) < LUMENS_PER_UNIT);
     }
 
     /// The same light through a narrower opening is hotter and throws

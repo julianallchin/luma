@@ -1229,6 +1229,7 @@ impl StatedHousing {
                 }),
                 layout: None,
                 lens: None,
+                bulb: None,
             }),
         })
     }

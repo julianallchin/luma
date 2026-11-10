@@ -360,6 +360,14 @@ pub struct Bulb {
     pub type_: Option<String>,
     #[serde(rename = "@Lumens")]
     pub lumens: Option<u32>,
+    /// Lumens out of the whole fixture, from a datasheet. Not QLC+'s: a
+    /// library fixture lowers its `optics.lumens` here.
+    #[serde(
+        rename = "@OutputLumens",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_lumens: Option<f32>,
     #[serde(rename = "@ColourTemperature")]
     pub colour_temperature: Option<u32>,
 }
@@ -496,6 +504,10 @@ impl From<&FixtureDefinition> for luma_scene::definition::Definition {
                         // go here when the library carries them.
                         radius_m: None,
                         offset_m: None,
+                    }),
+                    bulb: p.bulb.as_ref().map(|b| luma_scene::definition::Bulb {
+                        lumens: b.lumens.map(|l| l as f32),
+                        output_lumens: b.output_lumens,
                     }),
                 }),
         }

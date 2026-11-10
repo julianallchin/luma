@@ -25,8 +25,8 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use crate::models::fixtures::{
-    Capability, Channel, ChannelColour, ChannelType, Dimensions, FixtureDefinition, Head, Lens,
-    Mode, ModeChannel, Physical,
+    Bulb, Capability, Channel, ChannelColour, ChannelType, Dimensions, FixtureDefinition, Head,
+    Lens, Mode, ModeChannel, Physical,
 };
 
 /// What a library fixture's `fixture_path` starts with.
@@ -361,7 +361,12 @@ pub fn lower(fixture: &Fixture, built: Built) -> Result<FixtureDefinition, Strin
                 depth: size.z,
             }),
             layout: None,
-            bulb: None,
+            bulb: output_lumens(fixture).map(|lumens| Bulb {
+                type_: None,
+                lumens: None,
+                colour_temperature: None,
+                output_lumens: Some(lumens),
+            }),
             lens: beam_degrees(fixture).map(|[lo, hi]| Lens {
                 name: None,
                 degrees_min: Some(lo),
@@ -572,6 +577,12 @@ fn travel(built: &Built, control: &Control) -> [[f32; 2]; 2] {
             })
             .unwrap_or(fallback[axis])
     })
+}
+
+/// The fixture's output from `optics`, lumens, when its datasheet gave one.
+fn output_lumens(fixture: &Fixture) -> Option<f32> {
+    let lumens = fixture.optics.as_ref()?.get("lumens")?.as_f64()? as f32;
+    (lumens.is_finite() && lumens > 0.0).then_some(lumens)
 }
 
 /// The beam angle range from `optics`: its zoom, or its one beam angle.

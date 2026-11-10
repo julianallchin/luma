@@ -393,8 +393,11 @@ mod tests {
                 let q = point - cone.position;
                 let d = q.length();
                 let cos_angle = (q / d).dot(cone.direction);
-                let profile =
-                    crate::photometry::angular_profile(cos_angle, cone.cos_beam, cone.cos_field);
+                let profile = luma_scene::luminaire::angular_profile(
+                    cos_angle,
+                    cone.cos_beam,
+                    cone.cos_field,
+                );
                 let taper = (1.0 - (d / cone.range).powi(4)).clamp(0.0, 1.0).powi(2);
                 let cos_incidence = -(q / d).z;
                 crate::photometry::BEAM_GAIN

@@ -8,10 +8,11 @@
 //!
 //! - **Exposure.** An incident meter reading `E` lux exposes so that a surface
 //!   of luminance `K/C · E` lands on middle grey (ISO 2720: reflected-meter
-//!   constant `K` = 12.5, flat-disc incident constant `C` = 250). The camera is
-//!   fixed at the reading for [`METER_LUX`], so one candela per square metre
-//!   is [`SCENE_PER_NIT`] scene-linear units, whatever is on stage. There is no
-//!   metering in it: a dimmer that goes down makes the picture darker.
+//!   constant `K` = 12.5, flat-disc incident constant `C` = 250). 0 EV is the
+//!   reading for [`METER_LUX`], so at 0 EV one candela per square metre is
+//!   [`SCENE_PER_NIT`] scene-linear units. A camera that meters (an eye, too)
+//!   adapts away from it, but only over [`ADAPT_EV`], a range stated in lux:
+//!   a dim room stays dim and a blinding one stays blinding.
 //! - **Fixtures.** A cone's `intensity` is a dimmer times its optic's gain
 //!   (`luma_scene::luminaire::cone_from_opening`), on a scale where one unit
 //!   of relative lumens is [`luma_scene::luminaire::LUMENS_PER_UNIT`] real
@@ -39,7 +40,7 @@ const METER_K: f32 = 12.5;
 /// (ISO 2720).
 const METER_C: f32 = 250.0;
 /// Scene-linear middle grey, which the tone curves take to their mid-tone.
-const MIDDLE_GREY: f32 = 0.18;
+pub(crate) const MIDDLE_GREY: f32 = 0.18;
 
 /// Scene-linear units per candela per square metre at the fixed exposure.
 ///
@@ -48,68 +49,93 @@ const MIDDLE_GREY: f32 = 0.18;
 /// [`MIDDLE_GREY`].
 pub const SCENE_PER_NIT: f32 = MIDDLE_GREY * METER_C / (METER_K * METER_LUX);
 
+/// The exposure, in stops from 0 EV, that an incident meter reading `lux`
+/// gives: positive opens up for a darker room.
+#[must_use]
+pub fn ev_for_lux(lux: f32) -> f32 {
+    (METER_LUX / lux).log2()
+}
+
+/// The stops metering may move the exposure through, in incident-meter
+/// readings ([`ev_for_lux`]):
+///
+/// - **−6 EV, 12,800 lx**, the brightest light it adapts to: a stage lit for
+///   broadcast (1,000 to 2,000 lx of key) with the beams of a full show on top
+///   of it, and short of daylight.
+/// - **+4 EV, 12.5 lx**, the darkest: a dark show, lit by nothing but its
+///   fixtures. A concert video camera wide open — ISO 6400, f/2.8, 1/50 s,
+///   EV100 2.6 — is correctly exposed for an incident reading of about 12 lx
+///   (EV100 = log2(E·100/C)). Below it a dim cue is meant to look dim, not be
+///   lifted to grey.
+///
+/// The 2^n lux values keep the ends whole stops.
+pub const ADAPT_EV: std::ops::RangeInclusive<f32> = -6.0..=4.0;
+
 /// The absolute scale of every cone, surface and haze alike: scene-linear
 /// irradiance at one metre on axis per unit of cone `intensity`.
 ///
-/// Chosen so that a stock moving head (18 degree beam, one relative lumen;
-/// `luma_scene::luminaire`) emits [`luma_scene::luminaire::LUMENS_PER_UNIT`]
-/// real lumens at [`SCENE_PER_NIT`]. Pinned by
-/// `tests::beam_gain_is_a_stock_head_in_real_lumens`.
-pub const BEAM_GAIN: f32 = 1_455.6;
-
-/// Solid angle of a cone's angular profile, steradians: the integral of
-/// `fixture_light.wgsl`'s `angular_profile` over the sphere. A cone whose
-/// peak intensity is `I` emits `I` times this.
-#[must_use]
-pub fn profile_solid_angle(cos_beam: f32, cos_field: f32) -> f32 {
-    const STEPS: usize = 2048;
-    let span = 1.0 - cos_field;
-    let step = span / STEPS as f32;
-    let sum: f32 = (0..STEPS)
-        .map(|i| angular_profile(cos_field + (i as f32 + 0.5) * step, cos_beam, cos_field))
-        .sum();
-    std::f32::consts::TAU * sum * step
-}
+/// A cone's `intensity` is a dimmer times its optic's gain, the peak
+/// intensity in relative lumens per steradian
+/// (`luma_scene::luminaire::cone_from_opening`), so one unit is
+/// [`luma_scene::luminaire::LUMENS_PER_UNIT`] candela, and this is that many
+/// candela at [`SCENE_PER_NIT`].
+pub const BEAM_GAIN: f32 = SCENE_PER_NIT * luma_scene::luminaire::LUMENS_PER_UNIT;
 
 /// The `intensity` a cone with this profile needs to emit `lumens` real
-/// lumens of white at the fixed exposure, with [`BEAM_GAIN`] applied after.
+/// lumens of white, with [`BEAM_GAIN`] applied after.
 #[must_use]
 pub fn cone_intensity(lumens: f32, cos_beam: f32, cos_field: f32) -> f32 {
-    SCENE_PER_NIT * lumens / (BEAM_GAIN * profile_solid_angle(cos_beam, cos_field))
+    lumens
+        / luma_scene::luminaire::LUMENS_PER_UNIT
+        / luma_scene::luminaire::profile_solid_angle(cos_beam, cos_field)
 }
 
-/// `fixture_light.wgsl`'s `angular_profile`, term for term: Gaussian in angle
-/// with its half point at the beam edge, faded to zero at the field edge.
-#[must_use]
-pub(crate) fn angular_profile(cos_angle: f32, cos_beam: f32, cos_field: f32) -> f32 {
-    if cos_angle <= cos_field {
-        return 0.0;
-    }
-    let t = (1.0 - cos_angle) / (1.0 - cos_beam).max(1e-5);
-    let peak = (-std::f32::consts::LN_2 * t).exp();
-    let edge = cos_field + (cos_beam - cos_field) * 0.35;
-    let x = ((cos_angle - cos_field) / (edge - cos_field)).clamp(0.0, 1.0);
-    peak * x * x * (3.0 - 2.0 * x)
-}
+/// Scene-linear radiance per unit of a laser projector's light, per metre of
+/// beam and unit scattering, as `laser.wgsl` reads it (`laser.rs`'s `GAIN`).
+///
+/// One unit is a full-white beam of [`LASER_LUMENS`]. A haze cone scatters
+/// `σ` times its phase (relative to isotropic) per lumen-per-square-metre
+/// crossing it, at [`SCENE_PER_NIT`]; a laser beam is the same light in a
+/// line, so its gain is the same scale times its lumens.
+pub const LASER_GAIN: f32 = SCENE_PER_NIT * LASER_LUMENS;
+
+/// A club RGB laser projector's white, lumens: about 3 W of red, green and
+/// blue diodes (a mid-size show laser) at about 200 lm/W for a white mix of
+/// 638, 520 and 450 nm (683 lm/W × V(λ), weighted by the power each needs
+/// for white: green carries most of it at about 480 lm/W).
+const LASER_LUMENS: f32 = 600.0;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use luma_scene::luminaire::{cone_from_opening, Luminaire, LUMENS_PER_UNIT};
+    use luma_scene::luminaire::{angular_profile, cone_from_opening, Luminaire, LUMENS_PER_UNIT};
 
+    /// The profile's solid angle by brute force.
+    fn dense_solid_angle(cos_beam: f32, cos_field: f32) -> f32 {
+        const STEPS: usize = 20_000;
+        let step = (1.0 - cos_field) / STEPS as f32;
+        let sum: f32 = (0..STEPS)
+            .map(|i| angular_profile(cos_field + (i as f32 + 0.5) * step, cos_beam, cos_field))
+            .sum();
+        std::f32::consts::TAU * sum * step
+    }
+
+    /// Every opening, a pencil beam to a flood, emits exactly its lumens at
+    /// the renderer's scale.
     #[test]
-    fn beam_gain_is_a_stock_head_in_real_lumens() {
-        // The fallback moving head: an 18 degree beam, a field twice that.
-        let cone = cone_from_opening(Luminaire {
-            field_angle_deg: 36.0,
-            lumens: 1.0,
-        });
-        let flux = BEAM_GAIN * cone.gain * profile_solid_angle(cone.cos_beam, cone.cos_field);
-        let expected = SCENE_PER_NIT * LUMENS_PER_UNIT;
-        assert!(
-            (flux / expected - 1.0).abs() < 0.005,
-            "{flux} vs {expected}"
-        );
+    fn every_opening_emits_its_lumens() {
+        for field_angle_deg in [4.0, 8.0, 36.0, 60.0, 120.0, 160.0] {
+            let cone = cone_from_opening(Luminaire {
+                field_angle_deg,
+                lumens: 1.0,
+            });
+            let flux = BEAM_GAIN * cone.gain * dense_solid_angle(cone.cos_beam, cone.cos_field);
+            let expected = SCENE_PER_NIT * LUMENS_PER_UNIT;
+            assert!(
+                (flux / expected - 1.0).abs() < 0.005,
+                "{field_angle_deg}°: {flux} vs {expected}"
+            );
+        }
     }
 
     #[test]
@@ -122,13 +148,12 @@ mod tests {
     }
 
     #[test]
-    fn a_wider_profile_holds_more_light() {
-        let narrow = profile_solid_angle(10f32.to_radians().cos(), 20f32.to_radians().cos());
-        let wide = profile_solid_angle(30f32.to_radians().cos(), 45f32.to_radians().cos());
-        assert!(wide > narrow);
-        // ...and never more than the cap of the cone it lives in.
-        let cap = std::f32::consts::TAU * (1.0 - 45f32.to_radians().cos());
-        assert!(wide < cap);
+    fn adaptation_spans_a_dark_show_to_a_broadcast_stage() {
+        const BRIGHTEST_LUX: f32 = 12_800.0;
+        const DARKEST_LUX: f32 = 12.5;
+        assert_eq!(*ADAPT_EV.start(), ev_for_lux(BRIGHTEST_LUX));
+        assert_eq!(*ADAPT_EV.end(), ev_for_lux(DARKEST_LUX));
+        assert!(ADAPT_EV.contains(&ev_for_lux(METER_LUX)));
     }
 
     #[test]
