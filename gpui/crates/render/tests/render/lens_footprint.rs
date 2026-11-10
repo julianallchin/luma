@@ -16,7 +16,7 @@ use luma_render::{
 };
 use luma_scene::{
     environment::{VenueEnvironment, VenueHaze},
-    luminaire::Lens,
+    luminaire::{cone_from_opening, Lens, LensClass, Luminaire, LUMENS_PER_UNIT},
 };
 
 use crate::common::capture;
@@ -31,15 +31,19 @@ const HALF_FIELD_DEG: f32 = 2.0;
 const LENS: Lens = Lens { radius: 0.1 };
 
 fn narrow(position: Vec3, direction: Vec3, lens: Lens) -> FixtureCone {
-    let half = HALF_FIELD_DEG.to_radians();
+    // A beam fixture's light through this opening.
+    let cone = cone_from_opening(Luminaire {
+        field_angle_deg: 2.0 * HALF_FIELD_DEG,
+        lumens: LensClass::Beam.output_lumens() / LUMENS_PER_UNIT,
+    });
     FixtureCone {
         position,
         range: 30.0,
         direction,
-        cos_beam: (half * 0.6).cos(),
+        cos_beam: cone.cos_beam,
         color: Vec3::new(1.0, 0.25, 0.1),
-        intensity: 1.0,
-        cos_field: half.cos(),
+        intensity: cone.gain,
+        cos_field: cone.cos_field,
         wash: 0.0,
         gobo: 0,
         gobo_rotation: 0.0,
