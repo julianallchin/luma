@@ -66,7 +66,7 @@ pub const MAX_DIMENSION: u32 = 2000;
 
 /// The stage-piece kinds that stand in for "where the operator is", best first.
 /// Only [`View::Dj`] reads it.
-const BOOTH_KINDS: [&str; 2] = ["cdj", "mixer"];
+const BOOTH_KINDS: [&str; 3] = ["dj_booth", "cdj", "mixer"];
 
 /// One venue's 3D contents, as the database holds them.
 ///
@@ -256,8 +256,9 @@ impl VenueGeometry {
 
     /// World position of the DJ booth, if this room has one.
     ///
-    /// A `cdj` beats a `mixer` because a booth with decks in it is where the
-    /// operator stands; a mixer alone is the fallback. Returned in render-world
+    /// A whole booth beats a loose `cdj`, which beats a `mixer`: a booth
+    /// with decks in it is where the operator stands, and a mixer alone is
+    /// the fallback. Returned in render-world
     /// space (Z-up), which is the space [`Camera::for_view`] works in.
     #[must_use]
     pub fn booth(&self) -> Option<Vec3> {
@@ -1194,7 +1195,12 @@ mod tests {
                     id,
                     Edge {
                         parent: "venue".into(),
-                        my_socket: "mount".into(),
+                        // An assembly stands on its `bottom`; equipment on its `mount`.
+                        my_socket: if catalog_ref.starts_with("assembly/") {
+                            "bottom".into()
+                        } else {
+                            "mount".into()
+                        },
                         their_socket: FLOOR_SOCKET.into(),
                         roll: 0.0,
                     },
@@ -1228,6 +1234,20 @@ mod tests {
         // piece won, not a pose the catalog does not promise.
         let booth = geometry.booth().expect("a cdj is a booth");
         assert!(booth.distance(Vec3::new(2.0, -3.0, 1.0)) < 0.5, "{booth:?}");
+    }
+
+    /// A booth placed whole is where the DJ stands, ahead of a loose player.
+    #[test]
+    fn booth_finds_a_whole_dj_booth() {
+        let geometry = geometry(venue(&[
+            ("d", "stage_lab/cdj_3000x.glb", [2.0, 3.0, 1.0]),
+            ("b", "assembly/dj_booth", [-4.0, 1.0, 0.0]),
+        ]));
+        let booth = geometry.booth().expect("a dj booth is a booth");
+        assert!(
+            booth.distance(Vec3::new(-4.0, -1.0, 0.0)) < 0.5,
+            "{booth:?}"
+        );
     }
 
     #[test]

@@ -1001,15 +1001,23 @@ fn is_stick(piece: &crate::catalog::Piece) -> bool {
 /// [`crate::sockets`]).
 const LOCAL_FRONT: DVec3 = DVec3::Z;
 
-/// Whether this piece has a front that means something, and so should meet the
-/// house rather than the back wall when the caller states no direction.
+/// The side of this piece, in its asset frame, that meets the house when the
+/// caller states no direction; `None` for a piece whose facing means nothing.
 ///
-/// The endpoints the frame contract already names — speakers, players, the
-/// mixer, the booth. Structure has a run instead of a front, and a deck turned
-/// to face anything is still a deck.
-fn faces_house(piece: &crate::catalog::Piece) -> bool {
+/// A speaker's front ([`LOCAL_FRONT`]) is where its sound goes, so it meets
+/// the crowd. A player or mixer is modelled with its front where the DJ
+/// stands — the jog wheels and faders — and the DJ faces the crowd from behind
+/// it, so its back meets the house. A booth is built with its units' backs on
+/// its own front (see `catalog::DJ_BOOTH_PARTS`), so it meets the house like a
+/// speaker. Structure has a run instead of a front, and a deck turned to face
+/// anything is still a deck.
+fn house_side(piece: &crate::catalog::Piece) -> Option<DVec3> {
     use crate::catalog::PieceKind::{Cdj, DjBooth, Mixer, Speaker};
-    matches!(piece.kind, Speaker | Cdj | Mixer | DjBooth)
+    match piece.kind {
+        Speaker | DjBooth => Some(LOCAL_FRONT),
+        Cdj | Mixer => Some(-LOCAL_FRONT),
+        _ => None,
+    }
 }
 
 /// The node kind a piece is filed under — the *only* thing in this module that
@@ -1126,8 +1134,8 @@ fn run_axis<S: NodeSockets + ?Sized>(scene: &Scene<'_, S>, probe: &Node) -> Opti
 /// resting pose to print.
 ///
 /// Kept in step with [`free_placement`] by construction: the yaw here is the
-/// same [`twist`] of [`LOCAL_FRONT`] onto the house that a direction-less
-/// placement of a [`faces_house`] piece takes.
+/// same [`twist`] of its [`house_side`] onto the house that a direction-less
+/// placement takes.
 #[must_use]
 pub fn resting_footprint<S: NodeSockets + ?Sized>(sockets: &S, node: &Node) -> Option<Footprint> {
     let piece = crate::catalog::find(node.catalog_ref.as_deref()?)?;
@@ -1155,9 +1163,9 @@ pub fn resting_footprint<S: NodeSockets + ?Sized>(sockets: &S, node: &Node) -> O
             },
         )
     };
-    let yaw = if faces_house(piece) {
+    let yaw = if let Some(side) = house_side(piece) {
         let host_normal = socket_world(&floor).z_axis.truncate().normalize_or_zero();
-        let at_rest = seat(0.0).transform_vector3(LOCAL_FRONT).normalize_or_zero();
+        let at_rest = seat(0.0).transform_vector3(side).normalize_or_zero();
         twist(at_rest, three_from_facade(DVec3::Y), host_normal)
     } else {
         0.0
@@ -1234,7 +1242,9 @@ fn free_placement<S: NodeSockets + ?Sized>(
             run_axis(scene, probe),
             Some(three_from_facade(DVec3::from(direction)).normalize_or_zero()),
         ),
-        None if faces_house(piece) => (Some(LOCAL_FRONT), Some(three_from_facade(DVec3::Y))),
+        None if house_side(piece).is_some() => {
+            (house_side(piece), Some(three_from_facade(DVec3::Y)))
+        }
         None => (run_axis(scene, probe), None),
     };
     let axis = run_axis(scene, probe);
@@ -2066,6 +2076,7 @@ mod tests {
                 ("stage_lab/speaker_jbl_vtx_v20.glb", box_of(0.91, 0.28, 0.4)),
                 ("stage_lab/guardrail.glb", box_of(0.4, 1.0, 2.14)),
                 ("assembly/dj_booth", box_of(2.0, 1.17, 1.0)),
+                ("stage_lab/cdj_3000x.glb", box_of(0.343, 0.161, 0.478)),
             ]))
         }
     }
@@ -2203,6 +2214,45 @@ mod tests {
         assert!(front.y > 0.99, "the box faces {front:?}, not the crowd");
         // Which is also the box being wider across the stage than it is deep.
         assert!(speaker.at.size[0] > speaker.at.size[1]);
+    }
+
+    /// DJ gear stands with its operator upstage, facing the crowd: a player's
+    /// control face (its modelled front) points upstage, and a booth runs
+    /// across the stage rather than toward the crowd.
+    #[test]
+    fn dj_gear_puts_the_dj_upstage_facing_the_crowd() {
+        let supply = Meshes::shipped();
+        let mut graph = room();
+        let mut solved = resolve(&graph, &supply);
+        for (name, at) in [("cdj", [3.0, 0.0]), ("dj_booth", [-3.0, 0.0])] {
+            let placed = build(
+                &mut graph,
+                &mut solved,
+                &supply,
+                name,
+                &Request {
+                    at: Some(at),
+                    ..request(name)
+                },
+            )
+            .expect("on the floor");
+            // A player's control face is its front; a booth's is its back.
+            let face = if name == "dj_booth" {
+                -LOCAL_FRONT
+            } else {
+                LOCAL_FRONT
+            };
+            let operator =
+                facade_from_three(placed.world.transform_vector3(face).normalize_or_zero());
+            assert!(operator.y < -0.99, "{name}'s DJ stands at {operator:?}");
+            if name == "dj_booth" {
+                assert!(
+                    placed.at.size[0] > placed.at.size[1],
+                    "the booth runs {:?}",
+                    placed.at.size
+                );
+            }
+        }
     }
 
     /// A face the host does not have is a refusal, not a nearest guess — and
