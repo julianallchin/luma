@@ -9,11 +9,11 @@ Thanks for your interest in contributing to Luma! Here's how to get started.
 3. Make your changes
 4. Run checks: `cargo check --manifest-path gpui/Cargo.toml --workspace --all-targets`
 5. Commit and push your branch
-6. Open a pull request against `main`
+6. Open a pull request against `dev`
 
 ## Code Style
 
-- **Rust**: Formatted by `cargo fmt`, linted by `cargo clippy`
+- **Rust**: Format the files you touched with `rustfmt <file>` (`rustfmt.toml` sets the edition), never tree-wide `cargo fmt`. Linted by `cargo clippy`.
 - Git LFS hooks live in `.githooks/`; enable them with `git config core.hooksPath .githooks`.
 - Format only Rust files you changed; this checkout may be shared with other contributors.
 
