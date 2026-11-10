@@ -30,6 +30,7 @@ mod readback;
 mod renderer;
 mod scene_pipelines;
 mod stats;
+pub(crate) mod target_memory;
 mod targets;
 #[cfg(test)]
 mod tests;
@@ -298,6 +299,8 @@ pub struct Renderer {
     surface_depth_cull: bool,
     upload_stats: UploadStats,
     targets: Option<Targets>,
+    /// Where `targets` and the post chain's scene are allocated.
+    target_memory: target_memory::TargetMemory,
     medium_cache: crate::medium::Cache,
     shadow_hierarchy: crate::shadow_hierarchy::Targets,
     /// The previous live frame's eye, target and field of view, to tell a

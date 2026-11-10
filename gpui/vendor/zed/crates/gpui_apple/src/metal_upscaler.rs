@@ -38,6 +38,17 @@ const OUTPUTS: usize = 2;
 /// settles (it then stops drawing), one well into playback.
 const DUMP_FRAMES: [u64; 2] = [16, 240];
 
+/// Consecutive frames a new size pair must be asked for before a scaler is
+/// built for it. Until then it is drawn bilinear.
+///
+/// A resize drag asks for a new pair on every frame. Building a scaler is
+/// usually under a millisecond, but now and then one takes 50 ms, and each
+/// comes with two fresh output textures the next command buffer pages in;
+/// all of it on the UI thread, once per frame of the drag. A size the user
+/// is still dragging through is gone a frame later, so it is not worth a
+/// scaler; the one they stop at is.
+const SETTLE_FRAMES: u32 = 3;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Key {
     input: (u64, u64),
@@ -57,6 +68,9 @@ pub(crate) struct SurfaceUpscaler {
     /// A pair the device refused. Remembered so a refusal costs one attempt,
     /// not one per frame; any other pair is tried afresh.
     refused: Option<Key>,
+    /// A pair with no scaler yet, and how many frames in a row it has been
+    /// asked for: see [`SETTLE_FRAMES`].
+    settling: Option<(Key, u32)>,
     frames: u64,
     dump: Option<PathBuf>,
 }
@@ -94,6 +108,7 @@ impl SurfaceUpscaler {
             enabled: enabled(device),
             scaler: None,
             refused: None,
+            settling: None,
             frames: 0,
             dump: std::env::var_os("LUMA_UPSCALER_DUMP").map(PathBuf::from),
         }
@@ -103,8 +118,8 @@ impl SurfaceUpscaler {
     /// and return the texture holding it, for the caller to draw at 1:1.
     ///
     /// `None` means draw `input` as before: upscaling is off, the sizes
-    /// already agree, the surface is being shrunk, or the device refused this
-    /// pair.
+    /// already agree, the surface is being shrunk, the device refused this
+    /// pair, or the pair is too new to be worth a scaler yet.
     pub(crate) fn encode(
         &mut self,
         device: &metal::DeviceRef,
@@ -125,6 +140,14 @@ impl SurfaceUpscaler {
             return None;
         }
         if self.scaler.as_ref().is_none_or(|scaler| scaler.key != key) {
+            let asked = match self.settling {
+                Some((settling, frames)) if settling == key => frames + 1,
+                _ => 1,
+            };
+            self.settling = Some((key, asked));
+            if asked < SETTLE_FRAMES {
+                return None;
+            }
             // Drop the old pair before building the new one: at fullscreen
             // its outputs are 30 MB apiece.
             self.scaler = None;

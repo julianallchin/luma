@@ -208,7 +208,9 @@ The `luma-render` GPU timing instruments are examples, not tests, because a
 timing on a shared machine is not a gate: `--example stall_probe` (frame latency on a lit, hazed stage),
 `--example timestamp_lie` (pass timestamps against the wall clock; run on an
 idle machine) and `--example resize_probe` (what a per-frame viewport size
-change costs). Run them with `cargo run -p luma-render --release`.
+change costs; it fails when the median frame of a drag costs over 1.3× a still
+one, and `LUMA_RESIZE_PASSES=1` shows which passes and CPU spans a drag grows).
+Run them with `cargo run -p luma-render --release`.
 
 To add a test file to a group, add one `mod` line to that group's `main.rs`.
 Members use `use super::support;`. Do not declare a second `mod support;`,
