@@ -86,7 +86,6 @@ fn wash(at: Vec3, height: f32) -> FixtureCone {
         color: Vec3::ONE,
         intensity: 6.0,
         cos_field: 22.0_f32.to_radians().cos(),
-        wash: 1.0,
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,

@@ -70,7 +70,6 @@ fn lit_frame(lights: usize, phase: f32, haze: bool) -> Frame {
                 color: Vec3::new(1.0, 0.3, 0.2),
                 intensity: 0.4,
                 cos_field: 0.93,
-                wash: 0.0,
                 gobo: 0,
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,

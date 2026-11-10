@@ -66,7 +66,6 @@ fn frame() -> Frame {
         color: Vec3::new(0.2, 0.55, 1.0),
         intensity: 0.08,
         cos_field: 0.93,
-        wash: 0.0,
         gobo: 0,
         gobo_rotation: 0.31,
         haze_gain: 1.0,

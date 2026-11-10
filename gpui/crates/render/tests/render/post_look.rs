@@ -74,7 +74,6 @@ fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
         color: Vec3::new(0.2, 0.5, 1.0),
         intensity,
         cos_field: 0.96,
-        wash: 0.0,
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,

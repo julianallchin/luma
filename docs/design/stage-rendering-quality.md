@@ -233,6 +233,15 @@ remained the exhaustive per-ray reference and disabled the grid too.
 with 8-pixel cells on every platform (16 at medium quality); the switches are gone and the per-ray
 method is `Renderer::render_reference` alone.)
 
+Which beams the grid takes, and from where, follows how soft each beam is
+(`fog_grid::handover`), not a beam-angle cut-off. The grid blurs a beam by about
+a cell, so it takes a beam where the steepest part of its profile would need
+0.55 m to fall from the peak to nothing: the softness of a 60° cell at 1.75 m,
+the case the source distances were measured on. A 50° bar or par is handed over
+at 1.75 m like a wash, a 20° spot at about 8 m, an 8° beam at about 21 m, and a
+gobo never. The earlier rule sent every beam under about 56° down the per-pixel
+path whole: a 50° ten-lamp bar cost over ten times a 60° one.
+
 This is a live quality/performance tradeoff, not exact transport: fresh frames
 have less grain, but settled distant fog can be slightly softer than the per-ray
 reference. Grid interpolation, finite depth quadrature, and shadow reservoirs

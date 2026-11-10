@@ -5,7 +5,7 @@ struct CacheCore { position: vec3<f32>, range: f32, };
 struct CacheRest {
     direction: vec3<f32>, cos_beam: f32,
     color: vec3<f32>, intensity: f32,
-    cos_field: f32, wash: f32, gobo: f32, rotation: f32,
+    cos_field: f32, handover: f32, gobo: f32, rotation: f32,
     shadow: f32, haze_gain: f32, inverse_right_length: f32, field_tangent: f32,
     lens_distance: f32, lens_reserved0: f32, lens_reserved1: f32, lens_reserved2: f32,
 };

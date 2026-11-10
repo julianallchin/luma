@@ -91,7 +91,6 @@ fn frame(target: Vec3, flip: bool, lit: Lit) -> Frame {
         color: Vec3::new(1.0, 0.0, 1.0),
         intensity: cone.gain,
         cos_field: cone.cos_field,
-        wash: cone.wash,
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,

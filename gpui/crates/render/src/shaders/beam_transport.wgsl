@@ -4,8 +4,8 @@
 // progressive MIS estimator. The same density, photometry, gobo and
 // extinction model feed both integrators.
 
-// The compute kernels: the far-field grid carries broad washes beyond their
-// source region and camera transmittance, and no ray is jittered.
+// The compute kernels: the far-field grid carries each beam past its
+// handover and camera transmittance, and no ray is jittered.
 override GRID_FOG: bool = false;
 
 // Lit-interval cache (`docs/design/haze-lit-interval-cache.md`). The shadow
@@ -38,7 +38,9 @@ struct LightRest {
     color: vec3<f32>,
     intensity: f32,
     cos_field: f32,
-    wash: f32,
+    // Where the shared fog grid starts to carry this cone's haze, metres from
+    // its lens (`fog_grid.rs`).
+    handover: f32,
     gobo: f32,
     gobo_rotation: f32,
     // Shadow-map layer for this cone, or negative when it has none. Must match
@@ -341,6 +343,14 @@ fn scene_ray(frag: vec2<f32>) -> SceneRay {
     return SceneRay(ray_dir, hit_dist, view_depth, j, MediumRay(), uv, medium_lighting_span(haze.medium, haze.camera_pos.xyz, ray_dir, haze.shadow.w));
 }
 
+// The shared fog grid's share of a light's haze `distance` metres from its
+// lens: none inside the light's `handover`, all of it past
+// `FOG_HANDOVER_BAND` times that (`fog_grid.rs`). The per-pixel passes carry
+// the rest.
+fn grid_share(handover: f32, distance: f32) -> f32 {
+    return smoothstep(handover, handover * FOG_HANDOVER_BAND, distance);
+}
+
 fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
     let ray_dir = ray.dir;
     let hit_dist = ray.hit_dist;
@@ -349,8 +359,8 @@ fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
     let oc = haze.camera_pos.xyz - core.position;
     let b = dot(oc, ray_dir);
     let oo = dot(oc, oc);
-    let near_only = GRID_FOG && light_rest[li].wash >= FOG_BROAD_WASH && light_rest[li].gobo < 0.5;
-    let range = select(core.range, min(core.range, FOG_SOURCE_OUTER), near_only);
+    // Past its handover the shared grid carries the light.
+    let range = select(core.range, min(core.range, light_rest[li].handover * FOG_HANDOVER_BAND), GRID_FOG);
     let disc = b * b - (oo - range * range);
     if disc <= 0.0 {
         return vec2<f32>(0.0);
@@ -602,6 +612,13 @@ const DETAIL_CLOUDINESS: f32 = 0.5;
 // size. A plain beam in gentle haze is capped at `haze.quality.x` pieces: its
 // integrand is smooth apart from the cloud field's low contrast, and the cap
 // keeps long spans from paying for detail the image cannot show.
+// Pieces for a span of the equiangular angle about a source: along the ray
+// the direction from the source turns by that angle, and the haze's forward
+// peak (`haze_phase.rs`) with it.
+fn angular_pieces(th0: f32, th1: f32) -> f32 {
+    return (th1 - th0) / 0.4;
+}
+
 fn quadrature_pieces(a: f32, b: f32, th0: f32, th1: f32) -> u32 {
     let angular = angular_pieces(th0, th1);
     let cloud = (b - a) / max(haze.medium.shape.y * 0.5, 0.1);
@@ -612,13 +629,6 @@ fn quadrature_pieces(a: f32, b: f32, th0: f32, th1: f32) -> u32 {
 
 // Pieces that resolve light `li`'s gobo along `[a, b]`, three per cycle of
 // its pattern. A ray crosses the aperture along a straight line (a line seen
-// Pieces for a span of the equiangular angle about a source: along the ray
-// the direction from the source turns by that angle, and the haze's forward
-// peak (`haze_phase.rs`) with it.
-fn angular_pieces(th0: f32, th1: f32) -> f32 {
-    return (th1 - th0) / 0.4;
-}
-
 // from the apex), so the endpoints bound the cycles: the spokes' twelve per
 // turn of polar angle, the breakup's fifteen per radian of aperture.
 fn gobo_pieces(li: u32, ray: SceneRay, a: f32, b: f32) -> u32 {
@@ -697,7 +707,7 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
                 let cells = panel_scatter(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q, ray.dir);
                 let world = haze.camera_pos.xyz + ray.dir * t;
                 var value = beam_range_falloff(distance, core.range)
-                    * select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5)
+                    * (1.0 - grid_share(rest.handover, distance))
                     * haze_density_at(world) * mix(left_field, right_field, nodes[j] * 0.5 + 0.5);
                 if traced { value *= stage_visibility(world, core.position); }
                 panel_sum += panel_tint(cells) * (value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j]);
@@ -705,7 +715,7 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
             }
             let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
             let phase = haze_phase(-dot(q, ray.dir) / max(distance, 1e-4));
-            let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5);
+            let source_weight = 1.0 - grid_share(rest.handover, distance);
             let world = haze.camera_pos.xyz + ray.dir * t;
             let field = mix(left_field, right_field, nodes[j] * 0.5 + 0.5);
             var value = angular * phase * beam_range_falloff(distance, core.range) * source_weight

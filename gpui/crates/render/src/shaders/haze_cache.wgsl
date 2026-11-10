@@ -206,7 +206,7 @@ fn lit_interval_node(li: u32, ray: SceneRay, a: f32, b: f32, j: u32) -> f32 {
         let distance = sqrt(d2);
         let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
         let phase = haze_phase(-dot(q, ray.dir) / max(distance, 1e-4));
-        let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5);
+        let source_weight = 1.0 - grid_share(rest.handover, distance);
         let world = haze.camera_pos.xyz + ray.dir * t;
         let field = mix(left_field, right_field, node * 0.5 + 0.5);
         let value = angular * phase * beam_range_falloff(distance, core.range) * source_weight

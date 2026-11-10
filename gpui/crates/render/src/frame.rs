@@ -120,8 +120,6 @@ pub struct FixtureCone {
     pub intensity: f32,
     /// Cosine of the half-angle where the profile reaches zero.
     pub cos_field: f32,
-    /// 0 for a hard beam, 1 for a near-isotropic wash.
-    pub wash: f32,
     /// Bounded procedural gobo: 0 open, 1 radial spokes, 2 breakup grid.
     pub gobo: u32,
     /// Gobo rotation in radians around the beam axis.
@@ -1048,7 +1046,6 @@ pub fn build_at(
                     color: Vec3::from(state.color),
                     intensity: intensity * luminaire.gain / count,
                     cos_field: luminaire.cos_field,
-                    wash: luminaire.wash,
                     gobo: state.gobo.min(2),
                     gobo_rotation: state.gobo_rotation,
                     haze_gain: 1.0,
@@ -1145,7 +1142,6 @@ pub fn build_at(
                     color,
                     intensity: intensity * luminaire.gain / count,
                     cos_field: luminaire.cos_field,
-                    wash: luminaire.wash,
                     gobo: head_state.gobo.min(2),
                     gobo_rotation: head_state.gobo_rotation,
                     haze_gain: 1.0,
@@ -1240,7 +1236,6 @@ pub fn build_at(
                     color: Vec3::from(head_state.color),
                     intensity: intensity * cone.gain,
                     cos_field: cone.cos_field,
-                    wash: cone.wash,
                     gobo: head_state.gobo.min(2),
                     gobo_rotation: head_state.gobo_rotation,
                     haze_gain: 1.0,
@@ -1305,7 +1300,6 @@ pub fn build_at(
             color: Vec3::from(head_state.color),
             intensity: intensity * cone.gain,
             cos_field: cone.cos_field,
-            wash: cone.wash,
             gobo: head_state.gobo.min(2),
             gobo_rotation: head_state.gobo_rotation,
             haze_gain: 1.0,

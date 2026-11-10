@@ -159,7 +159,7 @@ impl Renderer {
                         range: cone.range.to_bits(),
                         cos_field: cone.cos_field.to_bits(),
                         lens_distance: rests[index].lens_distance.to_bits(),
-                        wash: cone.wash.to_bits(),
+                        handover: rests[index].handover.to_bits(),
                         scatters: rests[index].haze_gain > 0.0,
                         gobo: cone.gobo != 0,
                         rect: block_rect(tiles, scale, [blocks.0, blocks.1]),

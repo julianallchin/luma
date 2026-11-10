@@ -437,7 +437,10 @@ fn surface_depth_culling_preserves_subpixel_and_coplanar_receivers() -> anyhow::
     rx.recv()??;
     let mapped = readback.slice(..).get_mapped_range()?;
     let values: &[u32] = bytemuck::cast_slice(&mapped);
-    let plane = values.len() / crate::light_index::MASK_PLANES;
+    // The planes of the last frame's grid, 64 by 48: the buffer keeps the
+    // room of the larger frames before it.
+    let tiles = |pixels: u32| pixels.div_ceil(crate::light_index::TILE_SIZE) as usize;
+    let plane = tiles(64) * tiles(48) * crate::light_index::MASK_WORDS;
     let full = &values[..plane];
     let surface = &values[2 * plane..3 * plane];
     let surface_b = &values[3 * plane..];
@@ -518,7 +521,6 @@ fn fixture_surface_frame(count: usize) -> Frame {
                 color: Vec3::ONE,
                 intensity: 3.0 / count.max(1) as f32,
                 cos_field: 0.88,
-                wash: 0.0,
                 gobo: 0,
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,

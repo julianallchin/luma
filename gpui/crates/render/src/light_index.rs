@@ -341,7 +341,9 @@ pub(crate) struct LightRest {
     pub color: [f32; 3],
     pub intensity: f32,
     pub cos_field: f32,
-    pub wash: f32,
+    /// Where the shared fog grid starts to carry this cone's haze, metres
+    /// from its lens ([`crate::fog_grid::handover`]).
+    pub handover: f32,
     pub gobo: f32,
     pub gobo_rotation: f32,
     /// Layer of this cone's shadow map, or negative when it has none.
@@ -396,7 +398,8 @@ struct IndexParams {
 #[derive(Clone, Copy, Default, Pod, Zeroable)]
 struct LightCull {
     rect: [u32; 4],
-    /// Analytic source-region bounds for broad washes; full rect otherwise.
+    /// Bounds of the region the per-pixel passes keep of a light the fog
+    /// grid takes over; full rect otherwise.
     near_rect: [u32; 4],
     apex_range: [f32; 4],
     dir_cos: [f32; 4],
@@ -943,8 +946,8 @@ impl LightIndex {
             .iter()
             .map(|(source, cone, extent)| {
                 let rest = rests[*source as usize];
-                let source_range = if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
-                    cone.source_reach(crate::fog_grid::SOURCE_OUTER)
+                let source_range = if rest.handover < crate::fog_grid::NEVER {
+                    cone.source_reach(rest.handover * crate::fog_grid::HANDOVER_BAND)
                 } else {
                     0.0
                 };
@@ -1189,7 +1192,7 @@ impl View {
         self.extent_for_bounds(min, max)
     }
 
-    // Native broad-wash integration intersects a cone with a range ball.
+    // Per-pixel integration up to the handover intersects a cone with a range ball.
     // The flat cone alone can be much wider than that ball. Tighten only the
     // source mask so full-light depth ordering and accumulation stay intact.
     fn source_extent_for(&self, cone: &SanitizedCone) -> Option<LightExtent> {
@@ -1528,7 +1531,6 @@ mod tests {
             color: Vec3::ONE,
             intensity: 1.0,
             cos_field,
-            wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
@@ -1944,15 +1946,16 @@ mod tests {
                 .enumerate()
                 .map(|(i, _)| {
                     let mut rest = LightRest::zeroed();
-                    rest.wash = if i >= source_edge_start || i % 2 == 0 {
-                        0.9
-                    } else {
-                        0.0
-                    };
                     rest.gobo = if i < source_edge_start && i % 3 == 0 {
                         1.0
                     } else {
                         0.0
+                    };
+                    // The grid takes every other light and never a gobo.
+                    rest.handover = if (i >= source_edge_start || i % 2 == 0) && rest.gobo < 0.5 {
+                        crate::fog_grid::SOURCE_INNER
+                    } else {
+                        crate::fog_grid::NEVER
                     };
                     rest.haze_gain = 1.0;
                     rest
@@ -2005,10 +2008,10 @@ mod tests {
             let near_masks = &gpu_masks[words..2 * words];
             let mut clipped = lights.clone();
             for (light, rest) in clipped.iter_mut().zip(&rests) {
-                if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
+                if rest.handover < crate::fog_grid::NEVER {
                     light.range = finite(light.range, 0.05)
                         .clamp(0.05, 100.0)
-                        .min(crate::fog_grid::SOURCE_OUTER);
+                        .min(rest.handover * crate::fog_grid::HANDOVER_BAND);
                 }
             }
             // Sample actual spherical-cone support independently of the plane
@@ -2058,10 +2061,7 @@ mod tests {
                             0,
                             "near mask added a full-range rejection"
                         );
-                        if !standard_basis
-                            && rest.wash >= crate::fog_grid::BROAD_WASH
-                            && rest.gobo < 0.5
-                        {
+                        if !standard_basis && rest.handover < crate::fog_grid::NEVER {
                             let light = SanitizedCone::new(&clipped[source as usize]);
                             let in_rect = reference
                                 .view
@@ -2073,11 +2073,11 @@ mod tests {
                                 "vertical-camera fallback changed the original rectangle mask"
                             );
                         }
-                        if rest.wash < crate::fog_grid::BROAD_WASH || rest.gobo >= 0.5 {
+                        if rest.handover >= crate::fog_grid::NEVER {
                             assert_eq!(
                                 near_masks[at] & bit,
                                 gpu_masks[at] & bit,
-                                "a narrow or gobo cone was shortened"
+                                "a cone the grid never takes was shortened"
                             );
                         }
                     }

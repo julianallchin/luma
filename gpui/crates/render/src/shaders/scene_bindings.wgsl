@@ -96,7 +96,7 @@ struct FixtureLightRest {
     color: vec3<f32>,
     intensity: f32,
     cos_field: f32,
-    wash: f32,
+    handover: f32,
     gobo: f32,
     gobo_rotation: f32,
     // Shadow-map layer for this cone, or negative when it has none: maps are

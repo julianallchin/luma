@@ -125,10 +125,10 @@ fn classify_blocks(@builtin(global_invocation_id) cell: vec3<u32>,
         for (var li = lane; li < light_index_params.counts.x; li += FOG_BLOCK_LANES) {
             let core = light_core[li];
             let rest = light_rest[li];
-            if rest.wash < FOG_BROAD_WASH || rest.gobo >= 0.5 || rest.haze_gain <= 0.0 { continue; }
+            if rest.haze_gain <= 0.0 { continue; }
             let q = center - core.position;
             let distance = length(q);
-            if distance > radius + core.range || distance + radius <= FOG_SOURCE_INNER { continue; }
+            if distance > radius + core.range || distance + radius <= rest.handover { continue; }
             // The cone test is from the virtual apex behind the lens, whose
             // cone contains the beam; with a point source it is the lens.
             let axial = dot(q, rest.direction) + rest.lens_distance;

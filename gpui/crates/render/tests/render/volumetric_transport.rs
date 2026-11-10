@@ -61,7 +61,6 @@ fn light(gobo: u32) -> FixtureCone {
             cos_field,
         ),
         cos_field,
-        wash: 0.0,
         gobo,
         gobo_rotation: 0.31,
         haze_gain: 1.0,
@@ -213,7 +212,6 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
             color: Vec3::from_array(descriptor.light.color),
             intensity: descriptor.light.intensity,
             cos_field: descriptor.light.cos_field,
-            wash: 0.0,
             gobo: (index as u32) % descriptor.light.gobo_modulus,
             gobo_rotation: descriptor.light.gobo_rotation,
             haze_gain: 1.0,
@@ -649,7 +647,6 @@ fn async_viewport_coalesces_in_flight_work_and_presents_the_newest_descriptor() 
 #[test]
 fn broad_grid_resets_colour_and_blackout_without_retaining_light() {
     let mut cone = light(0);
-    cone.wash = 0.9;
     cone.cos_field = 0.5;
     cone.cos_beam = 0.85;
     cone.range = 24.0;
@@ -694,7 +691,6 @@ fn broad_grid_resets_colour_and_blackout_without_retaining_light() {
 #[test]
 fn deterministic_haze_is_independent_of_live_subframe_budget() {
     let mut broad = light(0);
-    broad.wash = 0.9;
     broad.cos_field = 0.5;
     broad.cos_beam = 0.85;
     let mut narrow = light(0);

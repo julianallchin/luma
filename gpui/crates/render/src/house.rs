@@ -130,7 +130,6 @@ impl Lamp {
             cos_field: cos_half(LAMP_FIELD_DEG),
             // A downlight is the isotropic end of the model: no core, all
             // shoulder.
-            wash: 1.0,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,

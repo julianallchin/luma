@@ -161,10 +161,9 @@ fn main() -> Result<(), String> {
         for cone in &frame.fixture_cones {
             let half = cone.cos_field.clamp(-1.0, 1.0).acos().to_degrees();
             println!(
-                "cone at {:.2?} dir {:.2?} half-field {half:.1} deg wash {:.2} intensity {:.2} colour {:.2?} range {:.1}",
+                "cone at {:.2?} dir {:.2?} half-field {half:.1} deg intensity {:.2} colour {:.2?} range {:.1}",
                 cone.position.to_array(),
                 cone.direction.to_array(),
-                cone.wash,
                 cone.intensity,
                 cone.color.to_array(),
                 cone.range,

@@ -65,7 +65,6 @@ fn lights(frame: &mut Frame, count: usize) {
             cos_field: 30_f32.to_radians().cos(),
             color: Vec3::new(0.15, 0.4, 1.0),
             intensity: 0.1 * (16.0 / count as f32).min(1.0),
-            wash: 0.8,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,

@@ -379,8 +379,6 @@ pub struct Cone {
     pub cos_field: f32,
     /// Conservative cull distance in metres, including the fading tail.
     pub range: f32,
-    /// 0 for a hard beam, 1 for a near-isotropic wash.
-    pub wash: f32,
     /// Peak intensity in relative lumens per steradian: the lumens over the
     /// profile's solid angle ([`profile_solid_angle`]), so every opening
     /// emits exactly its lumens.
@@ -465,7 +463,6 @@ pub fn cone_from_opening(l: Luminaire) -> Cone {
         // Wide washes still illuminate distant surfaces; cutting their support
         // to three metres produced a visible glowing ball around the lens.
         range: (30.0 * concentration.sqrt()).clamp(24.0, 60.0),
-        wash,
         gain: l.lumens / profile_solid_angle(cos_beam, cos_field),
     }
 }

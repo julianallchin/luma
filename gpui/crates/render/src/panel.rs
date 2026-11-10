@@ -787,7 +787,6 @@ mod tests {
             color,
             intensity: 1.0,
             cos_field: 18.0_f32.to_radians().cos(),
-            wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
@@ -1059,6 +1058,7 @@ mod tests {
         let behind = panel.light(&cone, q).white * forward(1.0);
         assert!(panel.scatter(&cone, q, ray, &forward).white < 0.1 * behind);
     }
+
     /// A bar of ten lamps a decimetre apart under a wide beam, with the
     /// lamps `lit` gives.
     fn bar(lit: impl Fn(usize) -> bool) -> (Panel, FixtureCone, Vec<Cell>) {
@@ -1152,7 +1152,6 @@ mod tests {
             }
         }
     }
-
 
     /// A face lit evenly all over has no pattern: every level of its stack
     /// reads one, wherever on the face. The buffer holds the header, the

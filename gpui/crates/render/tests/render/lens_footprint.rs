@@ -44,7 +44,6 @@ fn narrow(position: Vec3, direction: Vec3, lens: Lens) -> FixtureCone {
         color: Vec3::new(1.0, 0.25, 0.1),
         intensity: cone.gain,
         cos_field: cone.cos_field,
-        wash: 0.0,
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,

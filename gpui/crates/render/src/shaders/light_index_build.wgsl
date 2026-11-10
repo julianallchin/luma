@@ -43,7 +43,8 @@ struct IndexParams {
 struct LightCull {
     // Inclusive 8 px tile rect: x0, y0, x1, y1.
     rect: vec4<u32>,
-    // Source region for broad washes, full range for narrow/gobo lights.
+    // The region up to a light's handover to the fog grid; its full range
+    // for a light the grid never takes.
     near_rect: vec4<u32>,
     // xyz apex, w range.
     apex_range: vec4<f32>,

@@ -406,7 +406,6 @@ fn a_beam_stays_brighter_than_the_sky_behind_it() {
             color: Vec3::ONE,
             intensity: cone.gain,
             cos_field: cone.cos_field,
-            wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
