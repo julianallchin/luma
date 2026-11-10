@@ -8,6 +8,8 @@
 const PURPOSE = "ramp bounds";
 
 fixture({
+  // These tests read a turn's tool chips, which compact turns fold away.
+  sql: ["INSERT OR REPLACE INTO settings (key, value) VALUES ('compact_turns', 'false')"],
   window: [1280, 900],
   model_cadence_ms: 25,
   model: [

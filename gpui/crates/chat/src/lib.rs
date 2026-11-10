@@ -1736,8 +1736,8 @@ impl Render for AgentChat {
     }
 }
 
-/// The `compact_turns` setting, shared by every chat panel in the app.
-#[derive(Default)]
+/// The `compact_turns` setting, shared by every chat panel in the app. Unset
+/// reads as on, the setting's default.
 struct CompactTurns(bool);
 
 impl gpui::Global for CompactTurns {}
@@ -1745,7 +1745,7 @@ impl gpui::Global for CompactTurns {}
 /// Whether finished turns fold their work behind one header.
 #[must_use]
 pub fn compact_turns(cx: &App) -> bool {
-    cx.try_global::<CompactTurns>().is_some_and(|flag| flag.0)
+    cx.try_global::<CompactTurns>().is_none_or(|flag| flag.0)
 }
 
 /// Adopt the setting. Panels re-split their rows on their next frame.

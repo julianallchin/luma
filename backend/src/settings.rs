@@ -259,7 +259,7 @@ impl Default for AppSettings {
             stage_gizmos: true,
             render_scale: *RENDER_SCALE_RANGE.end(),
             hdr_output: true,
-            compact_turns: false,
+            compact_turns: true,
             stage_frame_rate: true,
             stage_look: String::new(),
             stage_quality: high_quality(),
