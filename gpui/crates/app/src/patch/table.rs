@@ -48,6 +48,8 @@ const MIN_WIDTH: f32 = W_MODEL
     + 6.0 * COLUMN_GAP
     + 2.0 * ROW_INSET;
 const NAME_MIN_WIDTH: f32 = 120.0;
+/// How many of a fixture's groups its row names before it counts the rest.
+const SHOWN_GROUPS: usize = 3;
 const COLUMN_GAP: f32 = 10.0;
 const ROW_INSET: f32 = 12.0;
 
@@ -265,7 +267,10 @@ fn groups_cell(
                 .child("—"),
         );
     }
-    for (group, shown) in groups.iter().zip(names) {
+    // What fits at the column's narrowest. The rest are a count, so a
+    // fixture in a dozen groups does not push its row sideways.
+    let hidden = groups.len().saturating_sub(SHOWN_GROUPS);
+    for (group, shown) in groups.iter().zip(names).take(SHOWN_GROUPS) {
         let picked = app.clone();
         let id = group.id.clone();
         cell = cell.child(
@@ -282,6 +287,10 @@ fn groups_cell(
                     cx.stop_propagation();
                 }),
         );
+    }
+    if hidden > 0 {
+        cell =
+            cell.child(float::tag(format!("+{hidden}")).text_color(ladder::foreground_alpha(0.5)));
     }
     cell.agent_node(Role::Text, format!("{name} group = {said}"))
         .into_any_element()

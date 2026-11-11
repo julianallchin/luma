@@ -190,26 +190,3 @@ test("a held fixture draws a body over the face it is aimed at", { timeoutMs: 12
   // a five-pixel dot, orders of magnitude less.
   expect(image.diff(empty, held)).toBeGreaterThan(0.0002);
 });
-
-test("the selected object card follows a camera orbit", { timeoutMs: 120000 }, () => {
-  open();
-  until("the stage", (s) => s.find({ role: "toggle", label: "Stage objects" }) !== undefined);
-  nav.step("objects", "toggle", "Stage objects");
-  app.frames(12, { waitMs: 60 });
-  const element = until("an element", (s) => s.findAll({ role: "row" }).find((n) => n.label.startsWith("Element ")))
-    .findAll({ role: "row" }).find((n) => n.label.startsWith("Element "));
-  nav.step("select element", "row", element.label);
-  app.frames(12, { waitMs: 60 });
-  const card = () => app.snapshot().find({ role: "card", label: "Selected object" });
-  until("the object card", () => card() !== undefined);
-  const beforeCard = card().bounds;
-  const room = app.snapshot().find({ role: "card", label: "Stage" }).bounds;
-  const cameraBefore = camera();
-  // Grab open room below the card: a press on the card is the card's, not the
-  // camera's.
-  const below = beforeCard.y + beforeCard.height;
-  app.drag({ x: room.x + room.width * 0.5, y: (below + room.y + room.height) / 2 }, { dx: 110, dy: 35 }, { steps: 10 });
-  app.frames(12, { waitMs: 60 });
-  assert(camera() !== cameraBefore, "the drag did not orbit");
-  assert(JSON.stringify(card().bounds) !== JSON.stringify(beforeCard), "the card stayed fixed while the camera orbited");
-});

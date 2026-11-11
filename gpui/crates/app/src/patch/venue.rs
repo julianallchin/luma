@@ -41,7 +41,10 @@ pub(super) fn render(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .flex_col()
         .overflow_hidden()
         .child(super::band(state, app))
-        .child(super::table::table(state, app))
+        .child(match state.view {
+            super::View::Fixtures => super::table::table(state, app),
+            super::View::Patch => super::footprint::universes(state, app),
+        })
         .agent_node(Role::Card, "Venue fixtures");
     div()
         .size_full()
@@ -50,7 +53,10 @@ pub(super) fn render(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .bg(ladder::background())
         .text_color(ladder::foreground())
         .child(fixtures)
-        .child(super::groups::panel(state, app))
+        // Groups belong to the inventory; the patch reading takes the width.
+        .when(state.view == super::View::Fixtures, |page| {
+            page.child(super::groups::panel(state, app))
+        })
         .children(
             state
                 .menu

@@ -55,7 +55,6 @@ mod pick;
 mod render_controls;
 mod render_scale;
 mod rig;
-mod selection_card;
 mod settings;
 mod subject;
 mod telemetry;
@@ -78,7 +77,6 @@ use navigation::*;
 use pick::*;
 use render_controls::*;
 use render_scale::*;
-use selection_card::*;
 use telemetry::*;
 use view_panel::*;
 use viewport::*;
@@ -232,13 +230,6 @@ pub(crate) struct Visualizer {
     presentation: bool,
     bottom_bar_visible: bool,
     settings_motion: RefCell<settings::DockMotion>,
-    selection_motion: SelectionMotion,
-    /// The side the card sits on, for the selection it was chosen for. Kept
-    /// while it still fits, so an edit that reshapes the object does not flip
-    /// the card to another side.
-    selection_card_side: Option<(Vec<EditorObject>, CardSide)>,
-    /// Where the card was last placed, for the frames it is held still.
-    selection_card_last: Option<Point<Pixels>>,
     environment_saving: bool,
     environment_edited: bool,
     environment_pending: Rc<RefCell<Option<VenueEnvironment>>>,
@@ -361,12 +352,6 @@ struct Stage {
     /// [`Visualizer::viewport_origin`] both exist only once a frame has been
     /// drawn.
     pane: Bounds<Pixels>,
-    /// Measured card size; short cards align with the object just like tall ones.
-    selection_card_size: gpui::Size<Pixels>,
-    /// A left press that began on the card and has not been released. The
-    /// card holds still under it, so a control being scrubbed never moves
-    /// away from the pointer.
-    selection_card_held: bool,
     /// The camera export in flight, and its result.
     exports: camera_export::Exports,
     /// The free-running clock the air and the strobes run on.

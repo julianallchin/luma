@@ -79,35 +79,60 @@ test("a refused address leaves the row where it was", () => {
   expect(app.snapshot().findAll({ role: "row" }).filter((n) => n.focused).map((n) => n.label)).toEqual(["Mover 0"]);
 });
 
-// The footprint strip shows the collision the allocator computed, and the
-// universe chips tell 1 from 17.
-test("the footprint reports a collision and the universes it holds", { fixture: { sql: EXTRAS } }, () => {
-  openPatch();
-  const collisions = () => texts().filter((l) => l.startsWith("Collision at"));
-  app.click(app.snapshot().find({ role: "toggle", label: "Footprint" }));
-  until("the footprint", (s) => s.find({ role: "select", label: "Universe 1" }) !== undefined);
+const showPatch = () => {
+  nav.step("the patch view", "toggle", "Patch");
+  until("the universes", (s) => s.find({ role: "card", label: "Universe 1 channels" }) !== undefined);
   app.frames(4);
-  // The clash covers 5–12 across movers at 1–8 and 9–16: one run, not eight
-  // cells.
-  expect(collisions()).toEqual(["Collision at 1:5–12"]);
+};
+const block = (name) => app.snapshot().findAll({ role: "button" }).find((n) => n.label.startsWith(`${name} at `));
+const blockStart = (name) => Number(block(name).label.match(/:(\d+)–/)[1]);
 
-  app.click(app.snapshot().find({ role: "select", label: "Universe 1" }));
-  until("the universe menu", (s) => s.find({ role: "button", label: "Universe 17" }) !== undefined);
-  expect(app.snapshot().findAll({ role: "button" }).map((n) => n.label).filter((l) => l.startsWith("Universe ")))
-    .toEqual(["Universe 1", "Universe 17"]);
-  // Universe 17 is a different strip, and it is not colliding.
-  app.click(app.snapshot().find({ role: "button", label: "Universe 17" }));
-  until("the seventeenth universe", (s) => s.find({ role: "select", label: "Universe 17" }) !== undefined);
+// The patch view shows every universe as a strip, with the collision the
+// allocator computed on the one that has it.
+test("the patch view shows each universe and the collision on it", { fixture: { sql: EXTRAS } }, () => {
+  openPatch();
+  showPatch();
+  const strips = app.snapshot().findAll({ role: "card" }).map((n) => n.label).filter((l) => l.endsWith(" channels"));
+  expect(strips).toEqual(["Universe 1 channels", "Universe 17 channels"]);
+  // The clash covers 5–12 across movers at 1–8 and 9–16: one run, not eight
+  // cells, and none on universe 17.
+  expect(texts().filter((l) => l.startsWith("Collision at"))).toEqual(["Collision at 1:5–12"]);
+  assert(block("Far 1").label.startsWith("Far 1 at 17:1–"), `Far 1 is drawn at ${block("Far 1").label}`);
+});
+
+// A block dragged along its strip is re-addressed by as many channels as it
+// was carried, and a drop onto another fixture is refused where it stood.
+test("dragging a block re-addresses the fixture, and a collision is refused", () => {
+  openPatch();
+  showPatch();
+  // A universe is four lanes of 128 channels.
+  const perChannel = app.snapshot().find({ role: "card", label: "Universe 1 channels" }).bounds.width / 128;
+  const before = blockStart("Mover 3");
+  app.drag(block("Mover 3"), { dx: 60 * perChannel, dy: 0 }, { steps: 8 });
+  until("the block to move", () => blockStart("Mover 3") !== before);
   app.frames(4);
-  expect(collisions()).toEqual([]);
+  const moved = blockStart("Mover 3") - before;
+  assert(moved > 57 && moved < 63, `carried 60 channels, moved ${moved}`);
+  // The table reads the same address.
+  nav.step("the fixtures view", "toggle", "Fixtures");
+  until("the table", (s) => s.find({ role: "row", label: "Mover 3" }) !== undefined);
+  expect(reading("Mover 3 address = ")).toBe(String(before + moved));
+
+  showPatch();
+  const stood = blockStart("Mover 3");
+  const back = (blockStart("Mover 0") - stood) * perChannel;
+  app.drag(block("Mover 3"), { dx: back, dy: 0 }, { steps: 8 });
+  until("the refusal", (s) => s.findAll({ role: "text" }).some((n) => n.label.includes("collides with")));
+  app.frames(4);
+  expect(blockStart("Mover 3")).toBe(stood);
 });
 
 // Universes 1 and 17 resolve to different rows — asserted on what the page
 // resolved, not on the formula that used to alias them.
 test("universe one and seventeen are different outputs", { fixture: { sql: EXTRAS } }, () => {
   openPatch();
-  app.click(app.snapshot().find({ role: "toggle", label: "Outputs" }));
-  until("the outputs table", (s) => s.findAll({ role: "row" }).some((n) => n.label.startsWith("Universe 1 →")));
+  showPatch();
+  until("the outputs", (s) => s.findAll({ role: "row" }).some((n) => n.label.startsWith("Universe 1 →")));
   app.frames(4);
   const rows = rowLabels().filter((l) => l.startsWith("Universe "));
   const one = rows.find((l) => l.startsWith("Universe 1 →")).slice("Universe 1 →".length);
@@ -129,8 +154,8 @@ test("universe one and seventeen are different outputs", { fixture: { sql: EXTRA
 // drawing an empty room.
 test("adding an output on a host with no DMX output says why", () => {
   openPatch();
-  app.click(app.snapshot().find({ role: "toggle", label: "Outputs" }));
-  until("the outputs table", (s) => s.find({ role: "button", label: "Add output to universe 1" }) !== undefined);
+  showPatch();
+  until("the outputs", (s) => s.find({ role: "button", label: "Add output to universe 1" }) !== undefined);
   app.click(app.snapshot().find({ role: "button", label: "Add output to universe 1" }));
   until("the device menu", (s) => s.findAll({ role: "text" }).some((n) => n.label.includes("not running on this host")));
 });
@@ -288,8 +313,8 @@ test("groups write as they are ticked and select what they hold", { fixture: { w
 
 test("the table, the groups and the stage share one selection", () => {
   nav.patch("Test Venue");
-  // The old per-kind tabs are gone, and so is the second table.
-  expect(app.snapshot().findAll({ role: "toggle" }).filter((n) => ["Stage", "Fixtures", "Groups"].includes(n.label)).length).toBe(0);
+  // The stage and the groups are not tabs, and there is no second table.
+  expect(app.snapshot().findAll({ role: "toggle" }).filter((n) => ["Stage", "Groups"].includes(n.label)).length).toBe(0);
   expect(app.snapshot().find({ role: "button", label: "Patch details" })).toBe(undefined);
   // The first click on a name selects its row; the second edits the name.
   nav.step("a fixture", "text", "Mover 0 label = Mover 0");

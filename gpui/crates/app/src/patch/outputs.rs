@@ -17,32 +17,6 @@ use luma_ui::node::{Instrument as _, Role};
 use super::Patch;
 use crate::Luma;
 
-pub(super) fn outputs(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    let Some(data) = state.data.as_ref() else {
-        return div().into_any_element();
-    };
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(8.0))
-        .children(
-            data.universes
-                .iter()
-                .map(|universe| row(state, i64::from(*universe), app)),
-        )
-        .when(data.universes.is_empty(), |body| {
-            body.child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(ladder::foreground_alpha(0.55))
-                    .child("No universe is patched yet.")
-                    .agent_node(Role::Text, "No universe is patched yet."),
-            )
-        })
-        .child(found(state))
-        .into_any_element()
-}
-
 /// One route as a person reads it: the device by name, then the port in the
 /// device's own terms. A device the drivers cannot see right now keeps the
 /// name it was bound under and says it is not seen.
@@ -75,7 +49,7 @@ fn route_label(route: &DmxRoute, devices: &[OutputDevice]) -> String {
     }
 }
 
-fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
+pub(super) fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
     let routes: Vec<&DmxRoute> = state
         .data
         .as_ref()
@@ -290,7 +264,7 @@ fn choice(
 /// What the drivers can see, or why they see nothing. A host with no output
 /// running, output turned off, and a room with nothing plugged in are three
 /// different answers, and this says which.
-fn found(state: &Patch) -> AnyElement {
+pub(super) fn found(state: &Patch) -> AnyElement {
     // Broadcast is listed whenever Art-Net is running, so it is not a find.
     let real = state.devices.iter().filter(|d| !d.any_port).count();
     let message: SharedString = match (&state.devices_unavailable, state.devices.len(), real) {

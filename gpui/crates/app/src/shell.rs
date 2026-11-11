@@ -394,7 +394,7 @@ impl Luma {
                 if page.mode_menu.take().is_some()
                     || page.menu.take().is_some()
                     || page.group_menu.take().is_some()
-                    || page.panel.take().is_some()
+                    || page.bind_menu.take().is_some()
                 {
                     cx.notify();
                     return;

@@ -22,14 +22,18 @@
 //! frame — which would take the caret with them mid-edit. A venue's patch is
 //! tens to hundreds of rows and this is a page, not a timeline.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashSet};
+use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::Focusable as _;
-use gpui::{div, px, AnyElement, Context, Entity, Point, SharedString, Subscription, Window};
+use gpui::{
+    div, px, AnyElement, Bounds, Context, Entity, Pixels, Point, SharedString, Subscription, Window,
+};
 
 use luma_lib::models::fixtures::PatchedFixture;
-use luma_lib::models::patch::{DmxRoute, OutputDevice, OutputPort, UniverseCell};
+use luma_lib::models::patch::{DmxRoute, OutputDevice, OutputPort};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
@@ -47,20 +51,23 @@ mod outputs;
 mod table;
 mod venue;
 
-/// What the header's chips hang: the address map and the output routing.
+/// What the page under the stage is showing.
+///
+/// Two readings of the same fixtures: as an inventory with its groups, and as
+/// channels in universes with where each universe comes out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Panel {
-    Footprint,
-    Outputs,
+pub(crate) enum View {
+    Fixtures,
+    Patch,
 }
 
-impl Panel {
-    pub(crate) const ALL: [Panel; 2] = [Panel::Footprint, Panel::Outputs];
+impl View {
+    pub(crate) const ALL: [View; 2] = [View::Fixtures, View::Patch];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Panel::Footprint => "Footprint",
-            Panel::Outputs => "Outputs",
+            View::Fixtures => "Fixtures",
+            View::Patch => "Patch",
         }
     }
 }
@@ -123,13 +130,16 @@ pub(crate) struct Notice {
     until: u64,
 }
 
-/// A drag across the footprint strip: the fixture picked up, which of its
+/// A drag along a universe's strip: the fixture picked up, which of its
 /// channels was grabbed, and where the pointer is now.
 pub(crate) struct StripDrag {
     pub(crate) fixture: String,
     /// Zero-based channel of the fixture the press landed on, so the block
     /// lands where the pointer says rather than one edge of it.
     pub(crate) grabbed_channel: u16,
+    /// The universe whose strip the pointer is over, which need not be the
+    /// one the block was picked up from.
+    pub(crate) universe: u16,
     pub(crate) over: u16,
 }
 
@@ -152,25 +162,19 @@ pub(crate) struct Patch {
     /// The patch could not be read. The cause is in the log.
     pub(crate) load_failed: bool,
 
-    /// The universe the strip is showing, and its 512 cells.
-    pub(crate) strip_universe: u16,
-    pub(crate) cells: Vec<UniverseCell>,
+    pub(crate) view: View,
+    /// Where each universe's strip was last drawn, so a pointer on it can be
+    /// read as a channel.
+    pub(crate) strips: Rc<RefCell<BTreeMap<u16, Bounds<Pixels>>>>,
     pub(crate) drag: Option<StripDrag>,
-    /// The fixture a strip cell was clicked on, which is also a table selection.
-    pub(crate) strip_refusal: Option<SharedString>,
+    /// Why the last drop was refused, and the universe it was dropped in.
+    pub(crate) strip_refusal: Option<(u16, SharedString)>,
 
     /// The DMX devices the drivers can see, or why there are none.
     pub(crate) devices: Vec<OutputDevice>,
     pub(crate) devices_unavailable: Option<SharedString>,
     /// Which universe row has its device menu open.
     pub(crate) bind_menu: Option<i64>,
-    /// The one panel hanging off the header, if any. One at a time, because
-    /// they are three answers to "and where does this come out" and a page
-    /// showing all three at once is the stack of labelled panels this design
-    /// replaced.
-    pub(crate) panel: Option<Panel>,
-    /// Whether the footprint's universe picker has its menu down.
-    pub(crate) universe_menu: bool,
 
     pub(crate) selected: HashSet<String>,
     /// The row a shift-click runs from: the last one clicked on its own.
@@ -205,15 +209,13 @@ impl Patch {
             venue_name,
             data: None,
             load_failed: false,
-            strip_universe: 1,
-            cells: Vec::new(),
+            view: View::Fixtures,
+            strips: Rc::default(),
             drag: None,
             strip_refusal: None,
             devices: Vec::new(),
             devices_unavailable: None,
             bind_menu: None,
-            panel: None,
-            universe_menu: false,
             selected: HashSet::new(),
             anchor: None,
             editing: None,
@@ -341,13 +343,10 @@ impl Luma {
         };
         state.generation += 1;
         let generation = state.generation;
-        let universe = state.strip_universe;
         let data = self.library.patch_data(&venue_id);
-        let cells = self.library.universe_occupancy(&venue_id, universe);
         let devices = self.library.output_devices();
         cx.spawn(async move |this, cx| {
             let data = data.await;
-            let cells = cells.await;
             let devices = devices.await;
             this.update(cx, |this, cx| {
                 let Some(Body::Patch(state)) = this.workspace.body_mut(&target) else {
@@ -356,44 +355,7 @@ impl Luma {
                 if state.generation != generation {
                     return;
                 }
-                state.landed(data, cells, devices);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Re-read one universe's 512 cells, without disturbing the table.
-    pub(crate) fn show_universe(
-        &mut self,
-        venue_id: String,
-        universe: u16,
-        cx: &mut Context<Self>,
-    ) {
-        let target = Target::Venue {
-            venue: venue_id.clone(),
-        };
-        let Some(Body::Patch(state)) = self.workspace.body_mut(&target) else {
-            return;
-        };
-        state.strip_universe = universe;
-        state.strip_refusal = None;
-        state.universe_menu = false;
-        state.generation += 1;
-        let generation = state.generation;
-        let pending = self.library.universe_occupancy(&venue_id, universe);
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let cells = pending.await;
-            this.update(cx, |this, cx| {
-                let Some(Body::Patch(state)) = this.workspace.body_mut(&target) else {
-                    return;
-                };
-                if state.generation != generation {
-                    return;
-                }
-                state.cells = cells.unwrap_or_default();
+                state.landed(data, devices);
                 cx.notify();
             })
             .ok();
@@ -406,7 +368,6 @@ impl Patch {
     fn landed(
         &mut self,
         data: Result<PatchData, LibraryError>,
-        cells: Result<Vec<UniverseCell>, LibraryError>,
         devices: Result<Vec<OutputDevice>, LibraryError>,
     ) {
         // A load the notice did not ask for: whatever it says happened is not
@@ -427,12 +388,6 @@ impl Patch {
                 // order is nobody's business.
                 data.fixtures
                     .sort_by_key(|row| (row.universe, row.address, row.id.clone()));
-                // A universe that emptied out from under the strip: fall back
-                // to the first one in use rather than drawing 512 blanks and
-                // calling it a universe.
-                if !data.universes.is_empty() && !data.universes.contains(&self.strip_universe) {
-                    self.strip_universe = data.universes[0];
-                }
                 self.selected
                     .retain(|id| data.fixtures.iter().any(|f| &f.id == id));
                 if self
@@ -450,7 +405,6 @@ impl Patch {
                 self.load_failed = true;
             }
         }
-        self.cells = cells.unwrap_or_default();
         match devices {
             Ok(devices) => {
                 self.devices = devices;
@@ -1043,11 +997,27 @@ impl Luma {
         cx.notify();
     }
 
-    // -- the footprint strip ---------------------------------------------------
+    // -- the universe strips ---------------------------------------------------
 
-    pub(crate) fn grab_strip_cell(
+    /// Show the fixtures as an inventory, or as channels in universes.
+    pub(crate) fn show_patch_view(&mut self, venue_id: String, view: View, cx: &mut Context<Self>) {
+        if let Some(state) = self.patch_mut(&venue_id) {
+            state.view = view;
+            state.clear_edit();
+            state.drag = None;
+            state.menu = None;
+            state.mode_menu = None;
+            state.bind_menu = None;
+        }
+        cx.notify();
+    }
+
+    /// Pick a fixture's block up by the channel under the pointer.
+    pub(crate) fn grab_strip_block(
         &mut self,
         venue_id: String,
+        fixture: String,
+        universe: u16,
         address: u16,
         cx: &mut Context<Self>,
     ) {
@@ -1055,40 +1025,41 @@ impl Luma {
             return;
         };
         state.strip_refusal = None;
-        let Some(cell) = state
-            .cells
-            .iter()
-            .find(|cell| cell.address == address)
-            .cloned()
-        else {
+        let Some(row) = state.row(&fixture) else {
             return;
         };
-        let Some(fixture) = cell.fixture_id.clone() else {
-            state.drag = None;
-            cx.notify();
-            return;
-        };
+        let grabbed_channel = u16::try_from(i64::from(address) - row.address)
+            .unwrap_or(0)
+            .min(u16::try_from(row.num_channels - 1).unwrap_or(0));
         state.selected.clear();
         state.selected.insert(fixture.clone());
         state.anchor = Some(fixture.clone());
         state.drag = Some(StripDrag {
             fixture,
-            grabbed_channel: cell.channel,
+            grabbed_channel,
+            universe,
             over: address,
         });
-        cx.notify();
+        let selected = state.selected.clone();
+        self.highlight_venue_lights(selected, cx);
     }
 
-    pub(crate) fn drag_strip_to(&mut self, venue_id: String, address: u16, cx: &mut Context<Self>) {
+    pub(crate) fn drag_strip_to(
+        &mut self,
+        venue_id: String,
+        universe: u16,
+        address: u16,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(state) = self.patch_mut(&venue_id) {
-            if let Some(drag) = state.drag.as_mut() {
-                if drag.over == address {
-                    return;
-                }
-                drag.over = address;
-            } else {
+            let Some(drag) = state.drag.as_mut() else {
+                return;
+            };
+            if drag.over == address && drag.universe == universe {
                 return;
             }
+            drag.over = address;
+            drag.universe = universe;
         }
         cx.notify();
     }
@@ -1102,7 +1073,8 @@ impl Luma {
         let Some(drag) = state.drag.take() else {
             return;
         };
-        let universe = i64::from(state.strip_universe);
+        let strip = drag.universe;
+        let universe = i64::from(strip);
         let start = i64::from(drag.over) - i64::from(drag.grabbed_channel);
         let fixture = drag.fixture;
         if state
@@ -1124,7 +1096,7 @@ impl Luma {
                         return this.report_failure("The fixture was not moved", error, cx);
                     };
                     if let Some(state) = this.patch_mut(&venue_id) {
-                        state.strip_refusal = Some(message);
+                        state.strip_refusal = Some((strip, message));
                     }
                     this.select_occupant(venue_id, universe, start, cx);
                     cx.notify();
@@ -1133,40 +1105,10 @@ impl Luma {
             .ok();
         })
         .detach();
+        cx.notify();
     }
 
     // -- outputs ---------------------------------------------------------------
-
-    /// Show one of the header's panels, or put the one that is up away.
-    pub(crate) fn toggle_patch_panel(
-        &mut self,
-        venue_id: String,
-        panel: Panel,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(state) = self.patch_mut(&venue_id) {
-            state.panel = (state.panel != Some(panel)).then_some(panel);
-            state.universe_menu = false;
-            state.bind_menu = None;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn close_patch_panel(&mut self, venue_id: String, cx: &mut Context<Self>) {
-        if let Some(state) = self.patch_mut(&venue_id) {
-            state.panel = None;
-            state.universe_menu = false;
-            state.bind_menu = None;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn toggle_universe_menu(&mut self, venue_id: String, cx: &mut Context<Self>) {
-        if let Some(state) = self.patch_mut(&venue_id) {
-            state.universe_menu = !state.universe_menu;
-        }
-        cx.notify();
-    }
 
     pub(crate) fn open_bind_menu(
         &mut self,
@@ -1261,7 +1203,18 @@ fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
         .flex()
         .items_center()
         .gap(px(8.0))
-        .child(div().flex_none().text_size(px(12.5)).child("Fixtures"))
+        .child(luma_ui::float::segmented().children(View::ALL.map(|view| {
+            let shown = app.clone();
+            let venue = state.venue_id.clone();
+            luma_ui::float::segment(view.label(), state.view == view, view.label())
+                .id(SharedString::from(format!("patch-view-{}", view.label())))
+                .on_click(move |_, _, cx| {
+                    let venue = venue.clone();
+                    shown.update(cx, |this, cx| this.show_patch_view(venue, view, cx));
+                })
+                .agent_node(Role::Toggle, view.label())
+                .agent_focused(state.view == view)
+        })))
         .child(
             div()
                 .flex_1()
@@ -1272,7 +1225,6 @@ fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
                 .child(subtitle(state))
                 .agent_node(Role::Text, subtitle(state)),
         )
-        .children(Panel::ALL.map(|panel| panel_chip(state, panel, app)))
         .child(
             luma_ui::float::btn("Auto patch", "patch-auto")
                 .id("patch-auto")
@@ -1282,57 +1234,6 @@ fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
                 })
                 .agent_node(Role::Button, "Auto patch"),
         )
-}
-
-/// A chip in the band, and the float it hangs when it is lit.
-fn panel_chip(state: &Patch, panel: Panel, app: &Entity<Luma>) -> impl IntoElement {
-    let open = state.panel == Some(panel);
-    let toggled = app.clone();
-    let venue = state.venue_id.clone();
-    let label = panel.label();
-    div()
-        .relative()
-        .flex_shrink_0()
-        .child(
-            luma_ui::float::chip()
-                .id(SharedString::from(format!("patch-panel-{label}")))
-                .when(open, |chip| {
-                    chip.bg(luma_ui::glass::card_selected_bg())
-                        .text_color(ladder::foreground())
-                })
-                .on_click(move |_, _, cx| {
-                    let venue = venue.clone();
-                    toggled.update(cx, |this, cx| this.toggle_patch_panel(venue, panel, cx));
-                })
-                .child(label)
-                .agent_node(Role::Toggle, label)
-                .agent_focused(open),
-        )
-        .when(open, |slot| slot.child(panel_float(state, panel, app)))
-}
-
-fn panel_float(state: &Patch, panel: Panel, app: &Entity<Luma>) -> AnyElement {
-    let dismissed = app.clone();
-    let venue = state.venue_id.clone();
-    let body = match panel {
-        Panel::Footprint => footprint::footprint(state, app),
-        Panel::Outputs => outputs::outputs(state, app),
-    };
-    luma_ui::float::anchored_below(
-        SharedString::from(format!("patch-panel-float-{}", panel.label())),
-        luma_ui::CONTROL_HEIGHT,
-        luma_ui::float::Dismiss::on_press_out(move |_, cx| {
-            let venue = venue.clone();
-            dismissed.update(cx, |this, cx| this.close_patch_panel(venue, cx));
-        }),
-        luma_ui::float::popover_card()
-            .w(px(PANEL_WIDTH))
-            .p(px(14.0))
-            .gap(px(10.0))
-            .child(body)
-            .agent_node(Role::Card, panel.label())
-            .into_any_element(),
-    )
 }
 
 /// The line under the title: what the last act did, or what the patch holds.
@@ -1370,8 +1271,3 @@ pub(crate) fn plural(count: usize, noun: &str) -> String {
 /// The row of chrome over the table, and over the groups beside it, so the
 /// two lists start on one line.
 pub(crate) const BAND_HEIGHT: f32 = 44.0;
-
-/// Wide enough for a 32-column footprint grid at 8 px a cell plus the card's
-/// own inset — the widest of the three panels, and they share a width so
-/// switching between them does not move the float.
-const PANEL_WIDTH: f32 = 332.0;

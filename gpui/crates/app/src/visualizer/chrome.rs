@@ -109,27 +109,6 @@ pub(crate) fn visualizer(
                     ..ladder::primary()
                 })
         });
-    let selection_target = state.selection_card_position(pane.size);
-    let selection = if venue {
-        state
-            .build
-            .as_ref()
-            .and_then(|build| crate::stage::selection_controls(build, app))
-    } else {
-        None
-    };
-    let selection_at = if selection.is_some() {
-        let at = state.selection_motion.sample(
-            Vec2::new(f32::from(selection_target.x), f32::from(selection_target.y)),
-            Instant::now(),
-        );
-        Point::new(px(at.x), px(at.y))
-    } else {
-        state.selection_motion.since = None;
-        // A press that closed the card (Remove) never sees its release.
-        state.stage.borrow_mut().selection_card_held = false;
-        selection_target
-    };
     // The pivot of the last orbit or wheel step, fading out.
     let pivot_dot = state.pivot_dot_at(Instant::now()).map(|(at, fade)| {
         let radius = PIVOT_DOT_SIZE / 2.;
@@ -195,63 +174,7 @@ pub(crate) fn visualizer(
                 .child(fullscreen_button(state.presentation, app))
                 .when(matches!(state.status, Status::Live), |d| {
                     d.child(settings::trigger(state, app))
-                })
-                .children(selection.map(|controls| {
-                    let stage = Rc::clone(&state.stage);
-                    let held = Rc::clone(&state.stage);
-                    luma_ui::float::popover_card()
-                        .occlude()
-                        .w(px(280.))
-                        .p(px(10.))
-                        .child(
-                            div()
-                                .id("scene-object-controls")
-                                .max_h(px(210.))
-                                .overflow_y_scroll()
-                                .child(controls),
-                        )
-                        .child(
-                            canvas(
-                                move |bounds, _, _| {
-                                    stage.borrow_mut().selection_card_size = bounds.size;
-                                    bounds
-                                },
-                                move |_, bounds, window, _| {
-                                    let pressed = Rc::clone(&held);
-                                    window.on_mouse_event(
-                                        move |event: &gpui::MouseDownEvent, phase, _, _| {
-                                            if phase.capture()
-                                                && event.button == gpui::MouseButton::Left
-                                                && bounds.contains(&event.position)
-                                            {
-                                                pressed.borrow_mut().selection_card_held = true;
-                                            }
-                                        },
-                                    );
-                                    let released = Rc::clone(&held);
-                                    window.on_mouse_event(
-                                        move |event: &gpui::MouseUpEvent, phase, _, _| {
-                                            if phase.capture()
-                                                && event.button == gpui::MouseButton::Left
-                                            {
-                                                released.borrow_mut().selection_card_held = false;
-                                            }
-                                        },
-                                    );
-                                },
-                            )
-                            .absolute()
-                            .inset_0(),
-                        )
-                        .agent_node(Role::Card, "Selected object")
-                        .map(|card| {
-                            div()
-                                .absolute()
-                                .left(selection_at.x)
-                                .top(selection_at.y)
-                                .child(luma_ui::float::frosted_card(card))
-                        })
-                })),
+                }),
         )
         .children(state.audition.as_ref().map(audition_badge))
         .agent_node(

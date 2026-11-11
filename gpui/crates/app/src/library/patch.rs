@@ -40,9 +40,20 @@ impl Library {
                         None
                     }
                 };
-            let universes = handlers::fixtures::universes_in_use(&services, venue_id)
+            let universes = handlers::fixtures::universes_in_use(&services, venue_id.clone())
                 .await
                 .map_err(refused("universes_in_use"))?;
+            let mut occupancy = std::collections::BTreeMap::new();
+            for universe in &universes {
+                let cells = handlers::fixtures::universe_occupancy(
+                    &services,
+                    venue_id.clone(),
+                    i64::from(*universe),
+                )
+                .await
+                .map_err(refused("universe_occupancy"))?;
+                occupancy.insert(*universe, cells);
+            }
             let routes = handlers::output::list_routes(&services)
                 .await
                 .map_err(refused("list_routes"))?;
@@ -67,6 +78,7 @@ impl Library {
                 groups,
                 usage,
                 universes,
+                occupancy,
                 routes,
             })
         })
@@ -237,6 +249,8 @@ pub struct Patch {
     pub usage: Option<Vec<luma_lib::models::groups::GroupUsage>>,
     /// Every universe the venue patches into, ascending.
     pub universes: Vec<u16>,
+    /// Each universe in use as its 512 cells, as the allocator sees them.
+    pub occupancy: std::collections::BTreeMap<u16, Vec<UniverseCell>>,
     /// Where each universe goes. Not per-venue: an output is a fact about
     /// this machine's wiring.
     pub routes: Vec<DmxRoute>,
