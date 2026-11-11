@@ -383,6 +383,21 @@ impl Visualizer {
         None
     }
 
+    /// Teach the room a fixture it holds none of yet, so one in the hand is
+    /// drawn as itself before the first is placed.
+    pub(crate) fn learn_definition(
+        &mut self,
+        path: &str,
+        definition: &luma_lib::models::fixtures::FixtureDefinition,
+    ) {
+        let mut stage = self.stage.borrow_mut();
+        stage
+            .definitions
+            .entry(path.to_string())
+            .or_insert_with(|| luma_scene::definition::Definition::from(definition));
+        stage.idle = None;
+    }
+
     /// Update only transient scene positions; the builder owns persistence on release.
     pub(crate) fn preview_stage_positions(&mut self, positions: &[(String, [f64; 3])]) {
         let mut stage = self.stage.borrow_mut();

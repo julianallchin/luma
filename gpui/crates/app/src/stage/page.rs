@@ -173,7 +173,7 @@ pub(crate) struct StageView {
     pub(crate) elements: Vec<(String, String, String)>,
     pub(crate) selected: Option<String>,
     /// The add-element dialog's keyboard cursor, when it is up.
-    pub(crate) choosing: Option<(super::hand::Offer, usize)>,
+    pub(crate) choosing: Option<(super::hand::Offer, usize, i32)>,
     pub(crate) configuring: Option<ConfigureView>,
 }
 
@@ -198,7 +198,7 @@ impl Luma {
                 })
                 .collect(),
             selected: build.selected.clone(),
-            choosing: build.hand.choosing().map(|c| (c.offer, c.cursor)),
+            choosing: build.hand.choosing().map(|c| (c.offer, c.cursor, c.turn)),
             configuring: build.hand.configuring().map(|row| ConfigureView {
                 host: format!("{} {}", row.host_label, row.host_socket),
                 what: row.what.label().to_string(),

@@ -1,13 +1,15 @@
 //! Thumbnails for the add-element dialog.
 //!
 //! The dialog's preview pane owes the operator the *shape* of what a row
-//! would put in their hand, and text was standing in for it. Each catalog
-//! piece is rendered once, offscreen, on its own renderer and device — the
-//! same [`luma_render::Renderer`] path the goldens use — into a PNG the
-//! dialog then shows like any other image. A fixture is rendered the same
-//! way the first time its row is highlighted: there are hundreds, and nobody
-//! looks at most of them. Rendering happens on a plain thread because it owns
-//! a whole wgpu device; the dialog repaints when the files land.
+//! would put in their hand, and text was standing in for it. A subject is
+//! rendered offscreen, on its own renderer and device — the same
+//! [`luma_render::Renderer`] path the goldens use — into a PNG the dialog
+//! then shows like any other image, one per angle it has been turned to.
+//! The catalog's pieces are rendered ahead at the angle the dialog opens on;
+//! everything else is rendered when it is first looked at: there are
+//! hundreds of fixtures, and nobody looks at most of them. Rendering happens
+//! on a plain thread because it owns a whole wgpu device; the dialog
+//! repaints when the files land.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
@@ -17,16 +19,50 @@ use luma_render::scene_desc::{
     CameraPose, Editor, Fixture, Geometry, Piece, RenderSettings, Scene,
 };
 
-/// Where a piece's thumbnail lands. Content-addressed by catalog ref only:
-/// the palette renders defaults, and a default is stable per build.
-pub(crate) fn thumbnail_path(catalog_ref: &str) -> PathBuf {
-    std::env::temp_dir()
-        // Versioned: the files are content-addressed by catalog ref alone, so
-        // a style change (the matte, the framing) or a new geometry kind has
-        // to move the whole
-        // directory or every machine keeps its old opaque renders forever.
-        .join("luma-piece-previews-v3")
-        .join(format!("{}.png", catalog_ref.replace(['/', ' ', ':'], "_")))
+/// What a thumbnail is a picture of, and from where.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct View {
+    pub(crate) subject: Subject,
+    /// How far the subject has been turned, in [`TURN_STEP_DEG`] steps.
+    pub(crate) turn: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum Subject {
+    /// A catalog piece, by its catalog ref.
+    Piece(String),
+    /// A fixture, by its definition's path.
+    Fixture(String),
+}
+
+/// One step of turning a subject. Coarse enough that a full turn is a few
+/// dozen files, fine enough to read as turning.
+pub(crate) const TURN_STEP_DEG: i32 = 10;
+const TURN_STEPS: i32 = 360 / TURN_STEP_DEG;
+
+impl View {
+    pub(crate) fn of(subject: Subject, turn: i32) -> Self {
+        Self {
+            subject,
+            turn: turn.rem_euclid(TURN_STEPS),
+        }
+    }
+
+    /// Where this view's file lands. Content-addressed by subject and angle:
+    /// a default is stable per build.
+    fn file(&self) -> PathBuf {
+        let (Subject::Piece(name) | Subject::Fixture(name)) = &self.subject;
+        std::env::temp_dir()
+            // Versioned: a style change (the matte, the framing) or a new
+            // geometry kind has to move the whole directory or every machine
+            // keeps its old renders forever.
+            .join("luma-element-previews-v1")
+            .join(format!(
+                "{}@{}.png",
+                name.replace(['/', ' ', ':'], "_"),
+                self.turn * TURN_STEP_DEG
+            ))
+    }
 }
 
 /// Kick the render thread off once per process. Idempotent and cheap to call
@@ -35,11 +71,11 @@ pub(crate) fn warm() {
     worker();
 }
 
-/// The render thread's inbox: fixture paths to draw once the catalog is done.
-fn worker() -> &'static mpsc::Sender<String> {
-    static WORKER: OnceLock<mpsc::Sender<String>> = OnceLock::new();
+/// The render thread's inbox: views to draw once the catalog is done.
+fn worker() -> &'static mpsc::Sender<View> {
+    static WORKER: OnceLock<mpsc::Sender<View>> = OnceLock::new();
     WORKER.get_or_init(|| {
-        let (requests, inbox) = mpsc::channel::<String>();
+        let (requests, inbox) = mpsc::channel::<View>();
         std::thread::Builder::new()
             .name("element-previews".into())
             .spawn(move || {
@@ -50,12 +86,20 @@ fn worker() -> &'static mpsc::Sender<String> {
                 let mut library = luma_render::assets::Library::new(
                     luma_lib::resources::meshes_root(fixtures_root.as_deref()),
                 );
-                render_all(&mut renderer, &mut library);
-                for path in inbox {
-                    if let Some(root) = &fixtures_root {
-                        render_fixture(&mut renderer, &mut library, root, &path);
+                for piece in luma_scene::catalog::pieces() {
+                    let view = View::of(Subject::Piece(piece.id.to_string()), 0);
+                    render(&mut renderer, &mut library, fixtures_root.as_deref(), &view);
+                }
+                while let Ok(mut view) = inbox.recv() {
+                    // A subject being turned asks for every angle it passes
+                    // through; only where it is now is worth drawing.
+                    while let Ok(later) = inbox.try_recv() {
+                        view = later;
                     }
-                    unavailable().lock().unwrap().insert(path);
+                    render(&mut renderer, &mut library, fixtures_root.as_deref(), &view);
+                    if !view.file().exists() {
+                        undrawable().lock().unwrap().insert(view);
+                    }
                 }
             })
             .ok();
@@ -63,14 +107,14 @@ fn worker() -> &'static mpsc::Sender<String> {
     })
 }
 
-/// Fixtures the thread has finished with, drawn or not: asked for once.
-fn unavailable() -> &'static Mutex<HashSet<String>> {
-    static DONE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    DONE.get_or_init(Mutex::default)
+/// Views the thread tried and could not draw: not worth asking for again.
+fn undrawable() -> &'static Mutex<HashSet<View>> {
+    static FAILED: OnceLock<Mutex<HashSet<View>>> = OnceLock::new();
+    FAILED.get_or_init(Mutex::default)
 }
 
-/// A fixture's thumbnail, as far as it has got.
-pub(crate) enum FixtureThumbnail {
+/// A thumbnail, as far as it has got.
+pub(crate) enum Thumbnail {
     Ready(PathBuf),
     /// Asked for and not back yet: worth another look next frame.
     Rendering,
@@ -78,82 +122,79 @@ pub(crate) enum FixtureThumbnail {
     Unavailable,
 }
 
-/// The thumbnail of the fixture at `path`, asking for it on first sight.
-pub(crate) fn fixture_thumbnail(path: &str) -> FixtureThumbnail {
-    let file = thumbnail_path(path);
+/// The thumbnail of `view`, asking for it while it is missing.
+pub(crate) fn thumbnail(view: &View) -> Thumbnail {
+    let file = view.file();
     if file.exists() {
-        return FixtureThumbnail::Ready(file);
+        return Thumbnail::Ready(file);
     }
-    if unavailable().lock().unwrap().contains(path) {
-        return FixtureThumbnail::Unavailable;
+    // A send that fails means the thread is gone: no device to draw on.
+    if undrawable().lock().unwrap().contains(view) || worker().send(view.clone()).is_err() {
+        return Thumbnail::Unavailable;
     }
-    static ASKED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    let first = ASKED
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap()
-        .insert(path.to_string());
-    if first && worker().send(path.to_string()).is_err() {
-        // The thread is gone: no device to draw on.
-        unavailable().lock().unwrap().insert(path.to_string());
-        return FixtureThumbnail::Unavailable;
-    }
-    FixtureThumbnail::Rendering
+    Thumbnail::Rendering
 }
 
 /// Whether every catalog piece already has its file — the dialog's "stop
 /// polling" answer.
 pub(crate) fn all_ready() -> bool {
-    luma_scene::catalog::pieces()
-        .iter()
-        .all(|piece| thumbnail_path(piece.id).exists())
+    luma_scene::catalog::pieces().iter().all(|piece| {
+        View::of(Subject::Piece(piece.id.to_string()), 0)
+            .file()
+            .exists()
+    })
 }
 
-fn render_all(renderer: &mut luma_render::Renderer, library: &mut luma_render::assets::Library) {
-    for piece in luma_scene::catalog::pieces() {
-        let path = thumbnail_path(piece.id);
-        if path.exists() {
-            continue;
-        }
-        let geometry = match piece.geometry {
-            luma_scene::catalog::Geometry::Mesh { path } => Geometry::mesh(path),
-            luma_scene::catalog::Geometry::Procedural(family) => {
-                Geometry::Procedural(luma_scene::catalog::default_params(family))
-            }
-            luma_scene::catalog::Geometry::Assembly(_) => Geometry::Assembly(piece.id.to_string()),
-        };
-        let subject = Subject {
-            pieces: vec![Piece {
-                id: "subject".into(),
-                geometry,
-                kind: String::new(),
-                pos: [0.0; 3],
-                rot: [0.0; 3],
-                scale: 1.0,
-            }],
-            fixtures: Vec::new(),
-            definitions: BTreeMap::new(),
-            reach: PIECE_REACH,
-        };
-        shoot(renderer, library, &subject, &path);
+/// Draw `view` to its file, unless it is already there.
+fn render(
+    renderer: &mut luma_render::Renderer,
+    library: &mut luma_render::assets::Library,
+    fixtures_root: Option<&std::path::Path>,
+    view: &View,
+) {
+    let file = view.file();
+    if file.exists() {
+        return;
+    }
+    let posed = match &view.subject {
+        Subject::Piece(catalog_ref) => piece(catalog_ref),
+        Subject::Fixture(path) => fixtures_root.and_then(|root| fixture(root, path)),
+    };
+    if let Some(posed) = posed {
+        shoot(renderer, library, &posed, view.turn, &file);
     }
 }
 
-/// Draw one fixture, standing on its clamp, in the first mode it declares.
-fn render_fixture(
-    renderer: &mut luma_render::Renderer,
-    library: &mut luma_render::assets::Library,
-    fixtures_root: &std::path::Path,
-    path: &str,
-) {
-    let Ok(definition) = luma_lib::fixtures::definition(fixtures_root, path) else {
-        return;
+/// A catalog piece at its defaults.
+fn piece(catalog_ref: &str) -> Option<Posed> {
+    let piece = luma_scene::catalog::piece(catalog_ref)?;
+    let geometry = match piece.geometry {
+        luma_scene::catalog::Geometry::Mesh { path } => Geometry::mesh(path),
+        luma_scene::catalog::Geometry::Procedural(family) => {
+            Geometry::Procedural(luma_scene::catalog::default_params(family))
+        }
+        luma_scene::catalog::Geometry::Assembly(_) => Geometry::Assembly(piece.id.to_string()),
     };
-    let Some(mode) = definition.modes.first() else {
-        return;
-    };
-    let definition = luma_scene::definition::Definition::from(&*definition);
-    let subject = Subject {
+    Some(Posed {
+        pieces: vec![Piece {
+            id: "subject".into(),
+            geometry,
+            kind: String::new(),
+            pos: [0.0; 3],
+            rot: [0.0; 3],
+            scale: 1.0,
+        }],
+        fixtures: Vec::new(),
+        definitions: BTreeMap::new(),
+        reach: PIECE_REACH,
+    })
+}
+
+/// One fixture, hanging by its clamp, in the first mode it declares.
+fn fixture(fixtures_root: &std::path::Path, path: &str) -> Option<Posed> {
+    let definition = luma_lib::fixtures::definition(fixtures_root, path).ok()?;
+    let mode = definition.modes.first()?;
+    Some(Posed {
         fixtures: vec![Fixture {
             id: "subject".into(),
             fixture_path: path.to_string(),
@@ -162,15 +203,17 @@ fn render_fixture(
             rot: [0.0; 3],
             aim: [0.0; 2],
         }],
-        definitions: BTreeMap::from([(path.to_string(), definition)]),
+        definitions: BTreeMap::from([(
+            path.to_string(),
+            luma_scene::definition::Definition::from(&*definition),
+        )]),
         pieces: Vec::new(),
         reach: FIXTURE_REACH,
-    };
-    shoot(renderer, library, &subject, &thumbnail_path(path));
+    })
 }
 
-/// What one thumbnail is a picture of.
-struct Subject {
+/// A subject as the renderer is handed it.
+struct Posed {
     pieces: Vec<Piece>,
     fixtures: Vec<Fixture>,
     definitions: luma_render::frame::Definitions,
@@ -185,11 +228,13 @@ const PIECE_REACH: f32 = 1.9;
 /// where the whole sphere is in view.
 const FIXTURE_REACH: f32 = 2.5;
 
-/// Render `subject`, framed on what it draws, to a transparent PNG.
+/// Render `subject`, framed on what it draws and turned `turn` steps about
+/// the vertical, to a transparent PNG.
 fn shoot(
     renderer: &mut luma_render::Renderer,
     library: &mut luma_render::assets::Library,
-    subject: &Subject,
+    subject: &Posed,
+    turn: i32,
     path: &std::path::Path,
 ) {
     if let Some(out_dir) = path.parent() {
@@ -225,7 +270,9 @@ fn shoot(
     };
     let centre = (lo + hi) * 0.5;
     let radius = (hi - lo).length().max(0.4) * 0.5;
-    let eye = centre + glam::Vec3::new(1.0, 0.72, 1.0).normalize() * radius * subject.reach;
+    let turned = glam::Quat::from_rotation_y(((turn * TURN_STEP_DEG) as f32).to_radians());
+    let eye =
+        centre + turned * glam::Vec3::new(1.0, 0.72, 1.0).normalize() * radius * subject.reach;
     // The renderer has no alpha output, so alpha is recovered by difference
     // matting — the same frame over a black and over a grey background
     // diverges exactly where the background shows through, and the
@@ -323,36 +370,31 @@ const THUMB_SUBFRAMES: u32 = 4;
 
 #[cfg(test)]
 mod tests {
-    /// Renders the whole catalog on a real device — seconds of GPU work, so
-    /// opt-in: `cargo test -p luma-app --lib render_every -- --ignored`.
-    /// The output is the actual dialog asset set, worth an eye after any
-    /// change to the matte or the framing.
-    #[test]
-    #[ignore = "owns a wgpu device for several seconds"]
-    fn render_every_catalog_thumbnail() {
-        let mut renderer = luma_render::Renderer::new().unwrap();
-        let mut library = luma_render::assets::Library::new(luma_lib::resources::meshes_root(None));
-        super::render_all(&mut renderer, &mut library);
-        assert!(super::all_ready());
-    }
+    use super::{Subject, View};
 
-    /// One library fixture and the laser projector, the same way: worth an
-    /// eye after any change to how a fixture is framed.
+    /// Renders a piece, a library fixture and the laser projector on a real
+    /// device, turned and not — seconds of GPU work, so opt-in:
+    /// `cargo test -p luma-app --lib render_previews -- --ignored`. The
+    /// output is what the dialog shows, worth an eye after any change to the
+    /// matte or the framing.
     #[test]
     #[ignore = "owns a wgpu device for several seconds"]
-    fn render_fixture_thumbnails() {
+    fn render_previews() {
         let mut renderer = luma_render::Renderer::new().unwrap();
         let root = luma_lib::resources::fixtures_root().unwrap();
         let mut library =
             luma_render::assets::Library::new(luma_lib::resources::meshes_root(Some(&root)));
-        for path in [
-            "lib:claypaky/sharpy",
-            luma_lib::models::fixtures::LASER_PROJECTOR_PATH,
+        for subject in [
+            Subject::Piece(crate::stage::hand::TRUSS_STRAIGHT.into()),
+            Subject::Fixture("lib:claypaky/sharpy".into()),
+            Subject::Fixture(luma_lib::models::fixtures::LASER_PROJECTOR_PATH.into()),
         ] {
-            let file = super::thumbnail_path(path);
-            std::fs::remove_file(&file).ok();
-            super::render_fixture(&mut renderer, &mut library, &root, path);
-            assert!(file.exists(), "{path}");
+            for turn in [0, 9] {
+                let view = View::of(subject.clone(), turn);
+                std::fs::remove_file(view.file()).ok();
+                super::render(&mut renderer, &mut library, Some(&root), &view);
+                assert!(view.file().exists(), "{view:?}");
+            }
         }
     }
 }

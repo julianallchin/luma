@@ -55,6 +55,23 @@ pub(crate) struct Build {
     pub(crate) committing: bool,
     /// A scrubbed parameter: what the control shows while its writes catch up.
     pub(super) param_scrub: Option<ParamScrub>,
+    /// Which of pan and tilt each fixture drives itself, by fixture id.
+    pub(super) moves: HashMap<String, [bool; 2]>,
+}
+
+/// Which of pan and tilt each of a rig's fixtures has a channel for.
+fn moves(rig: &Rig) -> HashMap<String, [bool; 2]> {
+    rig.fixtures
+        .iter()
+        .filter_map(|fixture| {
+            let definition = rig.definitions.get(&fixture.fixture_path)?;
+            let mode = definition
+                .modes
+                .iter()
+                .find(|mode| mode.name == fixture.mode_name)?;
+            Some((fixture.id.clone(), definition.moves(mode)))
+        })
+        .collect()
 }
 
 /// One control being scrubbed. A scrub fires on every pointer move, faster
@@ -106,6 +123,7 @@ impl Build {
             redo: Vec::new(),
             committing: false,
             param_scrub: None,
+            moves: moves(rig),
         })
     }
 
@@ -124,6 +142,7 @@ impl Build {
         self.solved = rig.venue.clone();
         self.rows = rig.rows.clone();
         self.patch = rig.fixtures.clone();
+        self.moves = moves(rig);
         if self
             .selected
             .as_ref()
@@ -509,9 +528,20 @@ impl Build {
             }),
             // A fixture's aim off its mount normal: radians in the graph,
             // degrees on this sheet, like `yaw`.
-            aim: (self.graph.node(node).map(|n| n.kind)
-                == Some(luma_scene::venue::NodeKind::Fixture))
-            .then(|| luma_scene::venue::ANGLE_PARAMS.map(|key| param(key).to_degrees())),
+            // An axis the fixture drives itself is the show's to aim, not
+            // the rigger's: a moving head has no hand-set tilt. One that was
+            // given a lean anyway keeps the control that takes it off.
+            aim: if self.graph.node(node).map(|n| n.kind)
+                == Some(luma_scene::venue::NodeKind::Fixture)
+            {
+                let moves = self.moves.get(node).copied().unwrap_or_default();
+                [0, 1].map(|axis| {
+                    Some(param(luma_scene::venue::ANGLE_PARAMS[axis]).to_degrees())
+                        .filter(|degrees| !moves[axis] || *degrees != 0.0)
+                })
+            } else {
+                [None; 2]
+            },
             roll_step: self
                 .graph
                 .edge(node)
@@ -723,8 +753,9 @@ pub(crate) struct SelectedView {
     /// A hinge's deflection, in degrees — its own "what it is" row.
     pub(crate) angle: Option<f64>,
     /// A fixture's `[pan, tilt]` aim off the surface it is mounted on, in
-    /// degrees: `[0, 0]` shines straight out of that surface.
-    pub(crate) aim: Option<[f64; 2]>,
+    /// degrees: `[0, 0]` shines straight out of that surface. `None` for an
+    /// axis the fixture moves by itself, and for anything that is not one.
+    pub(crate) aim: [Option<f64>; 2],
     /// The turn this joint's roll lands on, in degrees — `Steps(90)` for a
     /// corner on a bolt circle, `Steps(5)` for a rail at its post, a fine
     /// default for a free clamp. What the rotate buttons step by and the yaw
@@ -772,6 +803,7 @@ pub(super) mod tests {
             distribution_layout: luma_scene::distribute::Layout::Even,
             committing: false,
             param_scrub: None,
+            moves: HashMap::new(),
             patch: Vec::new(),
         }
     }

@@ -271,6 +271,10 @@ pub(crate) struct Choosing {
     pub(crate) offer: Offer,
     /// Which row the keyboard is on, as an index into what the query left.
     pub(crate) cursor: usize,
+    /// How far the preview has been turned, in its own steps.
+    pub(crate) turn: i32,
+    /// A drag turning the preview: where it started, and the turn it had.
+    pub(crate) turning: Option<(gpui::Pixels, i32)>,
 }
 
 /// A row of fixtures being fitted to one face, previewed live.

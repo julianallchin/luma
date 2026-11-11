@@ -108,7 +108,10 @@ impl Luma {
             _ => Offer::Fixtures,
         };
         if let Some(build) = self.build_mut() {
-            build.hand = Hand::Choosing(hand::Choosing { offer, cursor: 0 });
+            build.hand = Hand::Choosing(hand::Choosing {
+                offer,
+                ..Default::default()
+            });
         }
         if let Some(page) = self.stage_page_mut() {
             page.closing.finish_close();
@@ -130,10 +133,42 @@ impl Luma {
     pub(super) fn stage_offer(&mut self, offer: Offer, cx: &mut Context<Self>) {
         if let Some(build) = self.build_mut() {
             if let Hand::Choosing(choosing) = &mut build.hand {
-                *choosing = hand::Choosing { offer, cursor: 0 };
+                choosing.offer = offer;
+                choosing.cursor = 0;
             }
         }
         cx.notify();
+    }
+
+    /// A press on the preview: the start of turning it.
+    fn stage_grab_preview(&mut self, at: gpui::Pixels, cx: &mut Context<Self>) {
+        if let Some(Hand::Choosing(choosing)) = self.build_mut().map(|build| &mut build.hand) {
+            choosing.turning = Some((at, choosing.turn));
+        }
+        cx.notify();
+    }
+
+    /// The pointer moved with the preview held: turn it by how far.
+    fn stage_turn_preview(&mut self, at: gpui::Pixels, cx: &mut Context<Self>) {
+        if let Some(Hand::Choosing(choosing)) = self.build_mut().map(|build| &mut build.hand) {
+            if let Some((from, turn)) = choosing.turning {
+                let steps = (f32::from(at - from) / PREVIEW_TURN_PX).round() as i32;
+                // Dragging right brings the subject's left side round, as if
+                // it were held by the edge nearest the pointer.
+                if choosing.turn != turn - steps {
+                    choosing.turn = turn - steps;
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn stage_release_preview(&mut self, cx: &mut Context<Self>) {
+        if let Some(Hand::Choosing(choosing)) = self.build_mut().map(|build| &mut build.hand) {
+            if choosing.turning.take().is_some() {
+                cx.notify();
+            }
+        }
     }
 
     /// A keystroke in the dialog's field.
@@ -189,11 +224,17 @@ impl Luma {
         }
         if let Some(path) = path {
             let pending = self.library.fixture_definition(&path);
+            let shown = path;
             cx.spawn(async move |this, cx| {
                 let Ok(definition) = pending.await else {
                     return;
                 };
                 this.update(cx, |this, cx| {
+                    // The room draws a fixture from its definition, and one
+                    // this venue has never held is not among the rig's.
+                    if let Some(stage) = this.visualizer_mut() {
+                        stage.learn_definition(&shown, &definition);
+                    }
                     let mode = definition.modes.first().map(|mode| mode.name.clone());
                     let width = luma_lib::services::distribute::body_width_m(&definition);
                     // Millimetres in the file, metres in the room — the same
@@ -325,14 +366,19 @@ const DEFAULT_FIXTURE_WIDTH_M: f64 = 0.3;
 ///
 /// A pane and not a tooltip, because choosing between two trusses is a
 /// comparison and a comparison wants one place the answer always appears.
-fn chooser_preview(row: Option<&ChooserRow>, window: &Window) -> Div {
+fn chooser_preview(
+    row: Option<&ChooserRow>,
+    turn: i32,
+    app: &Entity<Luma>,
+    window: &Window,
+) -> Div {
     let pane = div()
         .w(px(CHOOSER_PREVIEW_W))
         .flex_none()
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .p(px(16.0));
+        .p(px(CHOOSER_PREVIEW_PAD));
     let Some(row) = row else {
         return pane.child(float::empty_row("Nothing highlighted"));
     };
@@ -348,23 +394,49 @@ fn chooser_preview(row: Option<&ChooserRow>, window: &Window) -> Div {
             .clone()
             .unwrap_or_else(|| "Placed as a row along a face".to_string()),
     };
-    let thumb = match &row.take {
-        Holding::Piece { catalog_ref, .. } => {
-            Some(preview::thumbnail_path(catalog_ref)).filter(|path| path.exists())
-        }
-        Holding::Fixture { path, .. } => match preview::fixture_thumbnail(path) {
-            preview::FixtureThumbnail::Ready(path) => Some(path),
-            preview::FixtureThumbnail::Rendering => {
-                // On its way: look again next frame.
-                window.request_animation_frame();
-                None
-            }
-            preview::FixtureThumbnail::Unavailable => None,
-        },
+    let subject = match &row.take {
+        Holding::Piece { catalog_ref, .. } => Some(preview::Subject::Piece(catalog_ref.clone())),
+        Holding::Fixture { path, .. } => Some(preview::Subject::Fixture(path.clone())),
         Holding::Duplicate { .. } => None,
-    }
-    .map(|path| gpui::img(path).w_full().rounded(px(6.0)).into_any_element());
-    pane.children(thumb)
+    };
+    let image = subject.and_then(|subject| {
+        let view = preview::View::of(subject.clone(), turn);
+        match preview::thumbnail(&view) {
+            preview::Thumbnail::Ready(path) => {
+                *last_shown().lock().unwrap() = Some((subject, path.clone()));
+                Some(path)
+            }
+            preview::Thumbnail::Rendering => {
+                // On its way: look again next frame, and until then keep the
+                // angle this subject was last seen from.
+                window.request_animation_frame();
+                last_shown()
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .filter(|(shown, _)| *shown == subject)
+                    .map(|(_, path)| path.clone())
+            }
+            preview::Thumbnail::Unavailable => None,
+        }
+    });
+    let grab = app.clone();
+    // A box of the picture's own shape whether or not the picture has
+    // landed, so the words under it never move.
+    let frame = div()
+        .id("stage-chooser-preview")
+        .w_full()
+        .h(px(
+            (CHOOSER_PREVIEW_W - 2.0 * CHOOSER_PREVIEW_PAD) * PREVIEW_ASPECT
+        ))
+        .flex_none()
+        .cursor_grab()
+        .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
+            grab.update(cx, |this, cx| this.stage_grab_preview(event.position.x, cx));
+        })
+        .children(image.map(|path| gpui::img(path).size_full().rounded(px(6.0))))
+        .agent_node(Role::Card, format!("Preview picture at {turn}"));
+    pane.child(frame)
         .child(float::label(row.section.to_string()))
         .child(
             div()
@@ -381,6 +453,22 @@ fn chooser_preview(row: Option<&ChooserRow>, window: &Window) -> Div {
         )
 }
 
+/// The picture the preview last showed, and of what: what stays up while the
+/// same subject's next angle renders.
+fn last_shown() -> &'static std::sync::Mutex<Option<(preview::Subject, std::path::PathBuf)>> {
+    static SHOWN: std::sync::OnceLock<
+        std::sync::Mutex<Option<(preview::Subject, std::path::PathBuf)>>,
+    > = std::sync::OnceLock::new();
+    SHOWN.get_or_init(Default::default)
+}
+
+/// The preview pane's padding.
+const CHOOSER_PREVIEW_PAD: f32 = 16.0;
+/// The thumbnails' height over their width.
+const PREVIEW_ASPECT: f32 = 0.75;
+/// How far the pointer travels to turn the preview one step.
+const PREVIEW_TURN_PX: f32 = 6.0;
+
 /// How wide the dialog's preview pane is — a third of the card, so the list
 /// beside it still shows a full row without truncating.
 const CHOOSER_PREVIEW_W: f32 = 208.0;
@@ -388,7 +476,7 @@ const CHOOSER_PREVIEW_W: f32 = 208.0;
 /// The add-element dialog: a search field, a preview, a sectioned list.
 pub(super) fn chooser(
     state: &StagePage,
-    (offer, cursor): (Offer, usize),
+    (offer, cursor, turn): (Offer, usize, i32),
     app: &Entity<Luma>,
     window: &Window,
 ) -> AnyElement {
@@ -436,6 +524,20 @@ pub(super) fn chooser(
         .flex_col()
         .overflow_hidden()
         .text_color(ladder::foreground())
+        // The preview is turned from the whole card: a drag that starts on
+        // the picture does not end at its edge.
+        .on_mouse_move({
+            let turn = app.clone();
+            move |event, _, cx| {
+                if event.pressed_button == Some(gpui::MouseButton::Left) {
+                    turn.update(cx, |this, cx| this.stage_turn_preview(event.position.x, cx));
+                }
+            }
+        })
+        .on_mouse_up(gpui::MouseButton::Left, {
+            let release = app.clone();
+            move |_, _, cx| release.update(cx, |this, cx| this.stage_release_preview(cx))
+        })
         // The list is walked from the frame, not from the field: the query is
         // short and edited with backspace, so the arrows belong to the rows —
         // the same call `luma_ui::float`'s pickers make.
@@ -533,7 +635,7 @@ pub(super) fn chooser(
                 .min_h_0()
                 .flex()
                 .flex_row()
-                .child(chooser_preview(rows.get(cursor), window))
+                .child(chooser_preview(rows.get(cursor), turn, app, window))
                 .child(
                     div()
                         .flex_1()

@@ -274,12 +274,13 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
             ),
         ));
     }
-    if let Some(aim) = selected.aim {
+    {
         // Pan turns about the mount normal, tilt leans off it; `[0, 0]` is
         // straight out of the surface it is clamped to.
         for ((key, title, limit), value) in [("pan", "Pan", 180.0), ("tilt", "Tilt", 90.0)]
             .into_iter()
-            .zip(aim)
+            .zip(selected.aim)
+            .filter_map(|(axis, value)| Some((axis, value?)))
         {
             let app = app.clone();
             let node = selected.node.clone();
