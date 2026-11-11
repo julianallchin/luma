@@ -47,6 +47,8 @@ fn display_range(window: &Window) -> luma_render::DisplayRange {
 const SETTLE_FRAMES: u32 = 16;
 /// The same with auto exposure on: the exposure adapts over a few seconds
 /// (`post.rs`), and a stage that rested sooner would freeze it half way.
+/// What an eye adapts behind its pupil takes a minute, and a stage at rest
+/// does not wait for it: that part goes on when the stage draws again.
 const EXPOSURE_SETTLE_FRAMES: u32 = 180;
 
 /// The viewport itself, or the reason there isn't one.

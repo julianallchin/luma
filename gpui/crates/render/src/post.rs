@@ -12,9 +12,13 @@
 //!    clamp. Near-black pixels are not metered, so a dark room with a few
 //!    beams is exposed for what is lit, and the clamps stop it lifting the
 //!    room further. A frame with almost nothing lit holds the last exposure.
-//!    The exposure moves toward the target with separate speeds up and down,
-//!    and snaps on a standalone frame so a capture is a function of its
-//!    frame alone.
+//!    The exposure moves toward the target as an eye does: it opens for a
+//!    darker scene at one speed and closes for a brighter one at another,
+//!    but closes fast only as far as a pupil does
+//!    ([`crate::photometry::PUPIL_STOPS`]) and adapts the rest of the way
+//!    over about a minute, so a light in the face is blinding until then. It
+//!    snaps on a standalone frame so a capture is a function of its frame
+//!    alone.
 //! 2. **Glare** (`post_glare.wgsl`, `psf.rs`). The exposed frame's light
 //!    above a threshold, averaged into a padded FFT grid (1024 × 512 at High,
 //!    512 × 256 at Low; the frame fills at most its top-left quarter), and
@@ -63,6 +67,11 @@ const METER_HIGH: f32 = 0.98;
 /// difference: opening up (a darker scene) and closing down (a brighter one).
 const ADAPT_UP: f32 = 1.2;
 const ADAPT_DOWN: f32 = 3.0;
+/// The same, for the part of closing down the pupil cannot do: the eye's own
+/// adaptation to a brighter scene, which takes about a minute.
+const ADAPT_BEHIND_PUPIL: f32 = 1.0 / 60.0;
+/// Bytes of the exposure state: `Exposed` in `post_exposure.wgsl`.
+const STATE_SIZE: u64 = 32;
 /// Longest step one adaptation takes. A viewport that sat idle for a minute
 /// does not jump on its next frame.
 const MAX_ADAPT_STEP_S: f32 = 0.1;
@@ -73,6 +82,7 @@ struct MeterUniform {
     exposure: [f32; 4],
     adapt: [f32; 4],
     meter: [f32; 4],
+    eye: [f32; 4],
 }
 
 #[repr(C)]
@@ -592,7 +602,7 @@ impl Post {
             ),
             state: buffer(
                 "post-exposure-state",
-                16,
+                STATE_SIZE,
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             ),
             meter: buffer(
@@ -734,6 +744,7 @@ impl Post {
                     crate::photometry::MIDDLE_GREY.log2(),
                     1.0,
                 ],
+                eye: [crate::photometry::PUPIL_STOPS, ADAPT_BEHIND_PUPIL, 0.0, 0.0],
             }),
         );
         let exposure_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {

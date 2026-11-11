@@ -12,7 +12,9 @@
 //!   reading for [`METER_LUX`], so at 0 EV one candela per square metre is
 //!   [`SCENE_PER_NIT`] scene-linear units. A camera that meters (an eye, too)
 //!   adapts away from it, but only over [`ADAPT_EV`], a range stated in lux:
-//!   a dim room stays dim and a blinding one stays blinding.
+//!   a dim room stays dim and a blinding one stays blinding. It closes down
+//!   at once only by [`PUPIL_STOPS`], so a light that arrives in the face of
+//!   an eye used to the dark is blinding too.
 //! - **Fixtures.** A cone's `intensity` is a dimmer times its optic's gain
 //!   (`luma_scene::luminaire::cone_from_opening`), on a scale where one unit
 //!   of relative lumens is [`luma_scene::luminaire::LUMENS_PER_UNIT`] real
@@ -70,6 +72,12 @@ pub fn ev_for_lux(lux: f32) -> f32 {
 ///
 /// The 2^n lux values keep the ends whole stops.
 pub const ADAPT_EV: std::ops::RangeInclusive<f32> = -6.0..=4.0;
+
+/// The stops a pupil closes from wide open, which is as far as an eye, or a
+/// camera on its iris, shuts out a light at once: from 8 mm across in the
+/// dark to 2 mm in bright light is a sixteenth of the area. The eye adapts
+/// further, but over about a minute (`post.rs`).
+pub const PUPIL_STOPS: f32 = 4.0;
 
 /// The absolute scale of every cone, surface and haze alike: scene-linear
 /// irradiance at one metre on axis per unit of cone `intensity`.

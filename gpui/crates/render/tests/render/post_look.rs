@@ -323,6 +323,66 @@ fn live_exposure_adapts_rather_than_jumps() {
     );
 }
 
+/// A light that arrives in an eye used to the dark shuts its pupil and, for
+/// a while, no more: the exposure closes by the pupil's stops where the meter
+/// asks for far more, and goes on closing slowly. The dark opens it again
+/// all the way.
+#[test]
+fn a_sudden_light_closes_the_exposure_only_as_far_as_a_pupil() {
+    let pupil = luma_render::photometry::PUPIL_STOPS;
+    let auto = Look {
+        glare: Glare::OFF,
+        exposure: Exposure::STAGE,
+        ..Look::STAGE
+    };
+    let dark = |time: f32| Frame {
+        time,
+        ..hazy_frame(0.25, 0.4, 0.05, auto)
+    };
+    // The same beam a thousand times brighter, down the camera's throat.
+    let blinding = |time: f32| Frame {
+        time,
+        ..hazy_frame(4000.0, 1.0, 0.3, auto)
+    };
+    let mut still = Renderer::new().unwrap();
+    let _ = render(&mut still, &blinding(0.0));
+    let [asked, _] = still.metered_exposure().unwrap();
+
+    let mut renderer = Renderer::new().unwrap();
+    let _ = render(&mut renderer, &dark(0.0));
+    let [used_to, _] = renderer.metered_exposure().unwrap();
+    assert!(
+        asked < used_to - pupil - 2.0,
+        "the light asks for much more than a pupil closes: {asked} from {used_to}"
+    );
+    // Ten frames a second, the longest step one adaptation takes.
+    let mut live = |frame: &dyn Fn(f32) -> Frame, seconds: std::ops::Range<u32>| {
+        for tick in seconds.start * 10..seconds.end * 10 {
+            let _ = renderer
+                .render_next(&frame((tick + 1) as f32 / 10.0), WIDTH, HEIGHT, 1)
+                .unwrap();
+        }
+        renderer.metered_exposure().unwrap()[0]
+    };
+    let at_once = live(&blinding, 0..5);
+    let closed = used_to - at_once;
+    assert!(
+        closed > pupil - 0.1 && closed < pupil + 0.25 * (used_to - asked - pupil),
+        "after five seconds the pupil has closed and little else: {closed} of {} stops",
+        used_to - asked
+    );
+    let later = live(&blinding, 5..15);
+    assert!(
+        later < at_once && later > asked,
+        "it goes on closing, slowly: {at_once} then {later}, toward {asked}"
+    );
+    let reopened = live(&dark, 15..25);
+    assert!(
+        (reopened - used_to).abs() < 0.1,
+        "the dark opens it all the way: {reopened}, as before the light {used_to}"
+    );
+}
+
 /// Open ground under a low sun, looking `away_deg` to the side of it, level.
 fn sun_frame(away_deg: f32, look: Look) -> Frame {
     let mut render = RenderSettings::room(

@@ -196,10 +196,13 @@ runs `post.rs`:
 
 - **Metering.** 128-bin log histogram of a quarter of the pixels,
   centre-weighted. The mean of the 60th–98th percentile of lit pixels is
-  exposed to 0.5; the result is clamped to [-2.5, +1] EV before the
-  compensation is added. Near-black pixels are not metered and a frame with
-  almost nothing lit holds the previous exposure. Adaptation: 3 /s closing,
-  1.2 /s opening; a standalone capture snaps.
+  exposed to middle grey; the result is clamped to `photometry::ADAPT_EV`
+  (−6 to +4 EV) before the compensation is added. Near-black pixels are not
+  metered and a frame with almost nothing lit holds the previous exposure.
+  Adaptation is an eye's: 1.2 /s opening; 3 /s closing, but only as far as
+  a pupil closes (`photometry::PUPIL_STOPS`, 4 stops), and the rest over
+  about a minute, so a light that arrives in the face is blinding until
+  then. A standalone capture snaps.
 - **Glare.** Exposed light above 2× diffuse white (soft knee) is
   area-averaged into a padded FFT grid and convolved with a glare kernel by
   FFT (`post_glare.wgsl`, wgpu compute), as Unreal's convolution bloom does.
