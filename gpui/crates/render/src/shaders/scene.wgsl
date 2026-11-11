@@ -26,6 +26,12 @@ struct VsOut {
     @location(2) @interpolate(flat) instance: u32,
     @location(3) uv: vec2<f32>,
     @location(4) tangent: vec4<f32>,
+    // `world` again, taken inside the triangle. A pixel's centre can lie off
+    // a triangle that covers only some of its samples, and `world` there is
+    // a point off the surface: centimetres off a long thin one. Lighting
+    // wants the surface; derivatives want `world`, which is even across
+    // pixels.
+    @location(5) @interpolate(perspective, centroid) on_surface: vec3<f32>,
 };
 
 @vertex
@@ -41,6 +47,7 @@ fn vs_main(
     var out: VsOut;
     out.clip = globals.view_proj * world;
     out.world = world.xyz;
+    out.on_surface = world.xyz;
     out.normal = (inst.normal_matrix * vec4<f32>(normal, 0.0)).xyz;
     out.instance = instance;
     out.uv = uv;
@@ -548,6 +555,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
 fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec4<f32> {
     let inst = instances[fragment.instance];
     var in = fragment;
+    in.world = fragment.on_surface;
     if inst.flags.x > 0.5 {
         in.world = ground_fragment(fragment.world);
     }
