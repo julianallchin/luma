@@ -13,7 +13,7 @@ toolbar. Selecting an object opens its placement controls over the scene.
 Patch fields stay in the table.
 
 View holds the environment (Indoor or Outdoor), house lights, time of day,
-haze (density, cloudiness, turbulence), fixture shadows, grid and gizmos. Haze
+haze (density, cloudiness, turbulence), grid and gizmos. Haze
 and environment are venue data and sync with the venue. Grid, gizmos and
 render scale are settings of this device. FPS is a small top-right readout.
 A click on it expands the performance details.

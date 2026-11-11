@@ -428,7 +428,8 @@ test("view settings persist per device and per venue", () => {
   const toggled = (name) => app.snapshot().find({ role: "toggle", label: name })?.focused ?? null;
   const openView = () => {
     nav.step("the view settings", "toggle", "Render settings");
-    until("the view panel", (s) => s.find({ role: "card", label: "Render settings" }) !== undefined && scrub("Render scale (%)") !== undefined);
+    nav.step("its view page", "toggle", "View");
+    until("the view page", (s) => s.find({ role: "card", label: "Render settings" }) !== undefined && scrub("Render scale (%)") !== undefined);
   };
   const all = () => ({ grid: toggled("Grid"), gizmos: toggled("Gizmos"), scale: value("Render scale (%)"), density: value("Haze density") });
 

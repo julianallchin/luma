@@ -34,7 +34,6 @@ pub(super) struct RenderControls {
     probe_rotation_deg: f32,
     probe_visible: bool,
     fixture_surface_lighting: bool,
-    pub(super) fixture_shadows: bool,
     /// The room's atmosphere — **venue truth**, saved on the venue row and
     /// synced with it, unlike every other dial here. Adopted from the rig and
     /// written back by [`Luma::set_visualizer_haze`].
@@ -129,7 +128,6 @@ impl RenderControls {
         render.show_grid = self.grid_enabled;
         render.show_gizmos = self.gizmos_enabled;
         render.fixture_surface_lighting = self.fixture_surface_lighting;
-        render.fixture_shadows = self.fixture_shadows;
         render.geometry_shadows = true;
         render.look = self.look;
         render.probes = self.probes;
@@ -162,7 +160,6 @@ impl RenderControls {
             probe_rotation_deg: 0.0,
             probe_visible: false,
             fixture_surface_lighting: true,
-            fixture_shadows: true,
             // The venue's own haze arrives with its rig; until then the haze
             // this app has always drawn, which is exactly `Default`.
             haze: luma_scene::environment::VenueHaze::default(),
@@ -233,7 +230,6 @@ impl RenderControls {
 
 #[derive(Clone, Copy)]
 pub(super) enum ViewToggle {
-    FixtureShadows,
     Haze,
     Grid,
     Gizmos,
@@ -253,8 +249,8 @@ pub(super) enum ViewValue {
     WindDirection,
     /// Not a haze dial: the fraction of the element's pixels the stage renders.
     RenderScale,
-    /// Camera dials, [`scene_desc::Look`]: exposure (compensation when auto),
-    /// glare strength, glare threshold and star amount.
+    /// Camera dials, [`scene_desc::Look`]: exposure compensation, glare
+    /// strength, glare threshold and star amount.
     Exposure,
     Glare,
     GlareThreshold,
@@ -283,9 +279,10 @@ impl ViewValue {
 }
 
 impl RenderControls {
-    pub(super) fn toggle(&mut self, control: ViewToggle) {
+    /// Flip one switch. `metered` is the exposure the stage's camera has
+    /// reached, which is where the exposure stays when its meter goes off.
+    pub(super) fn toggle(&mut self, control: ViewToggle, metered: Option<f32>) {
         match control {
-            ViewToggle::FixtureShadows => self.fixture_shadows = !self.fixture_shadows,
             ViewToggle::Haze => {
                 self.haze.enabled = !self.haze.enabled;
                 self.haze = self.haze.sanitized();
@@ -294,12 +291,15 @@ impl RenderControls {
             ViewToggle::Gizmos => self.gizmos_enabled = !self.gizmos_enabled,
             ViewToggle::AutoExposure => {
                 let exposure = &mut self.look.exposure;
-                exposure.auto = !exposure.auto;
-                // The one number means compensation in one mode and the
-                // exposure itself in the other; zero is the photometric
-                // exposure in both, so it is the only value that means the
-                // same thing.
-                exposure.ev = 0.0;
+                *exposure = if exposure.auto {
+                    // Before any frame has said, it stays where it last held.
+                    exposure.holding(metered.unwrap_or(exposure.fixed()))
+                } else {
+                    scene_desc::Exposure {
+                        auto: true,
+                        ..*exposure
+                    }
+                };
             }
             ViewToggle::ReflectionProbes => self.probes.enabled = !self.probes.enabled,
             ViewToggle::ShowProbes => self.probes.debug = !self.probes.debug,
@@ -388,8 +388,9 @@ mod view_tests {
             controls.haze.density,
             luma_scene::environment::VenueHaze::MAX_DENSITY
         );
-        controls.toggle(ViewToggle::FixtureShadows);
-        assert!(!controls.fixture_shadows);
+        let grid = controls.grid_enabled;
+        controls.toggle(ViewToggle::Grid, None);
+        assert_eq!(controls.grid_enabled, !grid);
         assert_eq!(controls.house, house);
     }
 
@@ -418,8 +419,8 @@ mod view_tests {
     #[test]
     fn changing_the_room_leaves_haze_and_chrome_alone() {
         let mut controls = RenderControls::new(VenueEnvironment::default());
-        controls.toggle(ViewToggle::Grid);
-        controls.toggle(ViewToggle::Gizmos);
+        controls.toggle(ViewToggle::Grid, None);
+        controls.toggle(ViewToggle::Gizmos, None);
         controls.set(ViewValue::HazeDensity, 0.31);
         controls.set(ViewValue::Cloudiness, 0.7);
         controls.set(ViewValue::RenderScale, 40.0);
@@ -465,7 +466,7 @@ mod view_tests {
     }
 
     /// The camera dials reach the renderer, stay in range and leave the room
-    /// alone; switching the meter resets the one number that changes meaning.
+    /// alone; switching the meter off leaves the picture where it was.
     #[test]
     fn camera_dials_shape_the_look_and_nothing_else() {
         let mut controls = RenderControls::new(VenueEnvironment::default());
@@ -484,10 +485,20 @@ mod view_tests {
         assert_eq!(controls.settings(50.0).look.glare.star, 0.25);
         assert_eq!(controls.haze, haze);
 
-        let metered = controls.look.exposure.auto;
-        controls.toggle(ViewToggle::AutoExposure);
-        assert_eq!(controls.look.exposure.auto, !metered);
-        assert_eq!(controls.look.exposure.ev, 0.0);
+        // The meter has the picture at 2.5 stops, half a stop of it the
+        // compensation; off, the picture stays there and the dial still
+        // moves it by what it says.
+        controls.set(ViewValue::Exposure, 0.5);
+        assert!(controls.look.exposure.auto);
+        controls.toggle(ViewToggle::AutoExposure, Some(2.5));
+        let held = controls.look.exposure;
+        assert!(!held.auto);
+        assert_eq!(held.fixed(), 2.5);
+        controls.set(ViewValue::Exposure, 1.5);
+        assert_eq!(controls.look.exposure.fixed(), 3.5);
+        controls.toggle(ViewToggle::AutoExposure, Some(3.5));
+        assert!(controls.look.exposure.auto);
+        assert_eq!(controls.look.exposure.ev, 1.5);
     }
 
     /// The footage look is off by default, turns on with its dials, keeps them
@@ -496,7 +507,7 @@ mod view_tests {
     fn footage_dials_shape_the_look() {
         let mut controls = RenderControls::new(VenueEnvironment::default());
         assert!(!controls.look.footage.enabled);
-        controls.toggle(ViewToggle::Footage);
+        controls.toggle(ViewToggle::Footage, None);
         assert!(controls.settings(50.0).look.footage.enabled);
         controls.set(ViewValue::Noise, 0.5);
         controls.set(ViewValue::Handheld, 2.0);

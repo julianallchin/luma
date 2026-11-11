@@ -1,5 +1,5 @@
-//! The rows of the view-settings popover: haze, camera look, footage and
-//! viewport controls, and the toggle, scrub and choice rows they are built from.
+//! The rows of the view-settings popover's Camera and View pages and of the
+//! venue's haze, and the toggle, scrub and choice rows they are built from.
 use super::*;
 use luma_lib::settings::RENDER_SCALE_RANGE;
 
@@ -67,19 +67,29 @@ pub(super) fn haze_rows(state: &Visualizer, app: &Entity<Luma>) -> Div {
         ))
 }
 
-pub(super) fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+/// The View page: what the stage costs to draw, and the chrome drawn over it.
+pub(super) fn view_page(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
     let controls = &state.render_controls;
-    let viewport = div()
+    // The cost knobs sit together; the percent last because its caption
+    // belongs directly under it.
+    let cost = div()
         .flex()
         .flex_col()
         .gap(px(8.))
-        .child(view_toggle(
-            state,
+        .child(quality_row(controls.quality, app))
+        .child(view_value(
             app,
-            "Fixture shadows",
-            controls.fixture_shadows,
-            ViewToggle::FixtureShadows,
+            "Render scale (%)",
+            f32::from(controls.render_scale_percent),
+            f32::from(*RENDER_SCALE_RANGE.start()),
+            f32::from(*RENDER_SCALE_RANGE.end()),
+            ViewValue::RenderScale,
         ))
+        .children(render_size_caption(state));
+    let chrome = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
         .child(view_toggle(
             state,
             app,
@@ -93,38 +103,37 @@ pub(super) fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl Into
             "Gizmos",
             controls.gizmos_enabled,
             ViewToggle::Gizmos,
-        ))
-        // The cost knobs sit together; the percent last because its caption
-        // belongs directly under it.
-        .child(quality_row(controls.quality, app))
-        .child(view_value(
-            app,
-            "Render scale (%)",
-            f32::from(controls.render_scale_percent),
-            f32::from(*RENDER_SCALE_RANGE.start()),
-            f32::from(*RENDER_SCALE_RANGE.end()),
-            ViewValue::RenderScale,
-        ))
-        .children(render_size_caption(state));
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(12.))
-        .child(settings::section("Camera", camera_controls(state, app)))
-        .child(luma_ui::float::divider())
-        .child(settings::section(
-            "Footage look",
-            footage_controls(state, app),
-        ))
-        .child(luma_ui::float::divider())
-        .child(settings::section("Viewport", viewport))
+        ));
+    page([cost, chrome])
 }
 
-/// The camera: how scene light becomes the picture. Tone curve, exposure and
-/// the glare around hot sources — [`scene_desc::Look`].
-fn camera_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+/// The Camera page: how scene light becomes the picture — exposure and tone,
+/// the glare around hot sources, and the footage look
+/// ([`scene_desc::Look`]).
+pub(super) fn camera_page(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+    page([
+        exposure_controls(state, app),
+        glare_controls(state, app),
+        footage_controls(state, app),
+    ])
+}
+
+/// A page of the view settings card: its groups of rows, a rule between them.
+fn page<const N: usize>(groups: [Div; N]) -> Div {
+    let mut page = div().flex().flex_col().gap(px(12.));
+    for (i, group) in groups.into_iter().enumerate() {
+        if i > 0 {
+            page = page.child(luma_ui::float::divider());
+        }
+        page = page.child(group);
+    }
+    page
+}
+
+/// Tone curve and exposure.
+fn exposure_controls(state: &Visualizer, app: &Entity<Luma>) -> Div {
     let look = state.render_controls.look;
-    let mut tone = luma_ui::float::segmented().w_full();
+    let mut tone = luma_ui::float::segmented();
     for (name, curve) in [
         ("AgX", scene_desc::ToneCurve::Agx),
         ("Punchy", scene_desc::ToneCurve::AgxPunchy),
@@ -140,32 +149,14 @@ fn camera_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
                 .agent_node(Role::Toggle, name),
         );
     }
-    let mut style = luma_ui::float::segmented().w_full();
-    for (name, choice) in [
-        ("Bloom", scene_desc::GlareStyle::Bloom),
-        ("Iris", scene_desc::GlareStyle::Aperture),
-        ("Eye", scene_desc::GlareStyle::Eye),
-        ("Star", scene_desc::GlareStyle::Star),
-    ] {
-        let app = app.clone();
-        style = style.child(
-            luma_ui::float::segment(name, look.glare.style == choice, name)
-                .id(gpui::ElementId::Name(format!("glare-{name}").into()))
-                .on_click(move |_, _, cx| {
-                    app.update(cx, |this, cx| this.set_view_glare_style(choice, cx));
-                })
-                .agent_node(Role::Toggle, name),
-        );
-    }
-    let (exposure_min, exposure_max) = (
-        *scene_desc::Exposure::RANGE.start(),
-        *scene_desc::Exposure::RANGE.end(),
-    );
     div()
         .flex()
         .flex_col()
         .gap(px(8.))
-        .child(tone.agent_node(Role::Card, "Tone curve"))
+        .child(choice_row(
+            "Tone",
+            tone.agent_node(Role::Card, "Tone curve"),
+        ))
         .child(view_toggle(
             state,
             app,
@@ -173,48 +164,78 @@ fn camera_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             look.exposure.auto,
             ViewToggle::AutoExposure,
         ))
+        // Stops on what the meter reads, or on where it was switched off.
         .child(view_value(
             app,
-            if look.exposure.auto {
-                "Compensation (EV)"
-            } else {
-                "Exposure (EV)"
-            },
+            "Exposure (EV)",
             look.exposure.ev,
-            exposure_min,
-            exposure_max,
+            *scene_desc::Exposure::RANGE.start(),
+            *scene_desc::Exposure::RANGE.end(),
             ViewValue::Exposure,
         ))
+}
+
+/// The glare around hot sources. Its shape shows only while there is any.
+fn glare_controls(state: &Visualizer, app: &Entity<Luma>) -> Div {
+    let glare = state.render_controls.look.glare;
+    let shape = glare.on().then(|| {
+        let mut style = luma_ui::float::segmented().w_full();
+        for (name, choice) in [
+            ("Bloom", scene_desc::GlareStyle::Bloom),
+            ("Iris", scene_desc::GlareStyle::Aperture),
+            ("Eye", scene_desc::GlareStyle::Eye),
+            ("Star", scene_desc::GlareStyle::Star),
+        ] {
+            let app = app.clone();
+            style = style.child(
+                luma_ui::float::segment(name, glare.style == choice, name)
+                    .id(gpui::ElementId::Name(format!("glare-{name}").into()))
+                    .on_click(move |_, _, cx| {
+                        app.update(cx, |this, cx| this.set_view_glare_style(choice, cx));
+                    })
+                    .agent_node(Role::Toggle, name),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(style.agent_node(Role::Card, "Glare style"))
+            .child(view_value(
+                app,
+                "Threshold",
+                glare.threshold,
+                *GLARE_THRESHOLD.start(),
+                *GLARE_THRESHOLD.end(),
+                ViewValue::GlareThreshold,
+            ))
+            .child(view_value(
+                app,
+                "Diffraction",
+                glare.star,
+                0.,
+                1.,
+                ViewValue::Star,
+            ))
+    });
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
         .child(view_value(
             app,
             "Glare",
-            look.glare.strength,
+            glare.strength,
             0.,
             GLARE_MAX,
             ViewValue::Glare,
         ))
-        .child(view_value(
-            app,
-            "Glare threshold",
-            look.glare.threshold,
-            *GLARE_THRESHOLD.start(),
-            *GLARE_THRESHOLD.end(),
-            ViewValue::GlareThreshold,
-        ))
-        .child(style.agent_node(Role::Card, "Glare style"))
-        .child(view_value(
-            app,
-            "Diffraction",
-            look.glare.star,
-            0.,
-            1.,
-            ViewValue::Star,
-        ))
+        .children(shape)
 }
 
 /// The footage look: what a video camera in the room would record —
 /// [`scene_desc::Footage`]. Its dials show only while it is on.
-fn footage_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+fn footage_controls(state: &Visualizer, app: &Entity<Luma>) -> Div {
     let footage = state.render_controls.look.footage;
     let dials = footage.enabled.then(|| {
         div()
@@ -287,13 +308,12 @@ pub(super) fn view_toggle(
     use luma_ui::node::AgentNode as _;
     let index = match control {
         ViewToggle::Haze => 0,
-        ViewToggle::FixtureShadows => 1,
-        ViewToggle::Grid => 2,
-        ViewToggle::Gizmos => 3,
-        ViewToggle::AutoExposure => 4,
-        ViewToggle::ReflectionProbes => 5,
-        ViewToggle::ShowProbes => 6,
-        ViewToggle::Footage => 7,
+        ViewToggle::Grid => 1,
+        ViewToggle::Gizmos => 2,
+        ViewToggle::AutoExposure => 3,
+        ViewToggle::ReflectionProbes => 4,
+        ViewToggle::ShowProbes => 5,
+        ViewToggle::Footage => 6,
     };
     let t = state.settings_motion.borrow_mut().switches[index].sample(checked);
     let app = app.clone();
@@ -340,8 +360,7 @@ fn view_value(
     })
 }
 
-/// "Quality: High / Medium / Low", the renderer's cost level. The scrub row's shape
-/// with a segmented choice where the scrub would be.
+/// "Quality: High / Medium / Low", the renderer's cost level.
 fn quality_row(quality: scene_desc::Quality, app: &Entity<Luma>) -> Div {
     let mut track = luma_ui::float::segmented();
     for (name, level) in [
@@ -359,13 +378,18 @@ fn quality_row(quality: scene_desc::Quality, app: &Entity<Luma>) -> Div {
                 .agent_node(Role::Toggle, name),
         );
     }
+    choice_row("Quality", track.agent_node(Role::Card, "Quality"))
+}
+
+/// The scrub row's shape with a segmented choice where the scrub would be.
+fn choice_row(label: &'static str, track: impl IntoElement) -> Div {
     div()
         .flex()
         .items_center()
         .justify_between()
         .gap(px(12.))
-        .child(div().text_size(px(12.)).child("Quality"))
-        .child(track.agent_node(Role::Card, "Quality"))
+        .child(div().text_size(px(12.)).child(label))
+        .child(track)
 }
 
 /// The one row shape of the floating settings surface: a label on the left
