@@ -1,38 +1,41 @@
-//! The patch as channels: each universe a strip of 512 across the page, the
-//! fixtures blocks on it, and where the universe comes out beside its name.
+//! The patch as channels: each universe a grid of 512 square cells across the
+//! page, the fixtures runs of cells on it.
 //!
-//! The strip is four lanes of 128, read like lines of text. One lane of 512
-//! leaves a single-channel fixture two pixels wide; four keep the page's whole
-//! width and make it something that can be read and picked up.
+//! The grid is 64 across and 8 down, read like lines of text, so it takes the
+//! page's whole width and a single-channel fixture is still a cell that can be
+//! seen and picked up.
 //!
 //! Collisions are `universe_occupancy`'s, verbatim — they and out-of-range are
-//! facts the allocator computed, not conditions redrawn here. A strip that
+//! facts the allocator computed, not conditions redrawn here. A grid that
 //! decided for itself what overlapped would be the second occupancy rule in
-//! the codebase. A block is only its fixture's own address and width.
+//! the codebase. A fixture's run is only its own address and width.
 //!
-//! Dragging a block re-addresses it: the press remembers *which channel* of the
-//! fixture it landed on, so a block picked up by its middle lands where the
-//! pointer is, and a block carried onto another universe's strip lands there.
+//! Dragging a run re-addresses it: the press remembers *which channel* of the
+//! fixture it landed on, so a run picked up by its middle lands where the
+//! pointer is, and a run carried onto another universe's grid lands there.
 //! The drop calls `set_fixture_address` like any other typed address and shows
 //! the same refusal, because it is the same door.
 
 use gpui::prelude::*;
-use gpui::{canvas, div, px, relative, AnyElement, Bounds, Entity, Pixels, SharedString};
+use gpui::{
+    canvas, div, fill, point, px, relative, size, AnyElement, Bounds, Entity, Hsla, Pixels,
+    SharedString,
+};
 
 use luma_lib::models::fixtures::PatchedFixture;
 use luma_lib::models::patch::UniverseCell;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
-use luma_ui::{float, glass, ladder};
+use luma_ui::{float, ladder};
 
 use super::Patch;
 use crate::Luma;
 
-/// Channels to a lane, and lanes to a universe.
-const LANE_CHANNELS: i64 = 128;
-const LANES: i64 = 4;
-const LANE_HEIGHT: f32 = 26.0;
-const LANE_GAP: f32 = 2.0;
-/// The column the lanes' first addresses are written in.
+/// Cells across, and rows down: 512 in all.
+const COLUMNS: i64 = 64;
+const ROWS: i64 = 8;
+/// The space between two cells, in the grid's own colour.
+const CELL_GAP: f32 = 1.0;
+/// The column the rows' first addresses are written in.
 const GUTTER: f32 = 30.0;
 
 pub(super) fn universes(state: &Patch, app: &Entity<Luma>) -> AnyElement {
@@ -65,21 +68,25 @@ pub(super) fn universes(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                 let cells = data.occupancy.get(universe).map_or(&[][..], Vec::as_slice);
                 body = body.child(section(state, *universe, cells, app));
             }
-            body = body.child(super::outputs::found(state));
         }
     }
     body.agent_node(Role::Card, "Patch").into_any_element()
 }
 
-/// One universe: where it comes out, its strip, and what is wrong on it.
+/// One universe: its name, its grid, and what is wrong on it.
 fn section(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma>) -> AnyElement {
     div()
         .flex_none()
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .child(super::outputs::row(state, i64::from(universe), app))
-        .child(strip(state, universe, cells, app))
+        .child(
+            div()
+                .text_size(px(12.5))
+                .text_color(ladder::foreground())
+                .child(format!("Universe {universe}")),
+        )
+        .child(grid(state, universe, cells, app))
         .children(collision_notes(universe, cells))
         .children(
             state
@@ -91,60 +98,114 @@ fn section(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Lu
         .into_any_element()
 }
 
-/// The channel under a pointer at `at`, on lanes drawn in `bounds`.
+/// The channel under a pointer at `at`, on a grid drawn in `bounds`.
 fn channel_at(bounds: Bounds<Pixels>, at: gpui::Point<Pixels>) -> u16 {
     let width = f32::from(bounds.size.width).max(1.0);
     let height = f32::from(bounds.size.height).max(1.0);
     let along = (f32::from(at.x) - f32::from(bounds.origin.x)) / width;
     let down = (f32::from(at.y) - f32::from(bounds.origin.y)) / height;
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-    let (lane, channel) = (
-        ((down * LANES as f32).floor() as i64).clamp(0, LANES - 1),
-        ((along * LANE_CHANNELS as f32).floor() as i64).clamp(0, LANE_CHANNELS - 1),
+    let (row, column) = (
+        ((down * ROWS as f32).floor() as i64).clamp(0, ROWS - 1),
+        ((along * COLUMNS as f32).floor() as i64).clamp(0, COLUMNS - 1),
     );
-    u16::try_from(lane * LANE_CHANNELS + channel + 1).unwrap_or(1)
+    u16::try_from(row * COLUMNS + column + 1).unwrap_or(1)
 }
 
-/// A run of channels as the piece of it on each lane: the lane, and where the
-/// piece starts and how wide it is as fractions of the lane.
-fn pieces(start: i64, channels: i64) -> Vec<(i64, f32, f32)> {
+/// A run of channels as the piece of it on each row: the row, the column it
+/// starts at and how many cells it covers there.
+fn pieces(start: i64, channels: i64) -> Vec<(i64, i64, i64)> {
     let last = start + channels - 1;
-    (0..LANES)
-        .filter_map(|lane| {
-            let first = lane * LANE_CHANNELS + 1;
+    (0..ROWS)
+        .filter_map(|row| {
+            let first = row * COLUMNS + 1;
             let from = start.max(first);
-            let to = last.min(first + LANE_CHANNELS - 1);
-            #[allow(clippy::cast_precision_loss)]
-            (from <= to).then(|| {
-                (
-                    lane,
-                    (from - first) as f32 / LANE_CHANNELS as f32,
-                    (to - from + 1) as f32 / LANE_CHANNELS as f32,
-                )
-            })
+            let to = last.min(first + COLUMNS - 1);
+            (from <= to).then(|| (row, from - first, to - from + 1))
         })
         .collect()
 }
 
-/// A piece's box on its lane.
-fn piece(lane: i64, left: f32, width: f32) -> gpui::Div {
-    #[allow(clippy::cast_precision_loss)]
-    let top = lane as f32 * (LANE_HEIGHT + LANE_GAP);
-    div()
-        .absolute()
-        .top(px(top))
-        .h(px(LANE_HEIGHT))
-        .left(relative(left))
-        .w(relative(width))
+/// What each of the 512 cells is filled with.
+fn fills(state: &Patch, universe: u16, cells: &[UniverseCell]) -> Vec<Hsla> {
+    let mut fills: Vec<Hsla> = vec![ladder::trim().into(); (COLUMNS * ROWS) as usize];
+    let mut paint = |start: i64, channels: i64, colour: Hsla| {
+        for address in start..start + channels {
+            if let Some(cell) = usize::try_from(address - 1)
+                .ok()
+                .and_then(|index| fills.get_mut(index))
+            {
+                *cell = colour;
+            }
+        }
+    };
+    let lifted = state.drag.as_ref().map(|drag| drag.fixture.as_str());
+    for (index, row) in state
+        .rows()
+        .iter()
+        .filter(|row| row.universe == i64::from(universe))
+        .enumerate()
+    {
+        let colour: Hsla = if lifted == Some(row.id.as_str()) {
+            // Where it was, while it is in the hand.
+            ladder::foreground_alpha(0.12)
+        } else if state.selected.contains(&row.id) {
+            ladder::foreground_90().into()
+        } else if index % 2 == 0 {
+            ladder::hover().into()
+        } else {
+            // Two shades down the address order, so two fixtures that touch
+            // are told apart without a name on every cell.
+            ladder::foreground_alpha(0.26)
+        };
+        paint(row.address, row.num_channels, colour);
+    }
+    for (start, end) in collisions(cells) {
+        paint(
+            i64::from(start),
+            i64::from(end - start + 1),
+            ladder::danger().into(),
+        );
+    }
+    // Where the dragged run would land, so the ghost is under the pointer
+    // before anything is written.
+    if let Some(drag) = state.drag.as_ref().filter(|drag| drag.universe == universe) {
+        if let Some(row) = state.row(&drag.fixture) {
+            let start = i64::from(drag.over) - i64::from(drag.grabbed_channel);
+            paint(start, row.num_channels, ladder::accent().into());
+        }
+    }
+    fills
 }
 
-fn strip(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma>) -> AnyElement {
+fn grid(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma>) -> AnyElement {
     let measured = state.strips.clone();
-    let measure = canvas(
+    let fills = fills(state, universe, cells);
+    // The cells are painted, not laid out: 512 squares a universe are a
+    // picture, and the runs over them are what a pointer and a script meet.
+    let painted = canvas(
         move |bounds, _, _| {
             measured.borrow_mut().insert(universe, bounds);
         },
-        |_, (), _, _| {},
+        move |bounds, (), window, _| {
+            #[allow(clippy::cast_precision_loss)]
+            let (cell_w, cell_h) = (
+                f32::from(bounds.size.width) / COLUMNS as f32,
+                f32::from(bounds.size.height) / ROWS as f32,
+            );
+            for (index, colour) in fills.iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                let (column, row) = (
+                    (index as i64 % COLUMNS) as f32,
+                    (index as i64 / COLUMNS) as f32,
+                );
+                let cell = Bounds::new(
+                    bounds.origin + point(px(column * cell_w), px(row * cell_h)),
+                    size(px(cell_w - CELL_GAP), px(cell_h - CELL_GAP)),
+                );
+                window.paint_quad(fill(cell, *colour).corner_radii(px(2.0)));
+            }
+        },
     )
     .absolute()
     .inset_0();
@@ -158,54 +219,22 @@ fn strip(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma
     let out_venue = state.venue_id.clone();
 
     #[allow(clippy::cast_precision_loss)]
-    let height = LANES as f32 * LANE_HEIGHT + (LANES - 1) as f32 * LANE_GAP;
-    let mut lanes = div()
-        .id(SharedString::from(format!("universe-strip-{universe}")))
+    let mut cells_area = div()
+        .id(SharedString::from(format!("universe-grid-{universe}")))
         .relative()
         .flex_1()
         .min_w_0()
-        .h(px(height))
-        .child(measure);
-    for lane in 0..LANES {
-        lanes = lanes.child(piece(lane, 0.0, 1.0).rounded(px(4.0)).bg(ladder::trim()));
-        // A rule every 16 channels: enough to read an address off the lane
-        // without a grid of 512 cells.
-        for eighth in 1..8u8 {
-            lanes = lanes.child(
-                piece(lane, f32::from(eighth) / 8.0, 0.0)
-                    .w(px(1.0))
-                    .bg(glass::hairline(0.08)),
-            );
-        }
-    }
+        // Square cells: the grid is as tall as its width makes it.
+        .aspect_ratio(COLUMNS as f32 / ROWS as f32)
+        .child(painted);
     for row in state
         .rows()
         .iter()
         .filter(|row| row.universe == i64::from(universe))
     {
-        lanes = lanes.children(block(state, universe, row, app));
+        cells_area = cells_area.children(run(state, universe, row, app));
     }
-    for (start, end) in collisions(cells) {
-        for (lane, left, width) in pieces(i64::from(start), i64::from(end - start + 1)) {
-            lanes = lanes.child(piece(lane, left, width).bg(ladder::danger()).opacity(0.75));
-        }
-    }
-    // Where the dragged block would land, so the ghost is under the pointer
-    // before anything is written.
-    if let Some(drag) = state.drag.as_ref().filter(|drag| drag.universe == universe) {
-        if let Some(row) = state.row(&drag.fixture) {
-            let start = i64::from(drag.over) - i64::from(drag.grabbed_channel);
-            for (lane, left, width) in pieces(start, row.num_channels) {
-                lanes = lanes.child(
-                    piece(lane, left, width)
-                        .rounded(px(4.0))
-                        .bg(ladder::accent())
-                        .opacity(0.7),
-                );
-            }
-        }
-    }
-    let lanes = lanes
+    let cells_area = cells_area
         .on_mouse_move(move |event, _, cx| {
             let Some(bounds) = move_strips.borrow().get(&universe).copied() else {
                 return;
@@ -220,8 +249,8 @@ fn strip(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma
             let venue = up_venue.clone();
             released.update(cx, |this, cx| this.drop_strip_block(venue, cx));
         })
-        // A press that leaves the strips before it lifts is still a release.
-        // Without this the block stays stuck to the pointer with nothing
+        // A press that leaves the grids before it lifts is still a release.
+        // Without this the run stays stuck to the pointer with nothing
         // holding it, which is the one state a drag must not be able to end in.
         .on_mouse_up_out(gpui::MouseButton::Left, move |_, _, cx| {
             let venue = out_venue.clone();
@@ -229,87 +258,75 @@ fn strip(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma
         })
         .agent_node(Role::Card, format!("Universe {universe} channels"));
 
-    // Each lane's first address, beside it.
+    // Each row's first address, beside it.
     let gutter = div()
         .flex_none()
         .w(px(GUTTER))
-        .h(px(height))
         .flex()
         .flex_col()
-        .gap(px(LANE_GAP))
         .font_family(luma_ui::fonts::MONO)
         .text_size(px(10.0))
         .text_color(ladder::foreground_alpha(0.4))
-        .children((0..LANES).map(|lane| {
+        .children((0..ROWS).map(|row| {
             div()
-                .h(px(LANE_HEIGHT))
+                .flex_1()
                 .flex()
                 .items_center()
-                .child((lane * LANE_CHANNELS + 1).to_string())
+                .child((row * COLUMNS + 1).to_string())
         }));
     div()
         .w_full()
         .flex()
         .child(gutter)
-        .child(lanes)
+        .child(cells_area)
         .into_any_element()
 }
 
-/// One fixture on its universe's strip, as wide as its channels: one piece
-/// per lane it crosses, the first of them carrying its name.
-fn block(
-    state: &Patch,
-    universe: u16,
-    row: &PatchedFixture,
-    app: &Entity<Luma>,
-) -> Vec<AnyElement> {
+/// One fixture over its cells: a piece per row it crosses, the first of them
+/// carrying its name. The cells under it are what is drawn; this is what is
+/// read, pressed and found.
+fn run(state: &Patch, universe: u16, row: &PatchedFixture, app: &Entity<Luma>) -> Vec<AnyElement> {
     let name: SharedString = row
         .label
         .clone()
         .unwrap_or_else(|| row.model.clone())
         .into();
     let selected = state.selected.contains(&row.id);
-    let lifted = state
-        .drag
-        .as_ref()
-        .is_some_and(|drag| drag.fixture == row.id);
     let last = row.address + row.num_channels - 1;
 
     pieces(row.address, row.num_channels)
         .into_iter()
         .enumerate()
-        .map(|(index, (lane, left, width))| {
+        .map(|(index, (line, column, width))| {
             let grabbed = app.clone();
             let venue = state.venue_id.clone();
             let id = row.id.clone();
             let strips = state.strips.clone();
-            let part = piece(lane, left, width)
-                .id(SharedString::from(format!("strip-block-{}-{lane}", row.id)))
-                .rounded(px(4.0))
+            #[allow(clippy::cast_precision_loss)]
+            let part = div()
+                .id(SharedString::from(format!("grid-run-{}-{line}", row.id)))
+                .absolute()
+                .top(relative(line as f32 / ROWS as f32))
+                .h(relative(1.0 / ROWS as f32))
+                .left(relative(column as f32 / COLUMNS as f32))
+                .w(relative(width as f32 / COLUMNS as f32))
                 .overflow_hidden()
-                .px(px(4.0))
+                .pl(px(4.0))
+                .pr(px(CELL_GAP))
+                .pb(px(CELL_GAP))
                 .flex()
                 .items_center()
-                // The gap between two blocks that touch is the lane showing
-                // through this edge.
-                .border_1()
-                .border_color(if row.address_pinned {
-                    ladder::accent().into()
-                } else {
-                    gpui::Hsla::from(ladder::trim())
-                })
-                .bg(if selected {
-                    ladder::foreground_90()
-                } else {
-                    ladder::hover()
-                })
                 .text_size(px(10.5))
                 .text_color(if selected {
                     ladder::background()
                 } else {
                     ladder::foreground()
                 })
-                .when(lifted, |block| block.opacity(0.4))
+                // A hand-set address is ruled under, so it reads on the grid
+                // as it does in the table.
+                .when(row.address_pinned, |part| {
+                    part.border_b_1().border_color(ladder::accent())
+                })
                 .cursor_grab()
                 .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
                     let Some(bounds) = strips.borrow().get(&universe).copied() else {

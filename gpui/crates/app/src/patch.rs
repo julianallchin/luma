@@ -53,21 +53,24 @@ mod venue;
 
 /// What the page under the stage is showing.
 ///
-/// Two readings of the same fixtures: as an inventory with its groups, and as
-/// channels in universes with where each universe comes out.
+/// Three readings of the same rig: the fixtures as an inventory with its
+/// groups, the fixtures as channels in universes, and where each universe
+/// comes out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum View {
     Fixtures,
     Patch,
+    Output,
 }
 
 impl View {
-    pub(crate) const ALL: [View; 2] = [View::Fixtures, View::Patch];
+    pub(crate) const ALL: [View; 3] = [View::Fixtures, View::Patch, View::Output];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             View::Fixtures => "Fixtures",
             View::Patch => "Patch",
+            View::Output => "Output",
         }
     }
 }

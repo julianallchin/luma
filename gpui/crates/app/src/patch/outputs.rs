@@ -17,6 +17,35 @@ use luma_ui::node::{Instrument as _, Role};
 use super::Patch;
 use crate::Luma;
 
+pub(super) fn outputs(state: &Patch, app: &Entity<Luma>) -> AnyElement {
+    let mut body = div()
+        .id("venue-outputs")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .px(px(12.0))
+        .pb(px(12.0));
+    if let Some(data) = state.data.as_ref() {
+        body = body.children(
+            data.universes
+                .iter()
+                .map(|universe| row(state, i64::from(*universe), app)),
+        );
+        if data.universes.is_empty() {
+            body = body.child(
+                luma_ui::float::empty_row("No universe is patched yet.")
+                    .agent_node(Role::Text, "No universe is patched yet."),
+            );
+        }
+    }
+    body.child(found(state))
+        .agent_node(Role::Card, "Output")
+        .into_any_element()
+}
+
 /// One route as a person reads it: the device by name, then the port in the
 /// device's own terms. A device the drivers cannot see right now keeps the
 /// name it was bound under and says it is not seen.
@@ -49,7 +78,7 @@ fn route_label(route: &DmxRoute, devices: &[OutputDevice]) -> String {
     }
 }
 
-pub(super) fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
+fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
     let routes: Vec<&DmxRoute> = state
         .data
         .as_ref()
@@ -264,7 +293,7 @@ fn choice(
 /// What the drivers can see, or why they see nothing. A host with no output
 /// running, output turned off, and a room with nothing plugged in are three
 /// different answers, and this says which.
-pub(super) fn found(state: &Patch) -> AnyElement {
+fn found(state: &Patch) -> AnyElement {
     // Broadcast is listed whenever Art-Net is running, so it is not a find.
     let real = state.devices.iter().filter(|d| !d.any_port).count();
     let message: SharedString = match (&state.devices_unavailable, state.devices.len(), real) {

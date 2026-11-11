@@ -44,6 +44,7 @@ pub(super) fn render(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .child(match state.view {
             super::View::Fixtures => super::table::table(state, app),
             super::View::Patch => super::footprint::universes(state, app),
+            super::View::Output => super::outputs::outputs(state, app),
         })
         .agent_node(Role::Card, "Venue fixtures");
     div()

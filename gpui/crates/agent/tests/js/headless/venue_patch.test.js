@@ -105,14 +105,16 @@ test("the patch view shows each universe and the collision on it", { fixture: { 
 test("dragging a block re-addresses the fixture, and a collision is refused", () => {
   openPatch();
   showPatch();
-  // A universe is four lanes of 128 channels.
-  const perChannel = app.snapshot().find({ role: "card", label: "Universe 1 channels" }).bounds.width / 128;
+  // A universe is a grid 64 cells across, and the cells are square.
+  const grid = app.snapshot().find({ role: "card", label: "Universe 1 channels" }).bounds;
+  const perChannel = grid.width / 64;
+  assert(Math.abs(grid.height / 8 - perChannel) < 1, `cells are ${perChannel} by ${grid.height / 8}`);
   const before = blockStart("Mover 3");
-  app.drag(block("Mover 3"), { dx: 60 * perChannel, dy: 0 }, { steps: 8 });
+  app.drag(block("Mover 3"), { dx: 30 * perChannel, dy: 0 }, { steps: 8 });
   until("the block to move", () => blockStart("Mover 3") !== before);
   app.frames(4);
   const moved = blockStart("Mover 3") - before;
-  assert(moved > 57 && moved < 63, `carried 60 channels, moved ${moved}`);
+  assert(moved > 28 && moved < 32, `carried 30 channels, moved ${moved}`);
   // The table reads the same address.
   nav.step("the fixtures view", "toggle", "Fixtures");
   until("the table", (s) => s.find({ role: "row", label: "Mover 3" }) !== undefined);
@@ -131,7 +133,7 @@ test("dragging a block re-addresses the fixture, and a collision is refused", ()
 // resolved, not on the formula that used to alias them.
 test("universe one and seventeen are different outputs", { fixture: { sql: EXTRAS } }, () => {
   openPatch();
-  showPatch();
+  nav.step("the output view", "toggle", "Output");
   until("the outputs", (s) => s.findAll({ role: "row" }).some((n) => n.label.startsWith("Universe 1 →")));
   app.frames(4);
   const rows = rowLabels().filter((l) => l.startsWith("Universe "));
@@ -154,7 +156,7 @@ test("universe one and seventeen are different outputs", { fixture: { sql: EXTRA
 // drawing an empty room.
 test("adding an output on a host with no DMX output says why", () => {
   openPatch();
-  showPatch();
+  nav.step("the output view", "toggle", "Output");
   until("the outputs", (s) => s.find({ role: "button", label: "Add output to universe 1" }) !== undefined);
   app.click(app.snapshot().find({ role: "button", label: "Add output to universe 1" }));
   until("the device menu", (s) => s.findAll({ role: "text" }).some((n) => n.label.includes("not running on this host")));

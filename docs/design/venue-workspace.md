@@ -34,13 +34,14 @@ modes are sans. Below its minimum width the table scrolls sideways. A row
 names up to three of its groups and counts the rest.
 
 The band over the page switches it between **Fixtures** (the table and the
-groups) and **Patch**, and holds Auto patch. Patch
-(`gpui/crates/app/src/patch/footprint.rs`) lists every universe in use: its
-outputs, then its 512 channels as four lanes of 128 across the page. A
-fixture is a block as wide as its channels. Dragging a block re-addresses it
-through `set_fixture_address`, onto another universe's lanes too, and a
-refused drop says why under that universe. Collisions are drawn from
-`universe_occupancy`, not recomputed.
+groups), **Patch** and **Output**, and holds Auto patch. Patch
+(`gpui/crates/app/src/patch/footprint.rs`) draws every universe in use as a
+grid of 512 square cells, 64 across and 8 down, as wide as the page. A
+fixture is a run of cells with its name on the first. Dragging a run
+re-addresses it through `set_fixture_address`, onto another universe's grid
+too, and a refused drop says why under that universe. Collisions are drawn
+from `universe_occupancy`, not recomputed. Output
+(`gpui/crates/app/src/patch/outputs.rs`) lists where each universe is sent.
 
 The stage, the table, the footprint and the groups panel share one selection
 (`Patch::selected`). A click on a row selects it, command-click toggles a row
