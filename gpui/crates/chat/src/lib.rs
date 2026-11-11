@@ -2096,7 +2096,7 @@ impl AgentChat {
                             });
                             el.pt(px(header))
                                 .pb(px(footer))
-                                .child(opening(&Opening::CHAT, &this, &theme))
+                                .child(opening(Opening::of(self.subject.as_ref()), &this, &theme))
                                 .children(opening_trailer)
                         },
                     )
@@ -2389,37 +2389,49 @@ fn jump_to_bottom(chat: &Entity<AgentChat>, footer: f32, theme: &Theme) -> impl 
         ))
 }
 
-/// What an agent is for, in the words of the thing it is looking at, and the
-/// questions worth asking it.
+/// What a conversation that has not started offers: a question, and things
+/// worth asking of what the conversation is about.
 ///
 /// The copy deliberately does not restate the composer's placeholder: an empty
 /// state that paraphrases the field below it is a stub with two voices.
 struct Opening {
-    headline: &'static str,
-    blurb: &'static str,
     prompts: &'static [&'static str],
 }
 
 impl Opening {
-    const CHAT: Self = Self {
-        headline: OPENING_HEADLINE,
-        blurb: "Build the room, shape the show, or explore the music.",
+    /// Over a score: its song is what there is to ask about.
+    const SCORE: Self = Self {
         prompts: &[
-            "What is open right now?",
-            "Describe this room",
-            "Help me shape the lighting",
+            "Light this whole song",
+            "Make the drop hit harder",
+            "What is on the timeline?",
         ],
     };
+    /// Over a venue: its room and its rig.
+    const VENUE: Self = Self {
+        prompts: &[
+            "Describe this room",
+            "Group these fixtures for me",
+            "What can you do here?",
+        ],
+    };
+
+    fn of(subject: Option<&ThreadScope>) -> &'static Self {
+        match subject.map(|scope| scope.subject_kind) {
+            Some(luma_lib::agent::SubjectKind::Track) => &Self::SCORE,
+            Some(luma_lib::agent::SubjectKind::Venue) | None => &Self::VENUE,
+        }
+    }
 }
 
 /// What a conversation that has not started asks the reader. Public because
 /// it is what a test asserting the empty state never flashes over a loading
 /// thread looks for, and a test spelling the copy itself would pass while the
 /// shipped words said something else.
-pub const OPENING_HEADLINE: &str = "Where do you want to start?";
+pub const OPENING_HEADLINE: &str = "What should it look like?";
 
-/// A conversation that has not started: a mark, a headline, what the agent can
-/// do, and the prompts that fill the composer.
+/// A conversation that has not started: a headline over the prompts that fill
+/// the composer.
 ///
 /// `chat` is the panel the prompts send into.
 fn opening(opening: &Opening, chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
@@ -2439,35 +2451,11 @@ fn opening(opening: &Opening, chat: &Entity<AgentChat>, theme: &Theme) -> impl I
                 .gap(px(theme::SPACE_MD))
                 .child(
                     div()
-                        .size(px(theme::HERO_GLYPH))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_full()
-                        .bg(theme::card_bg())
-                        .border_1()
-                        .border_color(theme.border)
-                        .child(
-                            Icon::new(IconName::Bot)
-                                .size(px(18.0))
-                                .text_color(theme.text_muted),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(px(15.0))
+                        .text_size(px(20.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(theme.text)
-                        .child(SharedString::from(opening.headline))
-                        .agent_node(NodeRole::Text, opening.headline),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .line_height(px(18.0))
-                        .text_center()
-                        .text_color(theme.text_faint)
-                        .child(SharedString::from(opening.blurb))
-                        .agent_node(NodeRole::Text, opening.blurb),
+                        .child(SharedString::from(OPENING_HEADLINE))
+                        .agent_node(NodeRole::Text, OPENING_HEADLINE),
                 )
                 .child(
                     div()

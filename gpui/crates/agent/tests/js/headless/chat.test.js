@@ -162,7 +162,7 @@ test("the chat chrome offers history and starts a new conversation", () => {
 
   app.click(button("New chat"));
   const fresh = texts(until("the fresh conversation", (s) =>
-    texts(s).some((l) => l.includes("Where do you want to start?"))));
+    texts(s).some((l) => l.includes("What should it look like?"))));
   assert(!fresh.some(reply), "the previous conversation is still on screen");
 });
 
@@ -190,7 +190,7 @@ test("the history picker reopens the conversation that was picked", () => {
   turnEnd();
   app.click(button("New chat"));
   const second = texts(until("the fresh conversation", (s) =>
-    texts(s).some((l) => l.includes("Where do you want to start?"))));
+    texts(s).some((l) => l.includes("What should it look like?"))));
   assert(!second.some((l) => l.includes(PROMPT)), "the new chat still shows the old one");
 
   app.click(button("Chat history"));

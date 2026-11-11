@@ -169,8 +169,6 @@ pub const SEND_DIAMETER: f32 = 28.0;
 
 // -- the empty state ---------------------------------------------------------
 
-/// The mark above the empty state's headline.
-pub const HERO_GLYPH: f32 = 40.0;
 /// How wide the empty state's column is allowed to grow. Narrower than the
 /// panel so the hero reads as centred rather than as a full-width paragraph.
 pub const HERO_WIDTH: f32 = 260.0;
