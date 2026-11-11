@@ -306,7 +306,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `revoke_share_code` | `venueId: String` | `()` |
 | `list_venue_members` | `venueId: String` | `Vec<VenueMember>` |
 | `remove_venue_member` | `venueId: String`<br>`uid: String` | `()` |
-| `join_venue` | `code: String` | `Venue` |
+| `join_venue` | `code: String` | `String` |
+| `joined_venue` | `venue_id: String` | `Option<Venue>` |
 
 ### `waveforms`
 

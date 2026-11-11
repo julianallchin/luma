@@ -22,6 +22,9 @@ const SAVE_WAIT: Duration = Duration::from_millis(500);
 /// written, and the correlation for the write in flight.
 pub(crate) struct Stored<T> {
     key: &'static str,
+    /// The item is the signed-in account's rather than the device's — see
+    /// [`Luma::account_key`].
+    account: bool,
     value: T,
     writes: u64,
 }
@@ -30,9 +33,19 @@ impl<T: Default> Stored<T> {
     pub(crate) fn new(key: &'static str) -> Self {
         Self {
             key,
+            account: false,
             value: T::default(),
             writes: 0,
         }
+    }
+}
+
+impl<T> Stored<T> {
+    /// Keep the item per account: it names things only that account can
+    /// reach, such as its conversations.
+    pub(crate) fn per_account(mut self) -> Self {
+        self.account = true;
+        self
     }
 }
 
@@ -41,6 +54,7 @@ impl<T: Default + DeserializeOwned> Stored<T> {
     pub(crate) fn read(key: &'static str, stored: Option<&str>) -> Self {
         Self {
             key,
+            account: false,
             value: stored
                 .and_then(|json| serde_json::from_str(json).ok())
                 .unwrap_or_default(),
@@ -56,6 +70,13 @@ impl<T> Stored<T> {
 }
 
 impl Luma {
+    /// `key` for the signed-in account: where an item that is one person's,
+    /// not the device's, is kept. Resolved when the item is read or stored,
+    /// so a write still waiting at a sign-out lands under whose it was.
+    pub(crate) fn account_key(&self, key: &str) -> String {
+        format!("{key}:{}", self.library.user_id().unwrap_or_default())
+    }
+
     /// Store `value` under `item`'s key when it differs from what is stored.
     /// Called every frame by the items' owners; the write lands once the
     /// changes stop.
@@ -77,8 +98,13 @@ impl Luma {
         };
         stored.value = value;
         stored.writes += 1;
-        let (key, generation) = (stored.key, stored.writes);
-        self.unsaved_session.insert(key, json);
+        let (name, account, generation) = (stored.key, stored.account, stored.writes);
+        let key = if account {
+            self.account_key(name)
+        } else {
+            name.to_owned()
+        };
+        self.unsaved_session.insert(key.clone(), json);
         let wait = self.library.debounce(SAVE_WAIT);
         cx.spawn(async move |this, cx| {
             wait.await;
@@ -86,8 +112,8 @@ impl Luma {
                 if item(this).writes != generation {
                     return None;
                 }
-                let json = this.unsaved_session.remove(key)?;
-                Some(this.library.set_session_item(key, &json))
+                let json = this.unsaved_session.remove(&key)?;
+                Some(this.library.set_session_item(&key, &json))
             }) else {
                 return;
             };
@@ -102,7 +128,7 @@ impl Luma {
         std::mem::take(&mut self.unsaved_session)
             .into_iter()
             .map(|(key, json)| {
-                let write = self.library.set_session_item(key, &json);
+                let write = self.library.set_session_item(&key, &json);
                 async move {
                     let _ = write.await;
                 }

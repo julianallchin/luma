@@ -48,6 +48,7 @@ pub(crate) fn visualizer(
     state.presentation = matches!(&chrome, Chrome::Fullscreen { .. });
     state.sync_pointer_lock(window);
     state.fly_tick(Instant::now(), window.modifiers().shift);
+    state.tour_tick(Instant::now());
     let (venue_tools, transport) = match chrome {
         Chrome::Embedded { venue_tools } => (venue_tools, None),
         Chrome::Fullscreen { transport } => (None, transport),
@@ -171,6 +172,7 @@ pub(crate) fn visualizer(
                 .children(fps)
                 .children(state.stage.borrow().exports.notice())
                 .children(floating)
+                .children(tour::card(state, app))
                 .child(fullscreen_button(state.presentation, app))
                 .when(matches!(state.status, Status::Live), |d| {
                     d.child(settings::trigger(state, app))

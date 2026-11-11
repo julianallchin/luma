@@ -27,11 +27,14 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use luma_lib::models::venues::{display_share_code, Venue, VenueMember, ROLE_OWNER};
+use luma_lib::models::venues::{
+    display_share_code, normalize_share_code, Venue, VenueMember, ROLE_OWNER, SHARE_CODE_ALPHABET,
+    SHARE_CODE_LEN,
+};
 
 use crate::agent::ChatStatus;
 use crate::library::LibraryError;
@@ -54,7 +57,14 @@ enum VenueChord {
     CopyCode,
 }
 
-pub(crate) const LAST_VENUE: &str = "last-venue";
+/// The session item holding the venue an account last had open on this
+/// device, by [`Luma::last_venue_key`]. Kept on the device, not synced: each
+/// machine reopens its own place.
+const LAST_VENUE: &str = "last-venue";
+/// How long a sign-in waits for its first download before opening on what
+/// is here — the limit that keeps a connection that never comes from being a
+/// splash that never leaves.
+const FIRST_SYNC_LIMIT: Duration = Duration::from_secs(12);
 /// The one size every route takes. Like the track palette, the routes are the
 /// same object a step apart, so the card never resizes and the morph spends
 /// its whole span on the content instead of the frame.
@@ -164,6 +174,8 @@ pub(crate) struct VenuePicker {
     /// picker a window with no venue opens on. Back from the route it entered
     /// at closes the dialog: the menu is the list it came from.
     entry: Option<Entry>,
+    /// The card is fading back to the welcome page — see [`Self::go_root`].
+    leaving: Option<Instant>,
     /// The header band's fields — see the module docs on why every route
     /// puts one there.
     search: Entity<TextInput>,
@@ -251,6 +263,7 @@ impl VenuePicker {
             joining: false,
             sharing: None,
             entry: None,
+            leaving: None,
             search,
             name,
             code,
@@ -292,12 +305,11 @@ impl VenuePicker {
         } else if self.entry == Some(Entry::Join) {
             self.settle_route(Route::Join);
             self.focus_pending = Some(FocusTarget::JoinCode);
-        } else if self.entry == Some(Entry::Create) || self.venues.is_empty() {
+        } else if self.entry == Some(Entry::Create) {
             self.settle_route(Route::Create);
             self.focus_pending = Some(FocusTarget::CreateName);
         } else {
-            self.settle_route(Route::Browse);
-            self.focus_pending = Some(FocusTarget::Search);
+            self.go_root(true);
         }
         self.refilter();
     }
@@ -372,14 +384,42 @@ impl VenuePicker {
             .request(route.descriptor(), Instant::now(), reduced);
     }
 
-    /// Where Back goes from Join: the list, or — for someone with no venue
-    /// yet — the create route they came from.
-    fn join_return(&self) -> Route {
-        if self.venues.is_empty() {
-            Route::Create
-        } else {
-            Route::Browse
+    /// Someone with no venue yet sees the welcome page: with nothing to
+    /// list, the root route is a page offering Create and Join.
+    pub(crate) fn welcoming(&self) -> bool {
+        self.loaded && !self.load_failed && self.venues.is_empty()
+    }
+
+    /// The picker is on a route that asks something — a name, a code, who
+    /// may open a room — rather than at its root.
+    pub(crate) fn asking(&self) -> bool {
+        self.route() != Route::Browse
+    }
+
+    /// Back to the root: the list, or the welcome page. The page is not a
+    /// card, so there is nothing to morph to: the card over it leaves as a
+    /// closing dialog does, and [`tick`] lands on the root once it has gone.
+    fn go_root(&mut self, reduced: bool) {
+        if !self.venues.is_empty() {
+            self.go(Route::Browse, reduced);
+            self.focus_pending = Some(FocusTarget::Search);
+        } else if reduced || !self.asking() {
+            self.land_on_page();
+        } else if self.leaving.is_none() {
+            self.leaving = Some(Instant::now());
         }
+    }
+
+    fn land_on_page(&mut self) {
+        self.leaving = None;
+        self.settle_route(Route::Browse);
+        self.focus_pending = None;
+    }
+
+    /// When the card began leaving for the welcome page, for the host to fade
+    /// it by.
+    pub(crate) fn leaving(&self) -> Option<Instant> {
+        self.leaving
     }
 
     fn refilter(&mut self) {
@@ -429,6 +469,50 @@ impl Luma {
         self.venue_picker_generation
     }
 
+    /// Where this account's last venue is remembered. Per account, so one
+    /// person's place is neither opened for nor forgotten by the next.
+    pub(crate) fn last_venue_key(&self) -> String {
+        self.account_key(LAST_VENUE)
+    }
+
+    /// [`Self::restore_venue`] for an account that has just signed in: its
+    /// library was cleared at the sign-out and is still on its way down, so
+    /// the splash holds until the first download has landed. Read before
+    /// then, an account with venues looks like one with none.
+    pub(crate) fn restore_venue_once_synced(&mut self, cx: &mut Context<Self>) {
+        if !self.library.cloud_sync_enabled() {
+            return self.restore_venue(cx);
+        }
+        self.restoring_venue = true;
+        let started = Instant::now();
+        cx.notify();
+        cx.spawn(async move |this, cx| loop {
+            let Ok(pending) = this.update(cx, |this, _| this.library.sync_status()) else {
+                return;
+            };
+            let caught_up = pending.await.is_ok_and(|status| status.caught_up);
+            let Ok(wait) = this.update(cx, |this, cx| {
+                // Signed out again while waiting: the gate has the window.
+                if this.sign_in.is_some() {
+                    this.restoring_venue = false;
+                    return None;
+                }
+                if caught_up || started.elapsed() >= FIRST_SYNC_LIMIT {
+                    this.restore_venue(cx);
+                    return None;
+                }
+                Some(this.library.debounce(Duration::from_millis(200)))
+            }) else {
+                return;
+            };
+            match wait {
+                Some(wait) => wait.await,
+                None => return,
+            }
+        })
+        .detach();
+    }
+
     /// Restore behind the startup splash; only reveal the picker when a
     /// choice or an error needs the user’s attention.
     pub(crate) fn restore_venue(&mut self, cx: &mut Context<Self>) {
@@ -439,16 +523,29 @@ impl Luma {
                 generation, cx,
             ))));
         let venues = self.library.venues();
-        let remembered = self.library.get_session_item(LAST_VENUE);
+        let key = self.last_venue_key();
+        let remembered = self.library.get_session_item(&key);
+        // Whether a venue missing from the catalogue is gone, or only not
+        // here yet: without sync, the local database is all there is.
+        let synced = self
+            .library
+            .cloud_sync_enabled()
+            .then(|| self.library.sync_status());
         let saved_venues = self.read_saved_venues();
         let saved_cameras = self.read_saved_cameras();
+        let camera_tour = self.read_camera_tour();
         let deck_width = self.library.get_session_item(crate::shell::DECK_WIDTH_KEY);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let venues = venues.await;
             let remembered = remembered.await;
+            let complete = match synced {
+                Some(status) => status.await.is_ok_and(|status| status.caught_up),
+                None => true,
+            };
             let saved_venues = saved_venues.await;
             let saved_cameras = saved_cameras.await;
+            let camera_tour = camera_tour.await;
             let deck_width = deck_width.await;
             this.update(cx, |this, cx| {
                 this.restoring_venue = false;
@@ -459,6 +556,11 @@ impl Luma {
                 // The same for each venue's last camera pose.
                 this.saved_cameras =
                     crate::saved_cameras::read(saved_cameras.ok().flatten().as_deref());
+                this.camera_tour = crate::session_store::Stored::read(
+                    crate::visualizer::tour::KEY,
+                    camera_tour.ok().flatten().as_deref(),
+                )
+                .per_account();
                 this.deck_width = crate::session_store::Stored::read(
                     crate::shell::DECK_WIDTH_KEY,
                     deck_width.ok().flatten().as_deref(),
@@ -494,8 +596,8 @@ impl Luma {
                     this.open_venue(venue, cx);
                     return;
                 }
-                if remembered.is_some() {
-                    let clear = this.library.remove_session_item(LAST_VENUE);
+                if remembered.is_some() && complete {
+                    let clear = this.library.remove_session_item(&key);
                     cx.spawn(async move |_, _| {
                         let _ = clear.await;
                     })
@@ -610,10 +712,15 @@ impl Luma {
     }
 
     fn join_code_changed(&mut self, code: String, cx: &mut Context<Self>) {
+        // A whole code needs no Enter: there is nothing left to type.
+        let whole = normalize_share_code(&code).is_some();
         self.with_venue_picker(cx, |state| {
             state.join_code = code;
             state.join_error = None;
         });
+        if whole {
+            self.join_venue(cx);
+        }
     }
 
     /// The picker's navigator keys, in the same shape as the track palette:
@@ -634,8 +741,8 @@ impl Luma {
         let key = event.keystroke.key.as_str();
 
         match (route, key) {
-            // Escape is refused while onboarding has no venue to fall back to
-            // — `dismiss_overlay` owns that rule, so it is not repeated here.
+            // With no venue open Escape cannot close the picker and steps
+            // back instead — `dismiss_overlay` owns that rule.
             (_, "escape") => self.dismiss_overlay(cx),
             (Route::Create, "left") => self.cancel_create_venue(cx),
             (Route::Create, "backspace") if field_empty => self.cancel_create_venue(cx),
@@ -692,10 +799,26 @@ impl Luma {
         }
     }
 
+    /// Escape with no venue open: the picker cannot close, so a form steps
+    /// back to the list, or to the welcome page.
+    pub(crate) fn venue_step_back(&mut self, cx: &mut Context<Self>) {
+        let route = match self.overlay.as_open() {
+            Some(Overlay::Venues(state)) => state.route(),
+            _ => return,
+        };
+        match route {
+            Route::Create => self.cancel_create_venue(cx),
+            Route::Join => self.cancel_join_venue(cx),
+            Route::Browse | Route::Share => {}
+        }
+    }
+
     fn show_create_venue(&mut self, cx: &mut Context<Self>) {
         let reduced = luma_ui::motion::reduced_motion(cx);
         self.with_venue_picker(cx, move |state| {
-            state.go(Route::Create, reduced);
+            let instant = reduced || state.welcoming();
+            state.leaving = None;
+            state.go(Route::Create, instant);
             state.create_failed = false;
             state.focus_pending = Some(FocusTarget::CreateName);
         });
@@ -707,9 +830,8 @@ impl Luma {
         }
         let reduced = luma_ui::motion::reduced_motion(cx);
         self.with_venue_picker(cx, move |state| {
-            if !state.venues.is_empty() && !state.creating {
-                state.go(Route::Browse, reduced);
-                state.focus_pending = Some(FocusTarget::Search);
+            if !state.creating {
+                state.go_root(reduced);
             }
         });
     }
@@ -768,7 +890,9 @@ impl Luma {
             if !state.loaded || state.load_failed {
                 return;
             }
-            state.go(Route::Join, reduced);
+            let instant = reduced || state.welcoming();
+            state.leaving = None;
+            state.go(Route::Join, instant);
             state.join_error = None;
             state.focus_pending = Some(FocusTarget::JoinCode);
         });
@@ -783,13 +907,7 @@ impl Luma {
             if state.joining {
                 return;
             }
-            let back = state.join_return();
-            state.go(back, reduced);
-            state.focus_pending = Some(if back == Route::Browse {
-                FocusTarget::Search
-            } else {
-                FocusTarget::CreateName
-            });
+            state.go_root(reduced);
         });
     }
 
@@ -816,7 +934,7 @@ impl Luma {
                     return;
                 }
                 match result {
-                    Ok(venue) => this.open_venue(venue, cx),
+                    Ok(venue_id) => this.await_joined_venue(venue_id, cx),
                     Err(error) => {
                         state.joining = false;
                         state.join_error = Some(prose(&error));
@@ -825,6 +943,44 @@ impl Luma {
                 }
             })
             .ok();
+        })
+        .detach();
+    }
+
+    /// The server took the code: the account is in, and the venue's rows are
+    /// on their way down. The dialog closes at once on the venue's place,
+    /// and the venue opens there the moment it can be — its songs then fill
+    /// in as they download, like any other arrival.
+    ///
+    /// Opening anything else in the meantime ends the wait: the joined venue
+    /// is in the list when it lands.
+    fn await_joined_venue(&mut self, venue_id: String, cx: &mut Context<Self>) {
+        self.arriving_venue = Some(venue_id.clone());
+        self.close_overlay(cx);
+        cx.notify();
+        cx.spawn(async move |this, cx| loop {
+            let Ok(Some(pending)) = this.update(cx, |this, _| {
+                (this.arriving_venue.as_deref() == Some(venue_id.as_str()))
+                    .then(|| this.library.joined_venue(&venue_id))
+            }) else {
+                return;
+            };
+            let venue = pending.await.ok().flatten();
+            let Ok(Some(wait)) = this.update(cx, |this, cx| {
+                if this.arriving_venue.as_deref() != Some(venue_id.as_str()) {
+                    return None;
+                }
+                match venue {
+                    Some(venue) => {
+                        this.open_venue(venue, cx);
+                        None
+                    }
+                    None => Some(this.library.debounce(Duration::from_millis(250))),
+                }
+            }) else {
+                return;
+            };
+            wait.await;
         })
         .detach();
     }
@@ -1453,6 +1609,14 @@ pub(crate) fn tick(
 ) {
     let now = Instant::now();
     let reduced = luma_ui::motion::reduced_motion(cx);
+    if let Some(since) = state.leaving {
+        if luma_ui::motion::exit_progress(&luma_ui::motion::SURFACE, since) < 1.0 {
+            window.request_animation_frame();
+        } else {
+            state.land_on_page();
+        }
+        return;
+    }
     if state.morph.tick(now, reduced) {
         window.request_animation_frame();
     }
@@ -1463,12 +1627,12 @@ pub(crate) fn tick(
         return;
     }
     if let Some(route) = state.morph.take_focus_after_commit() {
-        state.focus_pending = Some(match route {
-            Route::Browse => FocusTarget::Search,
-            Route::Create => FocusTarget::CreateName,
-            Route::Join => FocusTarget::JoinCode,
-            Route::Share => FocusTarget::SharePrimary,
-        });
+        state.focus_pending = match route {
+            Route::Browse => (!state.venues.is_empty()).then_some(FocusTarget::Search),
+            Route::Create => Some(FocusTarget::CreateName),
+            Route::Join => Some(FocusTarget::JoinCode),
+            Route::Share => Some(FocusTarget::SharePrimary),
+        };
     }
     let Some(target) = state.focus_pending.take() else {
         return;
@@ -1479,6 +1643,84 @@ pub(crate) fn tick(
         FocusTarget::JoinCode => window.focus(&state.code_focus, cx),
         FocusTarget::SharePrimary => window.focus(&state.share_primary_focus, cx),
     }
+}
+
+/// The welcome page: the shell's content for someone with no venue yet. A
+/// greeting over the two ways in, each opening the picker at its route.
+pub(crate) fn page(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
+    let option = |title: &'static str,
+                  hint: &'static str,
+                  id: &'static str,
+                  focus: &FocusHandle,
+                  act: fn(&mut Luma, &mut Context<Luma>)| {
+        let app = app.clone();
+        // The list row every picker uses, at the size of a page's one choice.
+        float::menu_row(RowState::Rest, id)
+            .id(id)
+            .track_focus(focus)
+            .tab_index(0)
+            .w(px(200.0))
+            // A resting plate: with no list around them, the hover wash
+            // alone would leave these reading as captions.
+            .bg(glass::ink(0.04))
+            .px(px(16.0))
+            .py(px(12.0))
+            .rounded(px(radius::PANEL))
+            .on_click(move |_, _, cx| app.update(cx, |this, cx| act(this, cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(2.0))
+                    .child(div().text_size(px(17.0)).child(title))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(ladder::muted_foreground())
+                            .child(hint),
+                    ),
+            )
+            .agent_node(Role::Button, title)
+            .agent_focused(focus.is_focused(window))
+    };
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(28.0))
+        .px(px(40.0))
+        .child(
+            div()
+                .text_size(px(32.0))
+                .line_height(px(38.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Light it up.")
+                .agent_node(Role::Text, "Light it up"),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(8.0))
+                .child(option(
+                    "Get started",
+                    "New venue",
+                    "welcome-create",
+                    &state.create_action_focus,
+                    Luma::show_create_venue,
+                ))
+                .child(option(
+                    "Join a venue",
+                    "Invite code",
+                    "welcome-join",
+                    &state.join_entry_focus,
+                    Luma::show_join_venue,
+                )),
+        )
 }
 
 /// The venue picker's card. Like the track palette, this owns its own
@@ -1547,8 +1789,8 @@ fn route_body(
         .child(header(state, route, mode, app, window, cx))
         .child(div().flex_1().min_h_0().flex().child(match route {
             Route::Browse => browser(state, statuses, mode, app, window, cx),
-            Route::Create => create(state, mode, app),
-            Route::Join => join(state),
+            Route::Create => create(state),
+            Route::Join => join(state, mode, window),
             Route::Share => share(state, mode, app, window),
         }))
         .child(footer(state, route, cx))
@@ -1571,11 +1813,10 @@ fn header(
     let mut band = float::header_band();
 
     // Back exists only where there is somewhere to go: the browse route is
-    // the root of this dialog, and onboarding's create route has no list
-    // behind it.
+    // the root of this dialog.
     let back: Option<(bool, fn(&mut Luma, &mut Context<Luma>))> = match route {
         Route::Browse => None,
-        Route::Create => (!state.venues.is_empty()).then_some((
+        Route::Create => Some((
             !state.creating,
             Luma::cancel_create_venue as fn(&mut Luma, &mut Context<Luma>),
         )),
@@ -1616,6 +1857,14 @@ fn header(
 
     band = band.child(match route {
         Route::Share => share_title(state),
+        // The code is typed into its places in the body — see [`join`].
+        Route::Join => div()
+            .flex_1()
+            .min_w_0()
+            .text_size(px(14.0))
+            .child("Join a venue")
+            .agent_node(Role::Text, "Join a venue")
+            .into_any_element(),
         _ => field(state, route, mode, window),
     });
 
@@ -1657,7 +1906,6 @@ fn field(state: &VenuePicker, route: Route, mode: ContentMode, window: &Window) 
     // The semantic label is the VALUE once there is one, falling back to the
     // placeholder. A driver asserting on this field is asking what it says,
     // not what it would say if empty.
-    let placeholder;
     let (entity, focus, value, placeholder) = match route {
         Route::Browse => (
             &state.search,
@@ -1671,15 +1919,9 @@ fn field(state: &VenuePicker, route: Route, mode: ContentMode, window: &Window) 
             state.create_name.as_str(),
             "Venue name",
         ),
-        Route::Join | Route::Share => {
-            placeholder = format!("Invite code, like {EXAMPLE_CODE}");
-            (
-                &state.code,
-                &state.code_focus,
-                state.join_code.as_str(),
-                placeholder.as_str(),
-            )
-        }
+        // Join types into its places and Share has a title: neither has a
+        // header field.
+        Route::Join | Route::Share => return div().into_any_element(),
     };
     let label = if value.is_empty() { placeholder } else { value };
     if !interactive {
@@ -1865,9 +2107,7 @@ fn footer(state: &VenuePicker, route: Route, cx: &App) -> Div {
                 |band| band.children(shortcut::hint(&keymap::ShareVenue, "Share", cx)),
             ),
         Route::Create => band
-            .when(!state.venues.is_empty(), |band| {
-                band.child(float::key_hint(IconName::ArrowLeft, "Back"))
-            })
+            .child(float::key_hint(IconName::ArrowLeft, "Back"))
             .child(float::key_hint_text("↵", "Create")),
         Route::Join => band
             .child(float::key_hint(IconName::ArrowLeft, "Back"))
@@ -2131,18 +2371,12 @@ fn prompt(heading: &str, line: &str, refused: Option<String>) -> Div {
 
 /// The create route's body: the prompt above, whatever went wrong below. The
 /// name itself is typed in the header band — see [`field`].
-///
-/// Someone with no venue yet may have been sent a code rather than be here to
-/// build a room, so onboarding offers the way to Join beneath the prompt.
-fn create(state: &VenuePicker, mode: ContentMode, app: &Entity<Luma>) -> AnyElement {
-    let onboarding = state.venues.is_empty();
-    let heading = if onboarding {
+fn create(state: &VenuePicker) -> AnyElement {
+    let heading = if state.venues.is_empty() {
         "Create your first venue"
     } else {
         "A new room to light"
     };
-    let interactive = mode == ContentMode::Interactive;
-    let go = app.clone();
     prompt(
         heading,
         "Name it in the field above, then press ↵.",
@@ -2150,32 +2384,60 @@ fn create(state: &VenuePicker, mode: ContentMode, app: &Entity<Luma>) -> AnyElem
             .create_failed
             .then(|| "The venue was not created".to_owned()),
     )
-    .when(onboarding && state.loaded, |column| {
-        column.child(
-            div().pt(px(6.0)).child(
-                float::btn("Have an invite code? Join a venue", "onboarding-join")
-                    .id("onboarding-join")
-                    .when(interactive, |button| {
-                        button.on_click(move |_, _, cx| {
-                            go.update(cx, |this, cx| this.show_join_venue(cx))
-                        })
-                    })
-                    .agent_node(Role::Button, "Join a venue")
-                    .agent_disabled(!interactive),
-            ),
-        )
-    })
     .into_any_element()
 }
 
-/// The join route's body. The code is typed in the header band.
-fn join(state: &VenuePicker) -> AnyElement {
-    prompt(
-        "Join a venue",
-        "Enter the invite code its owner shared with you, then press ↵.",
-        state.join_error.clone(),
-    )
-    .into_any_element()
+/// The join route's body: the code typed into its places — see
+/// [`luma_ui::code_entry`]. A whole code joins by itself.
+fn join(state: &VenuePicker, mode: ContentMode, window: &Window) -> AnyElement {
+    let interactive = mode == ContentMode::Interactive;
+    let typed: Vec<(char, bool)> = state
+        .join_code
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .map(|c| c.to_ascii_uppercase())
+        .take(SHARE_CODE_LEN)
+        .map(|c| {
+            let wrong = !c.is_ascii() || !SHARE_CODE_ALPHABET.contains(&(c as u8));
+            (c, wrong)
+        })
+        .collect();
+    let line = if typed.iter().any(|(_, wrong)| *wrong) {
+        "Codes never use 0, O, 1, I, L or U."
+    } else if state.joining {
+        "Joining…"
+    } else {
+        "Type or paste the code the venue's owner shared with you."
+    };
+    let label = if state.join_code.is_empty() {
+        "Invite code"
+    } else {
+        state.join_code.as_str()
+    };
+    prompt("Enter your invite code", line, None)
+        .child(
+            luma_ui::code_entry::places(
+                &typed,
+                SHARE_CODE_LEN,
+                Some(SHARE_CODE_LEN / 2),
+                interactive.then_some((&state.code, &state.code_focus)),
+                !state.joining,
+                window,
+            )
+            .mt(px(14.0))
+            .agent_node(Role::Input, label.to_string())
+            .agent_disabled(!interactive)
+            .agent_focused(interactive && state.code_focus.is_focused(window)),
+        )
+        .when_some(state.join_error.clone(), |column, refused| {
+            column.child(
+                div()
+                    .pt(px(6.0))
+                    .max_w(px(560.0))
+                    .child(luma_ui::notice::line(refused)),
+            )
+        })
+        .into_any_element()
 }
 
 /// The share route's body: the code, then the people.

@@ -57,7 +57,7 @@ pub(crate) enum Page {
     Songs(Option<String>),
 }
 
-/// Which tracks the ownership filter admits. Mutually exclusive, and `Mine` is
+/// Which tracks the ownership filter admits. Mutually exclusive, and `All` is
 /// the default.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Ownership {
@@ -66,7 +66,7 @@ pub enum Ownership {
 }
 
 impl Ownership {
-    const ALL: [Ownership; 2] = [Ownership::Mine, Ownership::All];
+    const ALL: [Ownership; 2] = [Ownership::All, Ownership::Mine];
 
     fn label(self) -> &'static str {
         match self {
@@ -369,11 +369,14 @@ impl Luma {
         self.venue_selection_generation = self.venue_selection_generation.wrapping_add(1);
         let generation = self.venue_selection_generation;
         let venue_id = venue.id.clone();
+        // Whatever opens is where the window is: a joined venue still on its
+        // way down no longer takes it over when it lands.
+        self.arriving_venue = None;
         self.close_overlay(cx);
         let pending = self.library.tracks(&venue.id);
         let remember = self
             .library
-            .set_session_item(crate::welcome::LAST_VENUE, &venue.id);
+            .set_session_item(&self.last_venue_key(), &venue.id);
         let search = cx.new(|cx| {
             let mut field = luma_ui::text_input::TextInput::search(PLACEHOLDER, cx);
             field.set_text_size(HEADER_TEXT, cx);
@@ -414,7 +417,7 @@ impl Luma {
             rename: None,
             loaded: false,
             load_failed: false,
-            ownership: Ownership::Mine,
+            ownership: Ownership::All,
             query: String::new(),
             search,
             _search_subscription: search_subscription,
@@ -993,7 +996,7 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
 /// What the search says while it is empty.
 const PLACEHOLDER: &str = "Search tracks";
 
-/// The `mine` / `all` axis: always exactly one pressed.
+/// The `all` / `mine` axis: always exactly one pressed.
 fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
     float::segmented().children(Ownership::ALL.into_iter().map(|ownership| {
         let app = app.clone();

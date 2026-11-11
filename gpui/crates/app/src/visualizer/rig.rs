@@ -117,6 +117,7 @@ impl Visualizer {
             posed: false,
             drag: None,
             fly: None,
+            tour: None,
             pointer_locked: false,
             fly_speed: 1.0,
             pivot_dot: None,
@@ -169,12 +170,13 @@ impl Visualizer {
     /// The room as it is lit on screen. Previewing a score uses the saved
     /// room: selecting one changes its fixtures' output, not the time of day
     /// or the house lights. Rigging uses the same room under a work light of
-    /// its own, which is never saved.
+    /// its own, which is never saved, and the camera walkthrough keeps a
+    /// dark room lit enough to look around — see [`Self::tour_lit`].
     pub(crate) fn environment(&self) -> VenueEnvironment {
         if self.rigging {
             self.venue_environment.lit_at(self.work_light)
         } else {
-            self.venue_environment
+            self.tour_lit(self.venue_environment)
         }
     }
 

@@ -89,6 +89,20 @@ pub async fn seed(dir: &Path, stored: Stored) {
     seed_as(dir, stored, PRINCIPAL).await;
 }
 
+/// Mark `principal` as having been through the camera walkthrough, which a
+/// score otherwise opens under — see `luma_app`'s `visualizer::tour`.
+pub async fn toured(dir: &Path, principal: &str) {
+    let state = luma_lib::database::local::state::init_state_db_at(dir)
+        .await
+        .expect("failed to open the fixture state database");
+    sqlx::query("INSERT INTO auth_session (key, value) VALUES (?, 'true')")
+        .bind(format!("camera-tour:{principal}"))
+        .execute(&state.0)
+        .await
+        .expect("failed to seed the camera walkthrough");
+    state.0.close().await;
+}
+
 async fn seed_as(dir: &Path, stored: Stored, principal: &str) {
     let state = luma_lib::database::local::state::init_state_db_at(dir)
         .await

@@ -226,6 +226,16 @@ impl Settings {
 /// copy would only be able to name the previous account. What lives here is
 /// the part of the gesture that is not durable: whether the one multi-command
 /// sign-out is mid-flight. A sign-out that fails says so in the status bar.
+/// The brightness slider's writes — see [`Luma::set_max_dimmer`].
+#[derive(Default)]
+pub(crate) struct DimmerWrite {
+    /// The level the slider last asked for, until a write of it has landed.
+    /// A read of the settings in the meantime shows this, not the database's
+    /// older answer.
+    wanted: Option<u8>,
+    writing: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct AccountAction {
     /// A sign-out is in flight. It is a multi-command durability boundary —
@@ -361,6 +371,53 @@ impl Luma {
         .detach();
     }
 
+    /// Set the brightness cap from its slider. The level goes on screen at
+    /// once and the write follows it: a fill that waited for the write and a
+    /// read-back would trail the pointer.
+    ///
+    /// One write at a time, and the last level asked for is the last one
+    /// written — a drag is a burst of moves, and writes sent side by side
+    /// land in any order, so the database could end on a level from halfway
+    /// along. The writes belong to the app, not to the page: leaving
+    /// Settings mid-drag still writes where the pointer stopped.
+    fn set_max_dimmer(&mut self, level: u8, cx: &mut Context<Self>) {
+        self.with_settings(cx, |state| {
+            if let Some(values) = state.values.as_mut() {
+                values.max_dimmer = level;
+            }
+        });
+        self.dimmer_write.wanted = Some(level);
+        if !self.dimmer_write.writing {
+            self.write_max_dimmer(level, cx);
+        }
+    }
+
+    fn write_max_dimmer(&mut self, level: u8, cx: &mut Context<Self>) {
+        self.dimmer_write.writing = true;
+        let pending = self
+            .library
+            .set_setting(key::MAX_DIMMER, &level.to_string());
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                this.dimmer_write.writing = false;
+                match result {
+                    Ok(()) => match this.dimmer_write.wanted {
+                        Some(next) if next != level => this.write_max_dimmer(next, cx),
+                        _ => this.dimmer_write.wanted = None,
+                    },
+                    Err(error) => {
+                        this.dimmer_write.wanted = None;
+                        this.report_failure("The setting was not saved", error, cx);
+                        this.reload_settings(cx);
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Write one setting, then read every setting back.
     fn write_setting(&mut self, key: &str, value: String, cx: &mut Context<Self>) {
         self.with_settings(cx, |state| state.open_menu = None);
@@ -482,8 +539,12 @@ impl Luma {
                     this.apply_display_settings(values, cx);
                     this.show_key_hints(values, cx);
                 }
+                let wanted = this.dimmer_write.wanted;
                 this.with_settings(cx, |state| match result {
-                    Ok(values) => {
+                    Ok(mut values) => {
+                        if let Some(level) = wanted {
+                            values.max_dimmer = level;
+                        }
                         state.values = Some(values);
                         state.load_failed = false;
                     }
@@ -1062,25 +1123,21 @@ fn output(values: &AppSettings, app: &Entity<Luma>) -> Vec<Section> {
                     // Whole percent: the setting is stored as a `u8` and read
                     // back as one, so a slider handing over 61.4 would show 61
                     // on the next reload and disagree with itself in between.
-                    luma_ui::luma_slider(
+                    luma_ui::float::scrub(
                         key::MAX_DIMMER,
-                        values.max_dimmer as f32,
-                        dimmer_low,
-                        dimmer_high,
+                        f64::from(values.max_dimmer),
+                        f64::from(dimmer_low),
+                        f64::from(dimmer_high),
+                        1.,
                         CONTROL_WIDTH,
                         {
                             let app = app.clone();
                             let current = values.max_dimmer;
                             move |value, _, cx| {
-                                let level = value.round().clamp(dimmer_low, dimmer_high) as u8;
+                                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                                let level = value as u8;
                                 if level != current {
-                                    app.update(cx, |this, cx| {
-                                        this.write_setting(
-                                            key::MAX_DIMMER,
-                                            level.to_string(),
-                                            cx,
-                                        );
-                                    });
+                                    app.update(cx, |this, cx| this.set_max_dimmer(level, cx));
                                 }
                             }
                         },

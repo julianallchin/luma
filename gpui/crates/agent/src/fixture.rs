@@ -184,6 +184,10 @@ pub struct Fixture {
     album_art: Option<usize>,
     extra_scores: usize,
     seeded_threads: bool,
+    /// Leave the camera walkthrough owed to the signed-in account, as it is
+    /// to one that has never opened a score. Unset, the account has been
+    /// through it and a score opens with no card over the stage.
+    camera_tour: bool,
     graph_score: Option<Value>,
     /// Clips another writer adds while the editor's first score save is in
     /// flight, announced as a download — see
@@ -377,6 +381,7 @@ impl Default for Fixture {
             album_art: None,
             extra_scores: 0,
             seeded_threads: false,
+            camera_tour: false,
             graph_score: None,
             outside_clips: Vec::new(),
             sql: Vec::new(),
@@ -643,6 +648,9 @@ impl Fixture {
         }
         db.0.close().await;
         session::signed_in_as(config_dir, &owner).await;
+        if !self.camera_tour {
+            session::toured(config_dir, &owner).await;
+        }
     }
 
     async fn write(&self, config_dir: &Path) {
@@ -780,6 +788,9 @@ impl Fixture {
 
         // Then the score, through the seam.
         session::signed_in(config_dir).await;
+        if !self.camera_tour {
+            session::toured(config_dir, session::PRINCIPAL).await;
+        }
         let services = luma_lib::boot::open(luma_lib::boot::Boot {
             storage: luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf()),
             fixtures_root: config_dir.to_path_buf(),

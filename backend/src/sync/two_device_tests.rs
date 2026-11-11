@@ -686,10 +686,21 @@ async fn the_sharing_service_admits_with_a_code_and_revoking_it_admits_nobody() 
         .expect("mint a code");
     wait_for_upload(&a.sql).await;
 
-    let joined = venue_sharing::join(&b.sql, &server(OTHER), &code, CONVERGE)
+    let joined_id = venue_sharing::join(&b.sql, &server(OTHER), &code)
         .await
         .expect("join with the code");
-    assert_eq!(joined.id, venue);
+    assert_eq!(joined_id, venue);
+    let deadline = std::time::Instant::now() + CONVERGE;
+    let joined = loop {
+        if let Some(joined) = venue_sharing::arrived(&b.sql, &joined_id).await {
+            break joined;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the joined venue never downloaded"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
     assert!(joined.is_member());
     settles(
         &b.sql,

@@ -894,8 +894,7 @@ const SEGMENT_PAD: f32 = 10.0;
 ///
 /// gpui routes a drag by its payload's type, so every scrub in the window
 /// shares this one type and hears every scrub's drag; the id is how a listener
-/// knows the move is its own. Exactly [`crate::luma_slider`]'s arrangement, for
-/// exactly its reason.
+/// knows the move is its own — without it, dragging one scrub moves them all.
 #[derive(Clone)]
 struct ScrubDrag {
     id: SharedString,
@@ -907,23 +906,22 @@ impl crate::arg::OwnedDrag for ScrubDrag {
     }
 }
 
-/// A whole number the pointer sets by sweeping across it — the float tier's
-/// value box.
+/// A number the pointer sets by sweeping across it: the one value box, on a
+/// panel, a page or a float alike. There is no thumb — the fill's width is
+/// the value.
 ///
-/// This is [`crate::luma_slider`] on glass, and it is a separate function for
-/// the tier reason rather than a behavioural one: the slider paints an opaque
-/// `ladder::apex` slab with a `ladder::primary` fill, which is a hole cut in a
-/// translucent card. Here the box is [`field`]'s and the fill is [`glass::ink`],
-/// so the control reads as the same recessed hole as the field beside it, with
-/// its value shaded in.
+/// The box is [`field`]'s and the fill is [`glass::ink`], so the control reads
+/// as the same recessed hole as the field beside it, with its value shaded in.
 ///
 /// It replaces a **pair of step buttons**, which is what a count had before:
 /// two buttons say "count" three times (the readout and both verbs) and give
 /// the pointer no way to ask for eight without pressing four times.
 ///
-/// The value handed to `on_change` is absolute and already clamped — see
-/// [`crate::luma_slider`] on why a drag may not wind up. A press that does not
-/// move changes nothing.
+/// The value handed to `on_change` is **absolute** and already clamped, not a
+/// delta: a drag that outruns the box would otherwise wind up, and the control
+/// would spend the first half of the journey back doing nothing. A press that
+/// does not move changes nothing — this control also sets DMX dimmer levels,
+/// and a stray click should not slam a rig to full. Movement is consent.
 pub fn scrub(
     id: impl Into<SharedString>,
     value: f64,
@@ -955,6 +953,12 @@ pub fn scrub_with_power(
     let fraction = ((value - min) / span).clamp(0.0, 1.0).powf(1.0 / power) as f32;
     let text = format_step(value, step);
     let moved = id.clone();
+    // gpui clips to rectangles, so the box's rounding does not cut the fill:
+    // the fill wears the box's inner radius itself. On the left always; on
+    // the right by as much as it has travelled into the box's far curve, so
+    // a part-way fill ends square and a full one sits inside the corner.
+    let inner = radius::ROW - 1.0;
+    let far = (inner - (1.0 - fraction) * (width - 2.0)).clamp(0.0, inner);
     field()
         .relative()
         .w(rpx(width))
@@ -966,6 +970,8 @@ pub fn scrub_with_power(
                 .left_0()
                 .h_full()
                 .w(gpui::relative(fraction))
+                .rounded_l(rpx(inner))
+                .rounded_r(rpx(far))
                 .bg(glass::ink(SCRUB_FILL)),
         )
         .child(
@@ -979,9 +985,9 @@ pub fn scrub_with_power(
                 .text_size(rpx(11.0))
                 .text_color(ladder::foreground())
                 .child(div().flex_1().min_w_0().child(text.clone()))
-                // The number the box draws, published — see
-                // [`crate::luma_slider`]: without it a driver can sweep the
-                // control and has no way to read what it landed on.
+                // The number the box draws, published: without it a driver
+                // can sweep the control and has no way to read what it
+                // landed on.
                 // A slider, because that is what it is: the harness drags a
                 // control by its node, and a value box published as prose is
                 // one no script can move.

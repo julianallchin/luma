@@ -105,14 +105,19 @@ pub async fn remove_venue_member(
     venue_sharing::remove_member(&services.db.0, &venue_id, &uid).await
 }
 
-/// Join the venue a share code names, and return it once it has downloaded.
-pub async fn join_venue(services: &AppServices, code: String) -> Result<Venue, CommandError> {
+/// Join the venue a share code names, and return its id. Its rows follow by
+/// download — see [`joined_venue`].
+pub async fn join_venue(services: &AppServices, code: String) -> Result<String, CommandError> {
     services.require_session().await?;
-    venue_sharing::join(
-        &services.db.0,
-        services.share_codes.as_ref(),
-        &code,
-        venue_sharing::ARRIVAL,
-    )
-    .await
+    venue_sharing::join(&services.db.0, services.share_codes.as_ref(), &code).await
+}
+
+/// A venue this account joined, once it has downloaded far enough to open;
+/// `None` while its rows are still on their way.
+pub async fn joined_venue(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<Option<Venue>, CommandError> {
+    services.require_session().await?;
+    Ok(venue_sharing::arrived(&services.db.0, &venue_id).await)
 }

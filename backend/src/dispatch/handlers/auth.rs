@@ -79,6 +79,9 @@ pub async fn verify_login_code(
         session,
     )
     .await?;
+    if let Some(sync) = &services.sync {
+        sync.session_changed();
+    }
     crate::database::local::auth::get_current_user_id(&services.state_db.0)
         .await?
         .ok_or_else(|| {

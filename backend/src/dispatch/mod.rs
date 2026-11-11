@@ -349,7 +349,8 @@ commands! {
     venues::revoke_share_code(venue_id: String) -> ();
     venues::list_venue_members(venue_id: String) -> Vec<VenueMember>;
     venues::remove_venue_member(venue_id: String, uid: String) -> ();
-    venues::join_venue(code: String) -> Venue;
+    venues::join_venue(code: String) -> String;
+    venues::joined_venue(venue_id: String) -> Option<Venue>;
 
     inputs::input_open(venue_id: String) -> InputState;
     inputs::input_state() -> InputState;

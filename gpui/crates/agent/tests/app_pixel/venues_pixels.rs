@@ -14,7 +14,10 @@ use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use serde_json::Value;
 use support::image::{edge_energy, preserve};
 
-const LAST_VENUE: &str = "last-venue";
+/// Where the fixture account's last venue is remembered.
+fn last_venue() -> String {
+    format!("last-venue:{}", session::PRINCIPAL)
+}
 
 async fn seed(dir: &Path, remembered: bool) {
     let db = luma_lib::database::local::database::init_app_db_at(dir)
@@ -30,7 +33,7 @@ async fn seed(dir: &Path, remembered: bool) {
         .await
         .expect("failed to open pixel fixture state database");
     if remembered {
-        luma_lib::database::local::auth::set_session_item(&state.0, LAST_VENUE, "venue")
+        luma_lib::database::local::auth::set_session_item(&state.0, &last_venue(), "venue")
             .await
             .expect("failed to seed pixel preference");
     }

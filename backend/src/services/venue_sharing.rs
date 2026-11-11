@@ -12,8 +12,6 @@
 //! function `public.join_venue`. The membership, the venue and everything in
 //! it then arrive by download, like any other rows.
 
-use std::time::{Duration, Instant};
-
 use rand::Rng;
 use sqlx::SqlitePool;
 
@@ -28,10 +26,6 @@ use crate::models::venues::{
 };
 use crate::sync::error::SyncError;
 use crate::sync::supabase::Postgrest;
-
-/// How long a join waits for the venue it redeemed to download. Generous: the
-/// alternative is telling someone the join failed when it did not.
-pub const ARRIVAL: Duration = Duration::from_secs(30);
 
 /// Why a server did not redeem a code.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,8 +277,9 @@ pub async fn remove_member(
     Ok(access.commit().await?)
 }
 
-/// Join the venue whose share code `input` is, and return it once its rows
-/// are on this device.
+/// Join the venue whose share code `input` is, and return its id. The
+/// account is in from here; the venue's rows follow by download, and
+/// [`arrived`] says when this device can open it.
 ///
 /// `input` is whatever was typed: [`normalize_share_code`] forgives case,
 /// spaces and the hyphen. A code for a venue this account can already open is
@@ -297,14 +292,12 @@ pub async fn remove_member(
 /// something that is not a code or a venue already open to this account,
 /// [`CommandError::NotFound`] for a code no venue holds,
 /// [`CommandError::Unauthorized`] without a session, and
-/// [`CommandError::Internal`] when the server cannot be reached or the venue
-/// does not arrive within `arrival`.
+/// [`CommandError::Internal`] when the server cannot be reached.
 pub async fn join(
     pool: &SqlitePool,
     server: &dyn ShareCodeServer,
     input: &str,
-    arrival: Duration,
-) -> Result<Venue, CommandError> {
+) -> Result<String, CommandError> {
     let code = normalize_share_code(input).ok_or_else(|| {
         CommandError::Invalid(
             "That isn't an invite code. Codes are eight letters and numbers, like K7M4-Q9TX."
@@ -340,25 +333,12 @@ pub async fn join(
     if let Some(venue) = before.iter().find(|venue| venue.id == venue_id) {
         return Err(already_open(venue));
     }
-
-    let deadline = Instant::now() + arrival;
-    loop {
-        if let Some(venue) = arrived(pool, &venue_id).await {
-            return Ok(venue);
-        }
-        if Instant::now() >= deadline {
-            return Err(CommandError::Internal(
-                "You're in. The venue is still downloading and will appear in your list shortly."
-                    .into(),
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    Ok(venue_id)
 }
 
 /// The venue, once this device can open it and its root is down with it — a
 /// venue with no root is one whose rows are still arriving.
-async fn arrived(pool: &SqlitePool, venue_id: &str) -> Option<Venue> {
+pub async fn arrived(pool: &SqlitePool, venue_id: &str) -> Option<Venue> {
     let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id))
         .await
         .ok()?;
@@ -408,6 +388,7 @@ mod tests {
 
     use super::*;
     use crate::database::local::auth::arm_write_admission;
+    use std::time::{Duration, Instant};
 
     const VENUE: &str = "shared";
 
@@ -461,14 +442,10 @@ mod tests {
             .any(|venue| venue.id == VENUE)
     }
 
+    /// Join against a server whose rows land with the redemption.
     async fn join_now(pool: &SqlitePool, code: &str) -> Result<Venue, CommandError> {
-        join(
-            pool,
-            &LocalShareCodes::new(pool.clone()),
-            code,
-            Duration::ZERO,
-        )
-        .await
+        let id = join(pool, &LocalShareCodes::new(pool.clone()), code).await?;
+        Ok(arrived(pool, &id).await.expect("the joined venue is here"))
     }
 
     #[tokio::test]
@@ -651,26 +628,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_join_answers_once_the_venue_has_downloaded() {
+    async fn a_joined_venue_arrives_once_it_has_downloaded() {
         let (_directory, pool) = library().await;
         let code = rotate_share_code(&pool, VENUE).await.unwrap();
         as_user(&pool, "bob").await;
-        let server = Arc::new(LocalShareCodes::new(pool.clone()));
-
-        let slow = Downloading(Arc::clone(&server), Duration::from_secs(5));
-        let refused = join(&pool, &slow, &code, Duration::from_millis(50))
-            .await
-            .unwrap_err();
-        assert!(
-            refused.to_string().contains("still downloading"),
-            "{refused:?}"
+        let server = Downloading(
+            Arc::new(LocalShareCodes::new(pool.clone())),
+            Duration::from_millis(300),
         );
 
-        let prompt = Downloading(server, Duration::from_millis(300));
-        let joined = join(&pool, &prompt, &code, Duration::from_secs(10))
-            .await
-            .unwrap();
-        assert_eq!(joined.id, VENUE);
+        // The join answers before the rows are here…
+        let id = join(&pool, &server, &code).await.unwrap();
+        assert_eq!(id, VENUE);
+        assert!(arrived(&pool, &id).await.is_none());
+
+        // …and the venue opens once they are.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let venue = loop {
+            if let Some(venue) = arrived(&pool, &id).await {
+                break venue;
+            }
+            assert!(Instant::now() < deadline, "the venue never arrived");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(venue.id, VENUE);
     }
 
     struct Down;
@@ -688,9 +669,7 @@ mod tests {
     async fn an_unreachable_server_reads_as_offline() {
         let (_directory, pool) = library().await;
         as_user(&pool, "bob").await;
-        let refused = join(&pool, &Down, "K7M4-Q9TX", Duration::ZERO)
-            .await
-            .unwrap_err();
+        let refused = join(&pool, &Down, "K7M4-Q9TX").await.unwrap_err();
         assert!(
             matches!(&refused, CommandError::Internal(message) if message.starts_with("Can't reach")),
             "{refused:?}"

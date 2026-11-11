@@ -153,6 +153,7 @@ impl Luma {
                 cx.notify();
             }
         }
+        self.sync_camera_tour(cx);
     }
 
     /// Give the stage's room back to the editor under it, or take it again.

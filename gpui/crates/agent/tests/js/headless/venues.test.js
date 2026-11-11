@@ -17,7 +17,7 @@ const shared = [
   ...["alpha", "beta"].map((venue) => `INSERT INTO scores (id, uid, track_id, venue_id, name)
      VALUES ('score-both-${venue}', '$PRINCIPAL', 'track-both', '${venue}', 'Both')`),
 ];
-// And another person's song in both rooms, which "Mine" hides.
+// And another person's song in both rooms.
 const theirs = [
   `INSERT INTO tracks (id, uid, track_hash, title, artist, duration_seconds, file_path)
      VALUES ('track-theirs', 'another-principal', 'hash-theirs', 'Their Song', 'Guest', 60.0, '/fixture/theirs.wav')`,
@@ -96,14 +96,11 @@ test("the song list stays the song list across a switch, with a song both venues
   expect(nav.shownMode(alpha)).toBe("Arrange");
 });
 
-test("a song the arriving list's Mine hides is shown under All", () => {
+test("another person's song in hand is carried to the next venue", () => {
   nav.venue("Alpha Hall");
   nav.songs();
-  nav.step("every owner's songs", "toggle", "All");
   nav.scores("Their Song");
   until("Their Song selected", (s) => selected(s, "Their Song"));
-  // Beta's list opens on Mine, which hides another person's song; the
-  // landing widens it.
   nav.switchVenue("Beta Room");
   until("Beta's list on Their Song", (s) =>
     songList(s) && s.find({ role: "row", label: "Beta Room Track" }) && selected(s, "Their Song")

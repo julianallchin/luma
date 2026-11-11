@@ -60,6 +60,7 @@ mod subject;
 mod telemetry;
 #[cfg(test)]
 mod test_support;
+pub(crate) mod tour;
 mod view_panel;
 mod viewport;
 
@@ -201,6 +202,8 @@ pub(crate) struct Visualizer {
     /// The held right button's fly. Beside [`Self::drag`] rather than in it,
     /// because keys change it and a pointer anchor does not.
     fly: Option<Fly>,
+    /// The camera walkthrough, while it is up — see [`tour`].
+    tour: Option<tour::Tour>,
     /// Whether this view holds the window's pointer lock — see
     /// [`Self::sync_pointer_lock`].
     pointer_locked: bool,

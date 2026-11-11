@@ -53,7 +53,7 @@ pub(crate) struct SavedVenues {
 impl Default for SavedVenues {
     fn default() -> Self {
         Self {
-            stored: Stored::new(KEY),
+            stored: Stored::new(KEY).per_account(),
             unopened: BTreeMap::new(),
         }
     }
@@ -62,7 +62,7 @@ impl Default for SavedVenues {
 impl SavedVenues {
     /// Take in what the store held at launch.
     pub(crate) fn read(stored: Option<&str>) -> Self {
-        let stored = Stored::<Snapshot>::read(KEY, stored);
+        let stored = Stored::<Snapshot>::read(KEY, stored).per_account();
         Self {
             unopened: stored.value().venues.clone(),
             stored,
@@ -93,7 +93,7 @@ impl Luma {
         &self,
     ) -> impl std::future::Future<Output = Result<Option<String>, crate::LibraryError>> + use<>
     {
-        self.library.get_session_item(KEY)
+        self.library.get_session_item(&self.account_key(KEY))
     }
 
     /// Every venue's state as it stands: the live and parked ones, and the

@@ -40,6 +40,7 @@ pub(super) fn visualizer(build: Option<crate::stage::Build>, pick: PickSnapshot)
         posed: false,
         drag: None,
         fly: None,
+        tour: None,
         pointer_locked: false,
         fly_speed: 1.0,
         pivot_dot: None,

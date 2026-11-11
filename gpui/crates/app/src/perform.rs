@@ -1908,13 +1908,16 @@ fn source_section(state: &Perform, target: &Target, app: &Entity<Luma>) -> impl 
             .child(luma_ui::caption("Latency (ms)"))
             .child(div().flex_1())
             .child(
-                luma_ui::luma_slider(
+                luma_ui::float::scrub(
                     "perform-latency",
-                    latency,
+                    f64::from(latency),
                     -200.,
                     200.,
+                    1.,
                     140.,
                     move |value, _, cx| {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let value = value as f32;
                         app.update(cx, |this, cx| this.set_perform_latency(value, cx));
                     },
                 )

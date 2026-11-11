@@ -65,8 +65,8 @@ const signIn = (email) => {
   app.type(app.snapshot().find({ role: "input", label: "Email" }), email);
   nav.step("the email's capsule", "button", "Continue");
   const sent = until("the code route", (s) => s.find({ role: "input", label: "Code" }) ? s : undefined);
+  // A whole code signs in by itself: there is no capsule to press.
   app.type(sent.find({ role: "input", label: "Code" }), "123456");
-  nav.step("the code's capsule", "button", "Sign in");
   until("the sign-in screen to leave", (s) =>
     !gate(s) && s.find({ role: "text", label: "Check your email" }) === undefined);
 };
@@ -76,17 +76,22 @@ test("an account with no venue finds nothing of the one before it", () => {
   signOut();
   signIn("newcomer@luma.test");
 
-  // Nothing to choose from, so the picker asks for a first venue — over an
-  // empty shell, not over the last account's.
-  const create = until("the first-venue form", (s) =>
-    s.find({ role: "input", label: "Venue name" }) ? s : undefined);
-  expect(ofFirst(create)).toEqual([]);
-  expect(room(create)).toEqual([]);
+  // Nothing to choose from, so the window is the welcome page — with
+  // nothing of the last account's on it.
+  const welcome = until("the welcome page", (s) =>
+    s.find({ role: "button", label: "Get started" }) ? s : undefined);
+  expect(ofFirst(welcome)).toEqual([]);
+  expect(room(welcome)).toEqual([]);
 
-  // Escape is not a way past it: there is no venue behind the form.
+  // Escape is not a way past the form: it steps back to the page.
+  nav.step("Get started", "button", "Get started");
+  until("the first-venue form", (s) => s.find({ role: "input", label: "Venue name" }));
   nav.dismiss();
-  const held = app.snapshot();
-  assert(picker(held), "Escape closed the picker with no venue open");
+  until("the welcome page again", (s) =>
+    s.find({ role: "button", label: "Get started" }) && !picker(s));
+  nav.step("Get started", "button", "Get started");
+  const held = until("the first-venue form", (s) =>
+    s.find({ role: "input", label: "Venue name" }) ? s : undefined);
   expect(ofFirst(held)).toEqual([]);
   expect(room(held)).toEqual([]);
 

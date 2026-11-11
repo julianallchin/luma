@@ -505,6 +505,9 @@ fn light_slider(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                     cx.notify();
                     return;
                 }
+                if let Some(state) = this.visualizer_mut() {
+                    state.toured(tour::Move::Lights);
+                }
                 this.set_visualizer_environment(
                     if indoor {
                         VenueEnvironment::indoor(fraction)
@@ -539,6 +542,7 @@ impl Luma {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
+        state.tour_dialled();
         state.set_venue_environment(environment);
         state.environment_edited = true;
         *state.environment_pending.borrow_mut() = Some(environment);
