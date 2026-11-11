@@ -32,7 +32,11 @@ impl Luma {
     }
 }
 
-pub(super) fn render(state: &Patch, app: &Entity<Luma>) -> AnyElement {
+pub(super) fn render(
+    state: &Patch,
+    stage: Option<&crate::stage::StageView>,
+    app: &Entity<Luma>,
+) -> AnyElement {
     let fixtures = div()
         .flex_1()
         .min_w_0()
@@ -43,6 +47,7 @@ pub(super) fn render(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .child(super::band(state, app))
         .child(match state.view {
             super::View::Fixtures => super::table::table(state, app),
+            super::View::Stage => crate::stage::elements(stage, app),
             super::View::Patch => super::footprint::universes(state, app),
             super::View::Output => super::outputs::outputs(state, app),
         })

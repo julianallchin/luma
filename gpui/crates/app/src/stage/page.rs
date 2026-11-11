@@ -4,7 +4,7 @@
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity, Pixels, Point, Window};
 use luma_scene::venue::NodeKind;
-use luma_ui::float::{self, Dismiss};
+use luma_ui::float;
 use luma_ui::ladder;
 use luma_ui::motion::FadeHover;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
@@ -36,7 +36,6 @@ pub(crate) struct StagePage {
     /// hand: a menu is chrome about the selection, not a thing the hand is
     /// doing.
     pub(crate) menu: Option<NodeMenuAt>,
-    pub(crate) objects_open: bool,
     /// The add-element dialog's exit. The hand decides *whether* the dialog is
     /// up ([`Hand::Choosing`]); this only buys the card its leaving frames —
     /// see [`luma_ui::dialog::Popup`].
@@ -51,7 +50,6 @@ impl StagePage {
             }),
             focus: cx.focus_handle(),
             menu: None,
-            objects_open: false,
             closing: luma_ui::dialog::Popup::default(),
         }
     }
@@ -130,7 +128,6 @@ impl Luma {
         if let Some(crate::shell::Body::Patch(page)) = self.workspace.active_body_mut() {
             page.selected.clear();
             page.anchor = None;
-            page.stage.objects_open = false;
         }
         if let Some(state) = self.visualizer_mut() {
             state.replace_selection([luma_render::frame::EditorObject::StagePiece(id.clone())]);
@@ -233,7 +230,9 @@ impl Luma {
     }
 }
 
-/// The venue's tools live on the picture, alongside its render settings.
+/// What the builder floats over the picture while the hand is busy: the add
+/// dialog, a row's configuration and a node's menu. Adding and the list of
+/// what is placed are on the venue page under the stage.
 pub(crate) fn controls(
     state: &StagePage,
     app: &Entity<Luma>,
@@ -243,56 +242,7 @@ pub(crate) fn controls(
     let Some(view) = view else {
         return div().into_any_element();
     };
-    let toggle = app.clone();
-    let close = app.clone();
-    let objects = div()
-        .relative()
-        .child(
-            float::btn("Objects", "stage-objects")
-                .id("stage-objects")
-                .on_click(move |_, _, cx| {
-                    toggle.update(cx, |this, cx| {
-                        if let Some(page) = this.stage_page_mut() {
-                            page.objects_open = !page.objects_open;
-                        }
-                        cx.notify();
-                    })
-                })
-                .agent_node(Role::Toggle, "Stage objects")
-                .agent_focused(state.objects_open),
-        )
-        .when(state.objects_open, |d| {
-            d.child(float::anchored_above(
-                "stage-objects-popover",
-                luma_ui::CONTROL_HEIGHT,
-                Dismiss::on_press_out(move |_, cx| {
-                    close.update(cx, |this, cx| {
-                        if let Some(page) = this.stage_page_mut() {
-                            page.objects_open = false;
-                        }
-                        cx.notify();
-                    })
-                }),
-                float::popover_card()
-                    .w(px(300.0))
-                    .p(px(12.0))
-                    .child(
-                        div()
-                            .id("stage-object-list")
-                            .max_h(px(320.0))
-                            .overflow_y_scroll()
-                            .child(elements(view, app)),
-                    )
-                    .agent_node(Role::Card, "Stage objects")
-                    .into_any_element(),
-            ))
-        });
     div()
-        .flex()
-        .items_center()
-        .gap(px(6.0))
-        .child(add_button(app))
-        .child(objects)
         .children(
             (view.choosing.is_some() || state.closing.is_closing())
                 .then(|| chooser(state, view.choosing.unwrap_or(0), app, window)),
@@ -300,33 +250,6 @@ pub(crate) fn controls(
         .children(view.configuring.as_ref().map(|row| configure(row, app)))
         .children(state.menu.as_ref().map(|menu| node_menu(menu, app)))
         .into_any_element()
-}
-
-/// Opens the shared structure and fixture palette.
-fn add_button(app: &Entity<Luma>) -> AnyElement {
-    let open = app.clone();
-    let bar = div().flex().items_center().gap(px(6.0)).occlude().child(
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(6.0))
-            .child(
-                float::btn("Add", "stage-add")
-                    .id("stage-add")
-                    .child(
-                        gpui_component::Icon::new(luma_ui::icons::IconName::Plus)
-                            .size(px(18.0))
-                            .text_color(ladder::foreground_alpha(0.7)),
-                    )
-                    .on_click(move |_, window, cx| {
-                        open.update(cx, |this, cx| this.stage_open_chooser_focused(window, cx));
-                    })
-                    .agent_node(Role::Button, "Add element"),
-            )
-            .child(float::key_hint_text("A", "")),
-    );
-    bar.into_any_element()
 }
 
 /// What a right-click on a placed node offers.
@@ -370,57 +293,87 @@ fn node_menu(menu_at: &NodeMenuAt, app: &Entity<Luma>) -> AnyElement {
     })
 }
 
-fn elements(view: &StageView, app: &Entity<Luma>) -> AnyElement {
+/// The structure the fixtures hang on, as a table: every placed piece that is
+/// not a fixture, and what it is fixed to. A row selects its piece, on the
+/// picture and in the column beside it.
+pub(crate) fn elements(view: Option<&StageView>, app: &Entity<Luma>) -> AnyElement {
+    let head = div()
+        .flex_none()
+        .h(px(30.0))
+        .px(px(12.0))
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .border_b_1()
+        .border_color(luma_ui::glass::hairline(0.10))
+        .child(div().flex_1().min_w_0().child(float::label("Element")))
+        .child(div().flex_1().min_w_0().child(float::label("On")));
+    let mut rows = div()
+        .id("venue-element-rows")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
+    match view {
+        None => rows = rows.child(float::empty_row("The stage is not up.")),
+        Some(view) if view.elements.is_empty() => {
+            rows = rows.child(float::empty_row("No stage elements yet. Add one."));
+        }
+        Some(view) => {
+            rows = rows.children(view.elements.iter().map(|(id, label, parent)| {
+                let click = app.clone();
+                let id = id.clone();
+                let selected = view.selected.as_ref() == Some(&id);
+                div()
+                    .id(gpui::SharedString::from(format!("venue-element-{id}")))
+                    .h(px(34.0))
+                    .px(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .border_b_1()
+                    .border_color(luma_ui::glass::hairline(0.10))
+                    .bg(if selected {
+                        luma_ui::glass::card_selected_bg()
+                    } else {
+                        luma_ui::glass::wash(0.0)
+                    })
+                    .when(!selected, |line| {
+                        line.hover(|style| style.bg(luma_ui::glass::glass_hover()))
+                            .fade_hover()
+                    })
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| {
+                        click.update(cx, |this, cx| this.stage_select_element(id.clone(), cx))
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(13.0))
+                            .child(label.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(12.0))
+                            .text_color(ladder::foreground_alpha(0.62))
+                            .child(parent.clone()),
+                    )
+                    .agent_node(Role::Row, format!("Element {label}"))
+                    .agent_focused(selected)
+            }));
+        }
+    }
     div()
+        .flex_1()
+        .min_h_0()
         .flex()
         .flex_col()
-        .gap(px(2.0))
-        .child(float::label("Elements"))
-        .when(view.elements.is_empty(), |d| {
-            d.child(float::empty_row("No stage elements"))
-        })
-        .children(view.elements.iter().map(|(id, label, parent)| {
-            let click = app.clone();
-            let id = id.clone();
-            let selected = view.selected.as_ref() == Some(&id);
-            div()
-                .id(gpui::SharedString::from(format!("venue-element-{id}")))
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .px(px(8.0))
-                .py(px(7.0))
-                .rounded(px(4.0))
-                .bg(if selected {
-                    luma_ui::glass::card_selected_bg()
-                } else {
-                    luma_ui::glass::wash(0.0)
-                })
-                .when(!selected, |line| {
-                    line.hover(|style| style.bg(luma_ui::glass::glass_hover()))
-                        .fade_hover()
-                })
-                .cursor_pointer()
-                .on_click(move |_, _, cx| {
-                    click.update(cx, |this, cx| this.stage_select_element(id.clone(), cx))
-                })
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.0))
-                        .child(label.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(ladder::muted_foreground())
-                        .child(parent.clone()),
-                )
-                .agent_node(Role::Row, format!("Element {label}"))
-                .agent_focused(selected)
-        }))
+        .child(head)
+        .child(rows)
+        .agent_node(Role::Card, "Stage elements")
         .into_any_element()
 }

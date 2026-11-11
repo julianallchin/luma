@@ -538,7 +538,7 @@ test("the element list removes immediately and undo restores it", () => {
   const fixtures = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("Mover "));
   until("the fixture inventory", () => fixtures().length > 0);
   const fixtureCount = fixtures().length;
-  nav.step("objects", "toggle", "Stage objects");
+  nav.step("the stage view", "toggle", "Stage");
   const elements = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("Element "));
   until("the stage elements", () => elements().length > 0);
   const before = elements().length;
@@ -547,16 +547,13 @@ test("the element list removes immediately and undo restores it", () => {
   app.frames(6);
   // Immediate: no confirmation, because undo is the way back.
   expect(app.snapshot().find({ role: "card", label: "Confirm dialog" })).toBe(undefined);
-  nav.step("the remaining objects", "toggle", "Stage objects");
   until("the element removed", () => elements().length < before);
-  app.key("escape");
-  // A light never outlives its place: the lights hung on the element go
-  // with it, and undo brings them back with their patch rows.
-  until("the fixture inventory after removal", () => fixtures().length <= fixtureCount);
   app.action("luma::Undo");
-  until("the restored fixtures", () => fixtures().length === fixtureCount);
-  nav.step("the restored objects", "toggle", "Stage objects");
   until("the restored elements", () => elements().length === before);
+  // A light never outlives its place, and undo brought back any that went
+  // with the element, patch rows and all.
+  nav.step("the fixtures view", "toggle", "Fixtures");
+  until("the restored fixtures", () => fixtures().length === fixtureCount);
 });
 
 // A light deleted from the room leaves the patch with it, and undo brings the

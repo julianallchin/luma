@@ -54,14 +54,14 @@ test("fullscreen keeps the live camera and restores its pose", () => {
 
   // In Rig, fullscreen hides the authoring shortcuts and exit restores them.
   nav.venuePage("Test Venue");
-  until("venue controls", () => peek("toggle", "Stage objects"));
+  until("venue controls", () => peek("button", "Add element"));
   app.click(peek("card", "Stage"));
   app.key("shift-f");
   until("venue fullscreen", () => peek("button", "Exit fullscreen"));
   app.key("a");
   expect(peek("input", "Search elements")).toBe(undefined);
   app.key("escape");
-  until("venue restored", () => peek("toggle", "Stage objects"));
+  until("venue restored", () => peek("button", "Add element"));
   app.key("a");
   until("authoring shortcut restored", () => peek("input", "Search elements"));
 });

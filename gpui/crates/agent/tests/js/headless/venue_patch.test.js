@@ -100,6 +100,20 @@ test("the patch view shows each universe and the collision on it", { fixture: { 
   assert(block("Far 1").label.startsWith("Far 1 at 17:1–"), `Far 1 is drawn at ${block("Far 1").label}`);
 });
 
+// The grid's zoom changes how many cells make a line, and they stay square.
+test("zooming the patch grid makes its cells larger and keeps them square", () => {
+  openPatch();
+  showPatch();
+  const grid = () => app.snapshot().find({ role: "card", label: "Universe 1 channels" }).bounds;
+  const before = grid();
+  nav.step("zoom in", "button", "Larger cells");
+  until("a taller grid", () => grid().height > before.height * 1.5);
+  const after = grid();
+  // Half as many across, so twice as many down: four times the height.
+  assert(Math.abs(after.height / before.height - 4) < 0.3, `grew ${after.height / before.height} times`);
+  assert(Math.abs(after.width / 32 - after.height / 16) < 1, "the larger cells are not square");
+});
+
 // A block dragged along its strip is re-addressed by as many channels as it
 // was carried, and a drop onto another fixture is refused where it stood.
 test("dragging a block re-addresses the fixture, and a collision is refused", () => {
@@ -315,8 +329,7 @@ test("groups write as they are ticked and select what they hold", { fixture: { w
 
 test("the table, the groups and the stage share one selection", () => {
   nav.patch("Test Venue");
-  // The stage and the groups are not tabs, and there is no second table.
-  expect(app.snapshot().findAll({ role: "toggle" }).filter((n) => ["Stage", "Groups"].includes(n.label)).length).toBe(0);
+  // There is no second table of the same fixtures.
   expect(app.snapshot().find({ role: "button", label: "Patch details" })).toBe(undefined);
   // The first click on a name selects its row; the second edits the name.
   nav.step("a fixture", "text", "Mover 0 label = Mover 0");

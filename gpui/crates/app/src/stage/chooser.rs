@@ -160,7 +160,6 @@ impl Luma {
     /// is commit, which is what [`ConfigureView::ready`] gates.
     pub(crate) fn stage_take(&mut self, what: Holding, cx: &mut Context<Self>) {
         if let Some(page) = self.stage_page_mut() {
-            page.objects_open = false;
             page.closing.begin_close(cx);
         }
         let path = match &what {

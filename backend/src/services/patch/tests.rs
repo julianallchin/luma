@@ -323,7 +323,7 @@ async fn a_pinned_address_survives_an_allocation_and_the_rest_flow_around_it() {
 }
 
 #[tokio::test]
-async fn each_run_lands_in_its_own_universe() {
+async fn each_run_is_one_block_and_the_rig_packs_into_one_universe() {
     let (_dir, pool) = seeded().await;
     let mut access = read(&pool).await;
     let allocation = plan(&mut access, &fixtures_root()).await.expect("plan");
@@ -343,7 +343,7 @@ async fn each_run_lands_in_its_own_universe() {
         .collect();
     assert_eq!(movers.len(), 1);
     assert_eq!(bars.len(), 1);
-    assert!(movers.is_disjoint(&bars));
+    assert_eq!(movers, bars, "a rig that fits in one universe uses one");
 }
 
 // ---------------------------------------------------------------------------
@@ -704,21 +704,23 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
 /// Every slot the allocator offers has to survive the door it will be carried
 /// through.
 ///
-/// The rig here is packed sequentially into universe 1 — what one-at-a-time
-/// adds write, and what a venue looks like until somebody presses Auto Patch —
-/// so the stored patch and the derived one genuinely disagree. An offer
-/// computed against the derivation alone lands in a hole the rule left in
-/// universe 1 that a row is sitting in, and [`admit`] refuses it.
+/// The rig here is packed sequentially into universe 1 in the reverse of
+/// creation order — a venue nobody has pressed Auto Patch on — so the stored
+/// patch and the derived one genuinely disagree. An offer computed against
+/// the derivation alone lands on a channel a row is sitting in, and [`admit`]
+/// refuses it.
 #[tokio::test]
 async fn every_offered_slot_is_one_admit_accepts_even_before_an_auto_patch() {
     let (_dir, pool) = seeded().await;
     {
-        // Repack: consecutive in universe 1, in creation order, nothing pinned.
+        // Repack: consecutive in universe 1, last made first, nothing pinned.
         let mut address = 1i64;
         let mut access = write(&pool).await;
         for row in fixtures_db::get_patched_fixtures(&mut access)
             .await
             .expect("patch")
+            .into_iter()
+            .rev()
         {
             fixtures_db::update_fixture_address(&mut access, &row.id, 1, address, false)
                 .await
@@ -732,12 +734,16 @@ async fn every_offered_slot_is_one_admit_accepts_even_before_an_auto_patch() {
     let occupancy = occupancy(&mut access).await.expect("occupancy");
     // The rule and the rows disagree, or this would prove nothing.
     let derived = plan(&mut access, &fixtures_root()).await.expect("plan");
+    let stored = fixtures_db::get_patched_fixtures(&mut access)
+        .await
+        .expect("patch");
     assert!(
-        derived
-            .assignments
-            .iter()
-            .any(|a| a.footprint.universe() != 1),
-        "the rule spreads the runs over universes; the rows are all in one"
+        derived.assignments.iter().any(|a| {
+            stored
+                .iter()
+                .any(|row| row.id == a.fixture && row.address != i64::from(a.footprint.address()))
+        }),
+        "the rule orders the rig by where it hangs; the rows do not"
     );
 
     for run in [None, Some("run-downstage"), Some("run-upstage")] {

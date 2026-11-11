@@ -7,9 +7,9 @@ width. Both columns scroll independently.
 
 ## Scene
 
-The centred floating bar contains Add, Objects, the View eye icon and the
-available transform modes. Rig has no track clock and no separate
-toolbar. Patch fields stay in the table.
+Nothing for adding or listing sits on the scene. A centred bar appears only
+while a selection has a gizmo, with its Translate and Rotate modes. Rig has no
+track clock and no separate toolbar. Patch fields stay in the table.
 
 The column beside the scene is an inspector (`environment_panel`,
 `gpui/crates/app/src/visualizer/settings.rs`). With a piece selected it shows
@@ -34,14 +34,24 @@ modes are sans. Below its minimum width the table scrolls sideways. A row
 names up to three of its groups and counts the rest.
 
 The band over the page switches it between **Fixtures** (the table and the
-groups), **Patch** and **Output**, and holds Auto patch. Patch
+groups), **Stage**, **Patch** and **Output**, and holds Add and Auto patch.
+Nothing for adding or listing sits on the scene: Add opens the shared
+palette, and Stage (`stage::elements`) is a table of every placed piece that
+is not a fixture and what it is fixed to. A row selects its piece. Patch
 (`gpui/crates/app/src/patch/footprint.rs`) draws every universe in use as a
-grid of 512 square cells, 64 across and 8 down, as wide as the page. A
-fixture is a run of cells with its name on the first. Dragging a run
+grid of 512 square cells as wide as the page. The band's zoom sets how many
+cells make a line: 128, 64 or 32. A fixture is a run of cells with its name
+on the first, and a dot before the name when its address was set by hand. Dragging a run
 re-addresses it through `set_fixture_address`, onto another universe's grid
 too, and a refused drop says why under that universe. Collisions are drawn
 from `universe_occupancy`, not recomputed. Output
-(`gpui/crates/app/src/patch/outputs.rs`) lists where each universe is sent.
+(`gpui/crates/app/src/patch/outputs.rs`) is a table of the universes: how
+many channels each uses, where it is sent, and Add output. Beside it are the
+devices the drivers see and a button to the DMX Output settings.
+
+Auto patch packs (`luma_scene::patch`): each run is a block in physical
+order, blocks follow one another, and a block that will not fit rolls whole
+to the next universe.
 
 The stage, the table, the footprint and the groups panel share one selection
 (`Patch::selected`). A click on a row selects it, command-click toggles a row

@@ -54,8 +54,8 @@ pub(crate) fn visualizer(
     };
     let venue = venue_tools.is_some();
     let body = body(state, app, library);
-    let floating = overlay_toolbar(state, app, venue_tools, transport);
-    state.bottom_bar_visible = floating.is_some();
+    let (floating, bar) = overlay_toolbar(state, app, venue_tools, transport);
+    state.bottom_bar_visible = bar;
     // The stage renders every frame, so nothing else has to ask for the
     // frames the popovers' exits play over.
     state.fps_panel.tick_close(state.reduced_motion);
@@ -226,13 +226,15 @@ fn overlay_toolbar(
     app: &Entity<Luma>,
     venue_tools: Option<AnyElement>,
     transport: Option<AnyElement>,
-) -> Option<AnyElement> {
+) -> (Option<AnyElement>, bool) {
     let gizmo = !state.presentation
         && matches!(state.status, Status::Live)
         && state.selection_gizmo_space() != luma_scene::gizmo::GizmoSpace::DISABLED;
+    // The builder's dialogs float over the picture whether or not there is a
+    // bar under them; the bar is only a transport or a gizmo's two modes.
     let venue_tools = venue_tools.filter(|_| matches!(state.status, Status::Live));
-    if venue_tools.is_none() && transport.is_none() && !gizmo {
-        return None;
+    if transport.is_none() && !gizmo {
+        return (venue_tools, false);
     }
     let current = state.gizmo_mode;
     let mode = |label: &'static str, mode: GizmoMode| {
@@ -249,44 +251,43 @@ fn overlay_toolbar(
             })
             .agent_node(Role::Toggle, label)
     };
-    Some(
-        div()
-            .absolute()
-            .bottom(TOOLBAR_OVERLAY_BOTTOM)
-            .left_0()
-            .right_0()
-            .flex()
-            .justify_center()
-            .child(
-                luma_ui::float::popover_card()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(4.))
-                    .p(px(4.))
-                    // The bar, not the centring row it sits in: an opaque
-                    // surface over the viewport owns the pointer it covers
-                    // (see [`listen`]), and the row is air either side of it.
-                    .occlude()
-                    .children(venue_tools)
-                    .children(transport)
-                    // The two gizmo modes are one choice, so they share one
-                    // track. Zoom is the wheel's (and `=`/`-`), not a button's
-                    // — a camera verb with a pointer gesture needs no chrome.
-                    //
-                    // The mode switch uses the same joint freedoms as the
-                    // handles, including mixed selections with no shared frame.
-                    .when(gizmo, |bar| {
-                        bar.child(
-                            luma_ui::float::segmented()
-                                .child(mode("Translate", GizmoMode::Translate))
-                                .child(mode("Rotate", GizmoMode::Rotate)),
-                        )
-                    })
-                    .map(luma_ui::float::frosted_card),
-            )
-            .agent_node(Role::Card, "Visualizer toolbar")
-            .into_any_element(),
-    )
+    let bar = div()
+        .absolute()
+        .bottom(TOOLBAR_OVERLAY_BOTTOM)
+        .left_0()
+        .right_0()
+        .flex()
+        .justify_center()
+        .child(
+            luma_ui::float::popover_card()
+                .flex_row()
+                .items_center()
+                .gap(px(4.))
+                .p(px(4.))
+                // The bar, not the centring row it sits in: an opaque
+                // surface over the viewport owns the pointer it covers
+                // (see [`listen`]), and the row is air either side of it.
+                .occlude()
+                .children(transport)
+                // The two gizmo modes are one choice, so they share one
+                // track. Zoom is the wheel's (and `=`/`-`), not a button's
+                // — a camera verb with a pointer gesture needs no chrome.
+                //
+                // The mode switch uses the same joint freedoms as the
+                // handles, including mixed selections with no shared frame.
+                .when(gizmo, |bar| {
+                    bar.child(
+                        luma_ui::float::segmented()
+                            .child(mode("Translate", GizmoMode::Translate))
+                            .child(mode("Rotate", GizmoMode::Rotate)),
+                    )
+                })
+                .map(luma_ui::float::frosted_card),
+        )
+        .children(venue_tools)
+        .agent_node(Role::Card, "Visualizer toolbar")
+        .into_any_element();
+    (Some(bar), true)
 }
 
 /// What says the stage is playing a hovered preset, not the score: the

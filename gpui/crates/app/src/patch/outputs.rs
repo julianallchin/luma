@@ -17,32 +17,165 @@ use luma_ui::node::{Instrument as _, Role};
 use super::Patch;
 use crate::Luma;
 
+/// Column widths: the universe's name and how full it is are fixed, where it
+/// is sent takes the rest.
+const W_UNIVERSE: f32 = 110.0;
+const W_USE: f32 = 190.0;
+const INSET: f32 = 12.0;
+const GAP: f32 = 16.0;
+
 pub(super) fn outputs(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    let mut body = div()
+    let head = div()
+        .flex_none()
+        .h(px(30.0))
+        .px(px(INSET))
+        .flex()
+        .items_center()
+        .gap(px(GAP))
+        .border_b_1()
+        .border_color(luma_ui::glass::hairline(0.10))
+        .child(
+            div()
+                .flex_none()
+                .w(px(W_UNIVERSE))
+                .child(luma_ui::float::label("Universe")),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(W_USE))
+                .child(luma_ui::float::label("Channels")),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(luma_ui::float::label("Sent to")),
+        );
+    let mut rows = div()
         .id("venue-outputs")
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll()
-        .flex()
-        .flex_col()
-        .gap(px(12.0))
-        .px(px(12.0))
-        .pb(px(12.0));
+        .overflow_y_scroll();
     if let Some(data) = state.data.as_ref() {
-        body = body.children(
+        rows = rows.children(
             data.universes
                 .iter()
                 .map(|universe| row(state, i64::from(*universe), app)),
         );
         if data.universes.is_empty() {
-            body = body.child(
+            rows = rows.child(
                 luma_ui::float::empty_row("No universe is patched yet.")
                     .agent_node(Role::Text, "No universe is patched yet."),
             );
         }
     }
-    body.child(found(state))
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .flex()
+                .flex_col()
+                .child(head)
+                .child(rows),
+        )
+        .child(devices(state, app))
         .agent_node(Role::Card, "Output")
+        .into_any_element()
+}
+
+/// What this machine can send to, beside the universes: each device the
+/// drivers see, or why they see none and where to change that.
+fn devices(state: &Patch, app: &Entity<Luma>) -> AnyElement {
+    let settings = app.clone();
+    let mut list = div()
+        .id("venue-output-devices")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .px(px(4.0));
+    // Broadcast is listed whenever Art-Net is running, so it is not a find.
+    for device in state.devices.iter().filter(|device| !device.any_port) {
+        let detail = match &device.problem {
+            Some(problem) => problem.clone(),
+            None => format!(
+                "{} · {}",
+                device.address,
+                crate::patch::plural(device.ports.len(), "port")
+            ),
+        };
+        list = list.child(
+            div()
+                .flex_none()
+                .px(px(10.0))
+                .py(px(6.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .truncate()
+                        .child(device.name.clone()),
+                )
+                .child(
+                    luma_ui::float::row_subtitle(detail).when(device.problem.is_some(), |line| {
+                        line.text_color(ladder::status_warn())
+                    }),
+                )
+                .agent_node(Role::Row, format!("Device {}", device.name)),
+        );
+    }
+    div()
+        .flex_none()
+        .w(gpui::relative(0.30))
+        .min_w(px(200.0))
+        .max_w(px(320.0))
+        .h_full()
+        .overflow_hidden()
+        .border_l_1()
+        .border_color(ladder::trim())
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex_none()
+                .h(px(30.0))
+                .px(px(12.0))
+                .flex()
+                .items_center()
+                .child(div().flex_1().text_size(px(12.5)).child("Devices")),
+        )
+        .child(
+            div()
+                .flex_none()
+                .px(px(12.0))
+                .pb(px(10.0))
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(found(state))
+                .child(
+                    div().flex().child(
+                        luma_ui::float::btn("DMX settings", "output-settings")
+                            .id("output-settings")
+                            .on_click(move |_, _, cx| {
+                                settings.update(cx, |this, cx| this.open_output_settings(cx));
+                            })
+                            .agent_node(Role::Button, "DMX settings"),
+                    ),
+                ),
+        )
+        .child(list)
+        .agent_node(Role::Card, "Output devices")
         .into_any_element()
 }
 
@@ -102,34 +235,32 @@ fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
     let opener = app.clone();
     let venue = state.venue_id.clone();
 
-    let mut line = div().flex().flex_col().gap(px(3.0)).child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(px(12.5))
-                    .text_color(ladder::foreground())
-                    .child(format!("Universe {universe}")),
-            )
-            .child(
-                luma_ui::float::btn("Add output", format!("output-{universe}"))
-                    .id(SharedString::from(format!("output-{universe}")))
-                    .on_click(move |_, _, cx| {
-                        let venue = venue.clone();
-                        opener.update(cx, |this, cx| this.open_bind_menu(venue, universe, cx));
-                    })
-                    .agent_node(Role::Button, format!("Add output to universe {universe}")),
-            ),
-    );
+    // How full the universe is, from the same cells the patch grid draws.
+    let fixtures = state
+        .rows()
+        .iter()
+        .filter(|row| row.universe == universe)
+        .count();
+    let used = u16::try_from(universe)
+        .ok()
+        .and_then(|universe| state.data.as_ref()?.occupancy.get(&universe))
+        .map_or(0, |cells| {
+            cells
+                .iter()
+                .filter(|cell| cell.fixture_id.is_some())
+                .count()
+        });
+    #[allow(clippy::cast_precision_loss)]
+    let full = (used as f32 / 512.0).clamp(0.0, 1.0);
 
+    let mut sent = div().flex_1().min_w_0().flex().flex_col().gap(px(4.0));
     if routes.is_empty() {
-        line = line.child(
+        sent = sent.child(
             div()
-                .text_size(px(11.5))
+                .h(px(luma_ui::CONTROL_HEIGHT))
+                .flex()
+                .items_center()
+                .text_size(px(12.0))
                 .text_color(ladder::status_warn())
                 .child("Not sent anywhere")
                 .agent_node(
@@ -139,12 +270,77 @@ fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
         );
     }
     for (route, label) in routes.into_iter().zip(labels) {
-        line = line.child(destination(state, route, label, app));
+        sent = sent.child(destination(state, route, label, app));
     }
     if menu_open {
-        line = line.child(device_list(state, universe, app));
+        sent = sent.child(device_list(state, universe, app));
     }
-    line.agent_node(Role::Row, reading).into_any_element()
+
+    div()
+        .flex_none()
+        .px(px(INSET))
+        .py(px(8.0))
+        .flex()
+        .items_start()
+        .gap(px(GAP))
+        .border_b_1()
+        .border_color(luma_ui::glass::hairline(0.10))
+        .child(
+            div()
+                .flex_none()
+                .w(px(W_UNIVERSE))
+                .h(px(luma_ui::CONTROL_HEIGHT))
+                .flex()
+                .items_center()
+                .text_size(px(13.0))
+                .text_color(ladder::foreground())
+                .child(format!("Universe {universe}")),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(W_USE))
+                .h(px(luma_ui::CONTROL_HEIGHT))
+                .flex()
+                .flex_col()
+                .justify_center()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(ladder::foreground_alpha(0.62))
+                        .child(format!(
+                            "{used} of 512 · {}",
+                            crate::patch::plural(fixtures, "fixture")
+                        )),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(3.0))
+                        .rounded_full()
+                        .bg(ladder::trim())
+                        .child(
+                            div()
+                                .h_full()
+                                .w(gpui::relative(full))
+                                .rounded_full()
+                                .bg(ladder::foreground_alpha(0.55)),
+                        ),
+                ),
+        )
+        .child(sent)
+        .child(
+            luma_ui::float::btn("Add output", format!("output-{universe}"))
+                .id(SharedString::from(format!("output-{universe}")))
+                .on_click(move |_, _, cx| {
+                    let venue = venue.clone();
+                    opener.update(cx, |this, cx| this.open_bind_menu(venue, universe, cx));
+                })
+                .agent_node(Role::Button, format!("Add output to universe {universe}")),
+        )
+        .agent_node(Role::Row, reading)
+        .into_any_element()
 }
 
 /// One place a universe goes, with the gesture that stops it.
@@ -168,8 +364,8 @@ fn destination(state: &Patch, route: &DmxRoute, label: String, app: &Entity<Luma
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_size(px(11.5))
-                .text_color(ladder::foreground_alpha(0.55))
+                .text_size(px(12.0))
+                .text_color(ladder::foreground_90())
                 .child(label.clone()),
         )
         .child(

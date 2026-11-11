@@ -53,22 +53,24 @@ mod venue;
 
 /// What the page under the stage is showing.
 ///
-/// Three readings of the same rig: the fixtures as an inventory with its
-/// groups, the fixtures as channels in universes, and where each universe
-/// comes out.
+/// Four readings of the same rig: the fixtures as an inventory with its
+/// groups, the structure they hang on, the fixtures as channels in universes,
+/// and where each universe comes out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum View {
     Fixtures,
+    Stage,
     Patch,
     Output,
 }
 
 impl View {
-    pub(crate) const ALL: [View; 3] = [View::Fixtures, View::Patch, View::Output];
+    pub(crate) const ALL: [View; 4] = [View::Fixtures, View::Stage, View::Patch, View::Output];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             View::Fixtures => "Fixtures",
+            View::Stage => "Stage",
             View::Patch => "Patch",
             View::Output => "Output",
         }
@@ -166,6 +168,8 @@ pub(crate) struct Patch {
     pub(crate) load_failed: bool,
 
     pub(crate) view: View,
+    /// The patch grid's zoom, as an index into [`GRID_COLUMNS`].
+    pub(crate) grid_zoom: usize,
     /// Where each universe's strip was last drawn, so a pointer on it can be
     /// read as a channel.
     pub(crate) strips: Rc<RefCell<BTreeMap<u16, Bounds<Pixels>>>>,
@@ -213,6 +217,7 @@ impl Patch {
             data: None,
             load_failed: false,
             view: View::Fixtures,
+            grid_zoom: 1,
             strips: Rc::default(),
             drag: None,
             strip_refusal: None,
@@ -273,6 +278,11 @@ impl Patch {
             .as_ref()
             .and_then(|data| data.definitions.get(&row.fixture_path))
             .is_none_or(|def| def.supports_mode(&row.mode_name))
+    }
+
+    /// How many cells make a line of a universe's grid at the current zoom.
+    pub(crate) fn grid_columns(&self) -> i64 {
+        GRID_COLUMNS[self.grid_zoom.min(GRID_COLUMNS.len() - 1)]
     }
 
     pub(crate) fn any_pinned(&self) -> bool {
@@ -1015,6 +1025,24 @@ impl Luma {
         cx.notify();
     }
 
+    /// Make the patch grid's cells larger (`closer`) or smaller.
+    pub(crate) fn zoom_patch_grid(
+        &mut self,
+        venue_id: String,
+        closer: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(state) = self.patch_mut(&venue_id) {
+            state.grid_zoom = if closer {
+                (state.grid_zoom + 1).min(GRID_COLUMNS.len() - 1)
+            } else {
+                state.grid_zoom.saturating_sub(1)
+            };
+            state.drag = None;
+        }
+        cx.notify();
+    }
+
     /// Pick a fixture's block up by the channel under the pointer.
     pub(crate) fn grab_strip_block(
         &mut self,
@@ -1190,10 +1218,19 @@ pub(crate) const NUMBER_FIELD_WIDTH: f32 = 56.0;
 // The page
 // ---------------------------------------------------------------------------
 
-/// The venue page beneath the stage: the fixture table and the groups panel.
-pub(crate) fn patch(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    venue::render(state, app)
+/// The venue page beneath the stage. `stage` is the structure the builder
+/// holds, for the view that lists it.
+pub(crate) fn patch(
+    state: &Patch,
+    stage: Option<&crate::stage::StageView>,
+    app: &Entity<Luma>,
+) -> AnyElement {
+    venue::render(state, stage, app)
 }
+
+/// Cells to a line of a universe's grid, from the smallest cells to the
+/// largest. Each divides 512, so every line is full.
+const GRID_COLUMNS: [i64; 3] = [128, 64, 32];
 
 /// What the table holds, what was just done, and the page's own acts.
 fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
@@ -1228,6 +1265,11 @@ fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
                 .child(subtitle(state))
                 .agent_node(Role::Text, subtitle(state)),
         )
+        .when(state.view == View::Patch, |band| {
+            band.child(zoom_button(state, false, app))
+                .child(zoom_button(state, true, app))
+        })
+        .child(add_button(app))
         .child(
             luma_ui::float::btn("Auto patch", "patch-auto")
                 .id("patch-auto")
@@ -1237,6 +1279,58 @@ fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
                 })
                 .agent_node(Role::Button, "Auto patch"),
         )
+}
+
+/// Add a fixture or a piece of structure: the one palette both come from.
+fn add_button(app: &Entity<Luma>) -> impl IntoElement {
+    let open = app.clone();
+    luma_ui::float::btn("Add", "stage-add")
+        .id("stage-add")
+        .child(
+            gpui_component::Icon::new(luma_ui::icons::IconName::Plus)
+                .size(px(14.0))
+                .text_color(ladder::foreground_alpha(0.7)),
+        )
+        .child(luma_ui::float::key_hint_text("A", ""))
+        .on_click(move |_, window, cx| {
+            open.update(cx, |this, cx| this.stage_open_chooser_focused(window, cx));
+        })
+        .agent_node(Role::Button, "Add element")
+}
+
+/// One step of the patch grid's zoom, off at the end it cannot pass.
+fn zoom_button(state: &Patch, closer: bool, app: &Entity<Luma>) -> impl IntoElement {
+    let (icon, label, key) = if closer {
+        (
+            luma_ui::icons::IconName::Plus,
+            "Larger cells",
+            "patch-zoom-in",
+        )
+    } else {
+        (
+            luma_ui::icons::IconName::Minus,
+            "Smaller cells",
+            "patch-zoom-out",
+        )
+    };
+    let at_end = if closer {
+        state.grid_zoom + 1 >= GRID_COLUMNS.len()
+    } else {
+        state.grid_zoom == 0
+    };
+    let zoomed = app.clone();
+    let venue = state.venue_id.clone();
+    luma_ui::float::btn("", key)
+        .id(key)
+        .px(px(6.0))
+        .child(gpui_component::Icon::new(icon).size(px(14.0)))
+        .when(at_end, |button| button.opacity(0.35))
+        .on_click(move |_, _, cx| {
+            let venue = venue.clone();
+            zoomed.update(cx, |this, cx| this.zoom_patch_grid(venue, closer, cx));
+        })
+        .agent_node(Role::Button, label)
+        .agent_disabled(at_end)
 }
 
 /// The line under the title: what the last act did, or what the patch holds.

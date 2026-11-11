@@ -386,11 +386,6 @@ impl Luma {
                 }
             }
             if let Some(Body::Patch(page)) = self.workspace.active_body_mut() {
-                if page.stage.objects_open {
-                    page.stage.objects_open = false;
-                    cx.notify();
-                    return;
-                }
                 if page.mode_menu.take().is_some()
                     || page.menu.take().is_some()
                     || page.group_menu.take().is_some()
@@ -1380,6 +1375,7 @@ fn active_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> A
     // being tracked twice, or nowhere.
     let holds_focus = matches!(app.focus_slot(), FocusSlot::Body(_));
     let focus = app.focus.clone();
+    let stage_view = app.stage_view();
     let Some(body) = app.workspace.body_mut(&target) else {
         return div().into_any_element();
     };
@@ -1412,7 +1408,7 @@ fn active_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> A
         Body::TrackEditor(state) => {
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
-        Body::Patch(state) => patch::patch(state, &entity).into_any_element(),
+        Body::Patch(state) => patch::patch(state, stage_view.as_ref(), &entity).into_any_element(),
         Body::Perform(state) => {
             crate::perform::pattern_sheet::sync(state, window, cx);
             crate::perform::perform(state, &entity)

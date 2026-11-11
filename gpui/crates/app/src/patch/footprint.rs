@@ -1,9 +1,10 @@
 //! The patch as channels: each universe a grid of 512 square cells across the
 //! page, the fixtures runs of cells on it.
 //!
-//! The grid is 64 across and 8 down, read like lines of text, so it takes the
-//! page's whole width and a single-channel fixture is still a cell that can be
-//! seen and picked up.
+//! The grid is read like lines of text and takes the page's whole width, so a
+//! single-channel fixture is still a cell that can be seen and picked up. How
+//! many cells make a line is the page's zoom ([`super::Patch::grid_columns`]):
+//! fewer across is larger cells and a taller grid.
 //!
 //! Collisions are `universe_occupancy`'s, verbatim — they and out-of-range are
 //! facts the allocator computed, not conditions redrawn here. A grid that
@@ -30,9 +31,8 @@ use luma_ui::{float, ladder};
 use super::Patch;
 use crate::Luma;
 
-/// Cells across, and rows down: 512 in all.
-const COLUMNS: i64 = 64;
-const ROWS: i64 = 8;
+/// Channels in a universe: the cells of one grid.
+const CELLS: i64 = 512;
 /// The space between two cells, in the grid's own colour.
 const CELL_GAP: f32 = 1.0;
 /// The column the rows' first addresses are written in.
@@ -98,29 +98,31 @@ fn section(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Lu
         .into_any_element()
 }
 
-/// The channel under a pointer at `at`, on a grid drawn in `bounds`.
-fn channel_at(bounds: Bounds<Pixels>, at: gpui::Point<Pixels>) -> u16 {
+/// The channel under a pointer at `at`, on a grid `columns` across drawn in
+/// `bounds`.
+fn channel_at(bounds: Bounds<Pixels>, at: gpui::Point<Pixels>, columns: i64) -> u16 {
+    let rows = CELLS / columns;
     let width = f32::from(bounds.size.width).max(1.0);
     let height = f32::from(bounds.size.height).max(1.0);
     let along = (f32::from(at.x) - f32::from(bounds.origin.x)) / width;
     let down = (f32::from(at.y) - f32::from(bounds.origin.y)) / height;
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     let (row, column) = (
-        ((down * ROWS as f32).floor() as i64).clamp(0, ROWS - 1),
-        ((along * COLUMNS as f32).floor() as i64).clamp(0, COLUMNS - 1),
+        ((down * rows as f32).floor() as i64).clamp(0, rows - 1),
+        ((along * columns as f32).floor() as i64).clamp(0, columns - 1),
     );
-    u16::try_from(row * COLUMNS + column + 1).unwrap_or(1)
+    u16::try_from(row * columns + column + 1).unwrap_or(1)
 }
 
 /// A run of channels as the piece of it on each row: the row, the column it
 /// starts at and how many cells it covers there.
-fn pieces(start: i64, channels: i64) -> Vec<(i64, i64, i64)> {
+fn pieces(start: i64, channels: i64, columns: i64) -> Vec<(i64, i64, i64)> {
     let last = start + channels - 1;
-    (0..ROWS)
+    (0..CELLS / columns)
         .filter_map(|row| {
-            let first = row * COLUMNS + 1;
+            let first = row * columns + 1;
             let from = start.max(first);
-            let to = last.min(first + COLUMNS - 1);
+            let to = last.min(first + columns - 1);
             (from <= to).then(|| (row, from - first, to - from + 1))
         })
         .collect()
@@ -128,7 +130,7 @@ fn pieces(start: i64, channels: i64) -> Vec<(i64, i64, i64)> {
 
 /// What each of the 512 cells is filled with.
 fn fills(state: &Patch, universe: u16, cells: &[UniverseCell]) -> Vec<Hsla> {
-    let mut fills: Vec<Hsla> = vec![ladder::trim().into(); (COLUMNS * ROWS) as usize];
+    let mut fills: Vec<Hsla> = vec![ladder::trim().into(); CELLS as usize];
     let mut paint = |start: i64, channels: i64, colour: Hsla| {
         for address in start..start + channels {
             if let Some(cell) = usize::try_from(address - 1)
@@ -181,6 +183,8 @@ fn fills(state: &Patch, universe: u16, cells: &[UniverseCell]) -> Vec<Hsla> {
 fn grid(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma>) -> AnyElement {
     let measured = state.strips.clone();
     let fills = fills(state, universe, cells);
+    let columns = state.grid_columns();
+    let rows = CELLS / columns;
     // The cells are painted, not laid out: 512 squares a universe are a
     // picture, and the runs over them are what a pointer and a script meet.
     let painted = canvas(
@@ -190,14 +194,14 @@ fn grid(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma>
         move |bounds, (), window, _| {
             #[allow(clippy::cast_precision_loss)]
             let (cell_w, cell_h) = (
-                f32::from(bounds.size.width) / COLUMNS as f32,
-                f32::from(bounds.size.height) / ROWS as f32,
+                f32::from(bounds.size.width) / columns as f32,
+                f32::from(bounds.size.height) / rows as f32,
             );
             for (index, colour) in fills.iter().enumerate() {
                 #[allow(clippy::cast_precision_loss)]
                 let (column, row) = (
-                    (index as i64 % COLUMNS) as f32,
-                    (index as i64 / COLUMNS) as f32,
+                    (index as i64 % columns) as f32,
+                    (index as i64 / columns) as f32,
                 );
                 let cell = Bounds::new(
                     bounds.origin + point(px(column * cell_w), px(row * cell_h)),
@@ -225,7 +229,7 @@ fn grid(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma>
         .flex_1()
         .min_w_0()
         // Square cells: the grid is as tall as its width makes it.
-        .aspect_ratio(COLUMNS as f32 / ROWS as f32)
+        .aspect_ratio(columns as f32 / rows as f32)
         .child(painted);
     for row in state
         .rows()
@@ -239,7 +243,7 @@ fn grid(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma>
             let Some(bounds) = move_strips.borrow().get(&universe).copied() else {
                 return;
             };
-            let address = channel_at(bounds, event.position);
+            let address = channel_at(bounds, event.position, columns);
             let venue = move_venue.clone();
             moved.update(cx, |this, cx| {
                 this.drag_strip_to(venue, universe, address, cx);
@@ -267,12 +271,12 @@ fn grid(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma>
         .font_family(luma_ui::fonts::MONO)
         .text_size(px(10.0))
         .text_color(ladder::foreground_alpha(0.4))
-        .children((0..ROWS).map(|row| {
+        .children((0..rows).map(|row| {
             div()
                 .flex_1()
                 .flex()
                 .items_center()
-                .child((row * COLUMNS + 1).to_string())
+                .child((row * columns + 1).to_string())
         }));
     div()
         .w_full()
@@ -293,8 +297,10 @@ fn run(state: &Patch, universe: u16, row: &PatchedFixture, app: &Entity<Luma>) -
         .into();
     let selected = state.selected.contains(&row.id);
     let last = row.address + row.num_channels - 1;
+    let columns = state.grid_columns();
+    let rows = CELLS / columns;
 
-    pieces(row.address, row.num_channels)
+    pieces(row.address, row.num_channels, columns)
         .into_iter()
         .enumerate()
         .map(|(index, (line, column, width))| {
@@ -306,33 +312,29 @@ fn run(state: &Patch, universe: u16, row: &PatchedFixture, app: &Entity<Luma>) -
             let part = div()
                 .id(SharedString::from(format!("grid-run-{}-{line}", row.id)))
                 .absolute()
-                .top(relative(line as f32 / ROWS as f32))
-                .h(relative(1.0 / ROWS as f32))
-                .left(relative(column as f32 / COLUMNS as f32))
-                .w(relative(width as f32 / COLUMNS as f32))
+                .top(relative(line as f32 / rows as f32))
+                .h(relative(1.0 / rows as f32))
+                .left(relative(column as f32 / columns as f32))
+                .w(relative(width as f32 / columns as f32))
                 .overflow_hidden()
                 .pl(px(4.0))
                 .pr(px(CELL_GAP))
                 .pb(px(CELL_GAP))
                 .flex()
                 .items_center()
+                .gap(px(3.0))
                 .text_size(px(10.5))
                 .text_color(if selected {
                     ladder::background()
                 } else {
                     ladder::foreground()
                 })
-                // A hand-set address is ruled under, so it reads on the grid
-                // as it does in the table.
-                .when(row.address_pinned, |part| {
-                    part.border_b_1().border_color(ladder::accent())
-                })
                 .cursor_grab()
                 .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
                     let Some(bounds) = strips.borrow().get(&universe).copied() else {
                         return;
                     };
-                    let address = channel_at(bounds, event.position);
+                    let address = channel_at(bounds, event.position, columns);
                     let venue = venue.clone();
                     let id = id.clone();
                     grabbed.update(cx, |this, cx| {
@@ -342,13 +344,24 @@ fn run(state: &Patch, universe: u16, row: &PatchedFixture, app: &Entity<Luma>) -
             if index > 0 {
                 return part.into_any_element();
             }
-            part.child(div().truncate().child(name.clone()))
-                .agent_node(
-                    Role::Button,
-                    format!("{name} at {universe}:{}–{last}", row.address),
+            // A hand-set address carries a dot before its name, so it reads on
+            // the grid as it does in the table: Auto patch would move it.
+            part.when(row.address_pinned, |part| {
+                part.child(
+                    div()
+                        .flex_none()
+                        .size(px(5.0))
+                        .rounded_full()
+                        .bg(ladder::accent()),
                 )
-                .agent_focused(selected)
-                .into_any_element()
+            })
+            .child(div().truncate().child(name.clone()))
+            .agent_node(
+                Role::Button,
+                format!("{name} at {universe}:{}–{last}", row.address),
+            )
+            .agent_focused(selected)
+            .into_any_element()
         })
         .collect()
 }

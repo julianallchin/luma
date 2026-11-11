@@ -50,4 +50,12 @@ test("a collision is red and a clean universe is not", { timeoutMs: 120000 }, ()
   // "collision" rather than "this is what a strip looks like".
   expect(red(colliding)).toBeGreaterThan(0.0005);
   expect(red(clean)).toBeLessThan(red(colliding) / 4);
+
+  nav.step("the output view", "toggle", "Output");
+  until("the outputs", (s) => s.findAll({ role: "row" }).some((n) => n.label.startsWith("Universe 1 →")));
+  app.frames(6);
+  image.keep(app.screenshot(), "venue-patch/output");
+  nav.step("the stage view", "toggle", "Stage");
+  app.frames(6);
+  image.keep(app.screenshot(), "venue-patch/stage");
 });

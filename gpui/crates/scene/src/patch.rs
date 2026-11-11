@@ -4,23 +4,23 @@
 //! fixture hangs** rather than from the order somebody happened to add it.
 //! The rule, whole:
 //!
-//! - A fixture's universe is **its run's universe**. One universe per run
-//!   (`docs/specs/venue-builder-gauntlet.md` §3), so a data fault — a dead node,
-//!   a pulled cable — is bounded to one structure, which is how real rigs are
-//!   patched and why Vectorworks Spotlight numbers by plot position rather than
-//!   by creation order.
+//! - The rig is **packed**: runs are walked in solve order and each run's
+//!   block starts where the one before it ended, so a rig that fits in one
+//!   universe uses one. A universe is a cable and a port on a node; a rig that
+//!   spends one per truss needs a node port per truss to light it.
 //! - Within a run, addresses are **consecutive in physical order along the
 //!   run**: `along(t)` ascending, ties broken by node id so the answer is
-//!   byte-stable.
-//! - A run whose block will not fit in its candidate universe **rolls whole**
-//!   to the next one — it never splits across the boundary — and says so
-//!   ([`Note::RunRolled`]). Only a run whose own footprint exceeds a universe
-//!   has to split, and that says so too ([`Note::RunSplit`]).
+//!   byte-stable. A run is one block, so its fixtures stay together.
+//! - A run whose block will not fit in what is left of the universe **rolls
+//!   whole** to the next one — it never splits across the boundary — and says
+//!   so ([`Note::RunRolled`]). The runs after it carry on from there. Only a
+//!   run whose own footprint exceeds a universe has to split, and that says so
+//!   too ([`Note::RunSplit`]).
 //! - A **pinned** fixture — an address a human set by hand — is never
 //!   re-derived. It is reserved first, and the derived blocks flow around it.
 //! - A fixture with no run — resting on the floor rather than on structure —
-//!   takes the next free slot from universe 1, filling the gaps the run blocks
-//!   left, in fixture-id order.
+//!   takes the next free slot from universe 1, after the runs or in a gap a
+//!   rolled run left, in fixture-id order.
 //!
 //! # Why this module has no database and no catalog
 //!
@@ -371,14 +371,14 @@ struct OnRun {
 /// "Nearest" is doing real work here, and it is not the same as "the structure
 /// this fixture is part of". `venue_graph::kind_of` maps *every* truss to
 /// [`NodeKind::Run`], so a straight–corner–straight assembly is two runs, not
-/// one, and it takes two universes. That is deliberate rather than a rounding
-/// error: `along` is `local.w_axis.x`, the fixture's position on its run's own
-/// span axis, and past a corner that axis turns — a single `along` over the
-/// whole assembly would not be monotone, so its "physical order" would be a
-/// lie. One universe per straight run keeps the order true.
+/// one, and it is addressed as two blocks. That is deliberate rather than a
+/// rounding error: `along` is `local.w_axis.x`, the fixture's position on its
+/// run's own span axis, and past a corner that axis turns — a single `along`
+/// over the whole assembly would not be monotone, so its "physical order"
+/// would be a lie. One block per straight run keeps the order true.
 ///
 /// A compound run — several lengths a human names as one structure, addressed
-/// as one universe — is B4's job (`docs/specs/venue-builder-gauntlet.md` §6),
+/// as one block — is B4's job (`docs/specs/venue-builder-gauntlet.md` §6),
 /// and needs a run *node* over the pieces rather than a walk that guesses.
 /// `straight_corner_straight_is_two_runs_and_two_blocks` pins today's answer.
 fn on_run(venue: &ResolvedVenue, fixture: &str) -> Option<OnRun> {
@@ -475,6 +475,8 @@ fn allocate_scoped(venue: &ResolvedVenue, fixtures: &[Fixture], run: Option<&str
             .unwrap_or(usize::MAX)
     });
 
+    // The universe being filled. A block goes in the first gap that holds it
+    // from here on, so blocks follow one another until one does not fit.
     let mut next_universe = 1u16;
     for run in runs {
         let mut on_this_run = members.remove(&run).unwrap_or_default();
@@ -520,7 +522,7 @@ fn allocate_scoped(venue: &ResolvedVenue, fixtures: &[Fixture], run: Option<&str
                     });
                     address += fixture.channels;
                 }
-                next_universe = universe.saturating_add(1);
+                next_universe = universe;
             }
             None => {
                 let mut universes = Vec::new();
@@ -547,13 +549,12 @@ fn allocate_scoped(venue: &ResolvedVenue, fixtures: &[Fixture], run: Option<&str
                     run: run.clone(),
                     universes,
                 });
-                next_universe = next_universe.saturating_add(1);
             }
         }
     }
 
-    // Anything resting on the floor: no run, so no universe of
-    // its own — it fills the gaps the run blocks left, from universe 1.
+    // Anything resting on the floor: no run, so no block to keep together —
+    // it takes the first free slot from universe 1.
     loose.sort_by(|a, b| a.id.cmp(&b.id));
     for fixture in loose {
         match place(&mut occupancy, 1, fixture) {
@@ -659,13 +660,13 @@ pub fn next_addresses(
     let start = match run {
         // The run-less rule fills gaps from universe 1.
         None => 1,
-        // A run that already carries fixtures continues in its own universe;
-        // the occupancy above is what pushes these past its block.
+        // A run that already carries fixtures continues in the universe its
+        // block ends in; the occupancy above is what pushes these past it.
         Some(run) => match highest(Some(run)) {
             Some(universe) => universe,
-            // A run with nothing on it yet has no universe, so it takes the
-            // first one nothing else has claimed.
-            None => highest(None).unwrap_or(0).saturating_add(1),
+            // A run with nothing on it yet follows the rig: the universe
+            // being filled, after what is already there.
+            None => highest(None).unwrap_or(1),
         },
     };
 
