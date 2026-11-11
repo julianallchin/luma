@@ -202,7 +202,8 @@ runs `post.rs`:
   Adaptation is an eye's: 1.2 /s opening; 3 /s closing, but only as far as
   a pupil closes (`photometry::PUPIL_STOPS`, 4 stops), and the rest over
   about a minute, so a light that arrives in the face is blinding until
-  then. A standalone capture snaps.
+  then. A standalone capture snaps. With metering off the exposure stays at
+  `Exposure::held`, which the stage sets to where the meter was.
 - **Glare.** Exposed light above 2× diffuse white (soft knee) is
   area-averaged into a padded FFT grid and convolved with a glare kernel by
   FFT (`post_glare.wgsl`, wgpu compute), as Unreal's convolution bloom does.

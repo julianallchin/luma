@@ -2605,6 +2605,7 @@ impl Renderer {
                         query_count,
                         passes,
                         moved,
+                        exposure: self.post.exposure_state(),
                     }
                 });
             PendingFrame {

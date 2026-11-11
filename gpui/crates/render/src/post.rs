@@ -72,6 +72,15 @@ const ADAPT_DOWN: f32 = 3.0;
 const ADAPT_BEHIND_PUPIL: f32 = 1.0 / 60.0;
 /// Bytes of the exposure state: `Exposed` in `post_exposure.wgsl`.
 const STATE_SIZE: u64 = 32;
+/// Bytes of it that say what the exposure is: `Exposed::now`.
+pub(crate) const EXPOSURE_READBACK: u64 = 16;
+
+/// The exposure in `Exposed::now` as it was read back, in stops, once a frame
+/// has set one.
+pub(crate) fn exposure_read_back(now: &[u8]) -> Option<f32> {
+    let now: [f32; 4] = bytemuck::pod_read_unaligned(now);
+    (now[2] > 0.5).then_some(now[0])
+}
 /// Longest step one adaptation takes. A viewport that sat idle for a minute
 /// does not jump on its next frame.
 const MAX_ADAPT_STEP_S: f32 = 0.1;
@@ -625,6 +634,11 @@ impl Post {
         }
     }
 
+    /// The buffer the exposure lives in, `Exposed::now` first.
+    pub(crate) fn exposure_state(&self) -> wgpu::Buffer {
+        self.state.clone()
+    }
+
     /// The exposure the last post-chain frame used and the one it was
     /// adapting toward, in stops. Blocks on the GPU; for tests and tools.
     pub(crate) fn read_exposure(
@@ -730,7 +744,11 @@ impl Post {
             bytemuck::bytes_of(&MeterUniform {
                 exposure: [
                     f32::from(u8::from(auto)),
-                    look.exposure.ev,
+                    if auto {
+                        look.exposure.ev
+                    } else {
+                        look.exposure.fixed()
+                    },
                     *crate::photometry::ADAPT_EV.start(),
                     *crate::photometry::ADAPT_EV.end(),
                 ],

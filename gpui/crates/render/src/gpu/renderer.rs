@@ -90,7 +90,7 @@ impl Renderer {
                 }),
                 readback: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("luma-profile-readback"),
-                    size: query_capacity as u64 * 8,
+                    size: query_capacity as u64 * 8 + crate::post::EXPOSURE_READBACK,
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
                 }),
