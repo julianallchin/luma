@@ -148,6 +148,27 @@ impl Selection {
         Ok(())
     }
 
+    /// This selection with a model named, from `models`, the service's list:
+    /// a selection that names none (a new chat, or one saved when the picker
+    /// had a "Default" row) runs the list's first row, which is the user's
+    /// own default where the service has one. A level the model does not
+    /// offer becomes one it does. Unchanged when it already names a model, or
+    /// the list is empty.
+    #[must_use]
+    pub fn resolve(self, models: &[ModelChoice]) -> Self {
+        match (&self.model, models.first()) {
+            (None, Some(first)) => Self {
+                model: Some(first.resolved_model.clone()),
+                effort: self
+                    .effort
+                    .as_deref()
+                    .and_then(|effort| first.effort(Some(effort))),
+                ..self
+            },
+            _ => self,
+        }
+    }
+
     pub fn api_reasoning(&self) -> Result<Option<model::ReasoningLevel>, AgentError> {
         self.effort
             .as_ref()
@@ -159,11 +180,15 @@ impl Selection {
     }
 }
 
+/// One model a service runs. Every row names a concrete model: a service's
+/// default is its first row, not a row of its own.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelChoice {
-    pub id: Option<String>,
+    pub id: String,
     pub label: String,
-    pub resolved_model: Option<String>,
+    /// The id a selection saves: [`Self::id`], or the model table's key for
+    /// a gateway row the table also carries.
+    pub resolved_model: String,
     pub effort_levels: Vec<String>,
     /// Prompt tokens the model accepts, when its list says.
     #[serde(default)]
@@ -175,21 +200,31 @@ pub struct ModelChoice {
 
 impl ModelChoice {
     pub fn matches(&self, model: &Option<String>) -> bool {
-        &self.id == model || (self.id.is_some() && model.is_some() && &self.resolved_model == model)
+        model
+            .as_deref()
+            .is_some_and(|model| model == self.id || model == self.resolved_model)
     }
 
     pub fn selection(&self, service: Service, previous: &Selection) -> Selection {
         Selection {
             service,
-            model: self
-                .id
-                .as_ref()
-                .map(|id| self.resolved_model.clone().unwrap_or_else(|| id.clone())),
-            effort: previous
-                .effort
-                .clone()
-                .filter(|effort| self.effort_levels.contains(effort)),
+            model: Some(self.resolved_model.clone()),
+            effort: self.effort(previous.effort.as_deref()),
         }
+    }
+
+    /// The level this model runs at when `wanted` was asked for: `wanted`
+    /// when the model offers it, else the model's default — High, else
+    /// Medium, else its lowest (Zeron's `clamp_reasoning`). `None` only for a
+    /// model with no levels to choose.
+    pub fn effort(&self, wanted: Option<&str>) -> Option<String> {
+        let offered = |level: &str| self.effort_levels.iter().find(|l| *l == level);
+        wanted
+            .and_then(offered)
+            .or_else(|| offered("high"))
+            .or_else(|| offered("medium"))
+            .or_else(|| self.effort_levels.first())
+            .cloned()
     }
 }
 
@@ -267,9 +302,9 @@ fn table_choices(provider: Provider) -> Vec<ModelChoice> {
         .filter_map(|spec| {
             ModelId::parse(spec.key)?.wire_id(provider).ok()?;
             Some(ModelChoice {
-                id: Some(spec.key.into()),
+                id: spec.key.into(),
                 label: spec.display.into(),
-                resolved_model: Some(spec.key.into()),
+                resolved_model: spec.key.into(),
                 effort_levels: remote::EFFORTS.map(str::to_string).into(),
                 context_window: Some(spec.context_window),
                 price: None,
@@ -289,8 +324,8 @@ fn api_choices(provider: Provider, listed: Vec<remote::RemoteModel>) -> Vec<Mode
                 .filter(|id| id.wire_id(provider).ok() == Some(model.id.as_str()))
                 .map(|id| id.key().to_string());
             ModelChoice {
-                resolved_model: Some(key.unwrap_or_else(|| model.id.clone())),
-                id: Some(model.id),
+                resolved_model: key.unwrap_or_else(|| model.id.clone()),
+                id: model.id,
                 label: model.name,
                 effort_levels: model.efforts,
                 context_window: (model.context_window > 0).then_some(model.context_window),
@@ -305,10 +340,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn choices_pin_versions_and_drop_unsupported_effort() {
+    fn choices_pin_versions_and_clamp_effort_to_the_model() {
         let model = ModelChoice {
-            id: Some("sonnet".into()),
-            resolved_model: Some("claude-sonnet-5".into()),
+            id: "sonnet".into(),
+            resolved_model: "claude-sonnet-5".into(),
             label: "Sonnet 5".into(),
             effort_levels: vec!["low".into(), "high".into()],
             context_window: None,
@@ -333,10 +368,62 @@ mod tests {
                 }
             )
             .effort
-            .is_none());
-        let default = ModelChoice { id: None, ..model };
-        assert!(default.matches(&None));
-        assert!(!default.matches(&chosen.model));
+            .as_deref()
+            .is_some_and(|effort| effort == "high"));
+        // A model with no levels runs at none; one without High or Medium at
+        // its lowest.
+        assert_eq!(
+            ModelChoice {
+                effort_levels: Vec::new(),
+                ..model.clone()
+            }
+            .effort(Some("high")),
+            None
+        );
+        assert_eq!(
+            ModelChoice {
+                effort_levels: vec!["minimal".into(), "low".into()],
+                ..model.clone()
+            }
+            .effort(None)
+            .as_deref(),
+            Some("minimal")
+        );
+        // No row stands for "no model".
+        assert!(!model.matches(&None));
+    }
+
+    /// A selection that names no model runs the list's first row, at one of
+    /// its levels; one that names a model keeps it.
+    #[test]
+    fn an_unnamed_model_resolves_to_the_first_row() {
+        let row = |id: &str, efforts: &[&str]| ModelChoice {
+            id: id.into(),
+            label: id.into(),
+            resolved_model: id.into(),
+            effort_levels: efforts.iter().map(|e| e.to_string()).collect(),
+            context_window: None,
+            price: None,
+        };
+        let models = [row("first", &["low", "high"]), row("second", &["max"])];
+        let unset = |effort: Option<&str>| Selection {
+            service: Service::Claude,
+            model: None,
+            effort: effort.map(str::to_string),
+        };
+        let resolved = unset(Some("max")).resolve(&models);
+        assert!(models[0].matches(&resolved.model));
+        assert!(resolved
+            .effort
+            .as_deref()
+            .is_some_and(|effort| models[0].effort_levels.iter().any(|e| e == effort)));
+        assert_eq!(unset(None).resolve(&models).effort, None);
+        let named = Selection {
+            model: Some("second".into()),
+            ..unset(Some("max"))
+        };
+        assert_eq!(named.clone().resolve(&models), named);
+        assert_eq!(unset(None).resolve(&[]), unset(None));
     }
 
     #[test]
@@ -416,7 +503,7 @@ mod tests {
             ]}),
         );
         let choices = api_choices(Provider::OpenRouter, listed);
-        let ids: Vec<_> = choices.iter().filter_map(|c| c.id.as_deref()).collect();
+        let ids: Vec<_> = choices.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, ["openai/gpt-5.6-sol", "moonshotai/kimi-k3-fast"]);
         let kimi = &choices[1];
         assert_eq!(kimi.label, "Kimi K3 Fast");
@@ -451,7 +538,7 @@ mod tests {
         let cwd = tempfile::tempdir().unwrap();
         for service in [Service::Claude, Service::Codex] {
             let models = models(service, cwd.path()).await.unwrap();
-            assert!(models.iter().any(|model| model.id.is_some()));
+            assert!(!models.is_empty());
             assert!(models.iter().all(|model| !model.label.is_empty()));
             assert!(models.iter().any(|model| !model.effort_levels.is_empty()));
             for model in &models {

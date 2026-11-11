@@ -3,6 +3,17 @@ import { Database } from "bun:sqlite";
 type SchemaObject = { name: string; sql: string };
 type TableName = { name: string };
 
+/** Re-home a disposable library under a synthetic authenticated owner. The
+ * headless harness receives the same id as a trusted fixture principal, so
+ * mutation authority can be exercised without copying live auth secrets. */
+export function normalizeScratchLibraryToPrincipal(
+	databasePath: string,
+	principal: string,
+): void {
+	if (!principal.trim()) throw new Error("scratch principal cannot be empty");
+	normalizeScratchLibraryOwnership(databasePath, principal);
+}
+
 /**
  * Re-home the authored roots in a copied library for a headless fixture. This
  * must only be called for a disposable copy: changing principal identity
@@ -15,25 +26,7 @@ type TableName = { name: string };
  * the fixture transaction models an import instead of punching a maintenance
  * hole through production identity rules.
  */
-export function normalizeScratchLibraryToGuest(databasePath: string): void {
-	normalizeScratchLibraryOwnership(databasePath, null);
-}
-
-/** Re-home a disposable library under a synthetic authenticated owner. The
- * headless harness receives the same id as a trusted fixture principal, so
- * mutation authority can be exercised without copying live auth secrets. */
-export function normalizeScratchLibraryToPrincipal(
-	databasePath: string,
-	principal: string,
-): void {
-	if (!principal.trim()) throw new Error("scratch principal cannot be empty");
-	normalizeScratchLibraryOwnership(databasePath, principal);
-}
-
-function normalizeScratchLibraryOwnership(
-	databasePath: string,
-	principal: string | null,
-): void {
+function normalizeScratchLibraryOwnership(databasePath: string, principal: string): void {
 	const database = new Database(databasePath);
 	try {
 		const triggers = database

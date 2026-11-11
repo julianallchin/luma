@@ -389,6 +389,40 @@ pub fn checkbox(checked: bool) -> Div {
 
 const CHECKBOX: f32 = 16.0;
 
+/// A [`checkbox`] over a set that only part of is in: a dash in the box, which
+/// is neither the tick nor the hole.
+pub fn checkbox_partial() -> Div {
+    div()
+        .flex_none()
+        .size(rpx(CHECKBOX))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(rpx(radius::CHIP))
+        .bg(glass::ink(0.16))
+        .text_color(ladder::foreground())
+        .child(Icon::new(IconName::Minus).size(rpx(CHECK)))
+}
+
+/// A word that belongs to a row — a group a fixture is in — small enough to
+/// sit several to a table cell. The caller gives it an id and a click when it
+/// leads somewhere.
+pub fn tag(label: impl Into<SharedString>) -> Div {
+    div()
+        .flex_none()
+        .h(rpx(TAG_HEIGHT))
+        .px(rpx(6.0))
+        .flex()
+        .items_center()
+        .rounded(rpx(radius::CHIP))
+        .bg(glass::ink(0.08))
+        .text_size(rpx(11.0))
+        .text_color(ladder::foreground_alpha(0.8))
+        .child(label.into())
+}
+
+const TAG_HEIGHT: f32 = 18.0;
+
 // ---------------------------------------------------------------------------
 // Key caps
 // ---------------------------------------------------------------------------
@@ -530,6 +564,22 @@ pub fn btn(label: impl Into<SharedString>, _fade_key: impl Into<SharedString>) -
         })
         .fade_hover()
         .child(label.into())
+}
+
+/// [`btn`] with a glyph for a label: square, so the glyph sits in its middle.
+pub fn icon_btn(icon: IconName, _fade_key: impl Into<SharedString>) -> Div {
+    btn_shape()
+        .w(rpx(32.0))
+        .px(rpx(0.0))
+        .text_color(ladder::foreground_alpha(0.72))
+        .bg(glass::wash(0.0))
+        .hover(|style| {
+            style
+                .text_color(ladder::foreground_alpha(1.0))
+                .bg(glass::ink(0.06))
+        })
+        .fade_hover()
+        .child(Icon::new(icon).size(rpx(14.0)))
 }
 
 /// The one emphasised button: a near-white fill with near-black text — the
@@ -785,24 +835,6 @@ pub fn segment(
     }
 }
 
-/// A [`segmented`] track as a capsule, for a one-of-N switch that stands
-/// alone in a head band rather than in a row of fields: alone, its ends are
-/// its whole outline, and round ends say "switch" where a box says "field".
-/// Build its cells with [`pill_segment`] — a square cell in a round track
-/// leaves a notch of the track showing at each end.
-pub fn pill_segmented() -> Div {
-    segmented().rounded_full()
-}
-
-/// One cell of a [`pill_segmented`] track: [`segment`], rounded to match.
-pub fn pill_segment(
-    label_text: impl Into<SharedString>,
-    chosen: bool,
-    fade_key: impl Into<SharedString>,
-) -> Div {
-    segment(label_text, chosen, fade_key).rounded_full()
-}
-
 /// An on/off switch: a rounded track with a knob. `on` runs from 0 (off) to
 /// 1 (on), so a caller can pass a value that animates between the two.
 ///
@@ -862,8 +894,7 @@ const SEGMENT_PAD: f32 = 10.0;
 ///
 /// gpui routes a drag by its payload's type, so every scrub in the window
 /// shares this one type and hears every scrub's drag; the id is how a listener
-/// knows the move is its own. Exactly [`crate::luma_slider`]'s arrangement, for
-/// exactly its reason.
+/// knows the move is its own — without it, dragging one scrub moves them all.
 #[derive(Clone)]
 struct ScrubDrag {
     id: SharedString,
@@ -875,23 +906,22 @@ impl crate::arg::OwnedDrag for ScrubDrag {
     }
 }
 
-/// A whole number the pointer sets by sweeping across it — the float tier's
-/// value box.
+/// A number the pointer sets by sweeping across it: the one value box, on a
+/// panel, a page or a float alike. There is no thumb — the fill's width is
+/// the value.
 ///
-/// This is [`crate::luma_slider`] on glass, and it is a separate function for
-/// the tier reason rather than a behavioural one: the slider paints an opaque
-/// `ladder::apex` slab with a `ladder::primary` fill, which is a hole cut in a
-/// translucent card. Here the box is [`field`]'s and the fill is [`glass::ink`],
-/// so the control reads as the same recessed hole as the field beside it, with
-/// its value shaded in.
+/// The box is [`field`]'s and the fill is [`glass::ink`], so the control reads
+/// as the same recessed hole as the field beside it, with its value shaded in.
 ///
 /// It replaces a **pair of step buttons**, which is what a count had before:
 /// two buttons say "count" three times (the readout and both verbs) and give
 /// the pointer no way to ask for eight without pressing four times.
 ///
-/// The value handed to `on_change` is absolute and already clamped — see
-/// [`crate::luma_slider`] on why a drag may not wind up. A press that does not
-/// move changes nothing.
+/// The value handed to `on_change` is **absolute** and already clamped, not a
+/// delta: a drag that outruns the box would otherwise wind up, and the control
+/// would spend the first half of the journey back doing nothing. A press that
+/// does not move changes nothing — this control also sets DMX dimmer levels,
+/// and a stray click should not slam a rig to full. Movement is consent.
 pub fn scrub(
     id: impl Into<SharedString>,
     value: f64,
@@ -923,6 +953,12 @@ pub fn scrub_with_power(
     let fraction = ((value - min) / span).clamp(0.0, 1.0).powf(1.0 / power) as f32;
     let text = format_step(value, step);
     let moved = id.clone();
+    // gpui clips to rectangles, so the box's rounding does not cut the fill:
+    // the fill wears the box's inner radius itself. On the left always; on
+    // the right by as much as it has travelled into the box's far curve, so
+    // a part-way fill ends square and a full one sits inside the corner.
+    let inner = radius::ROW - 1.0;
+    let far = (inner - (1.0 - fraction) * (width - 2.0)).clamp(0.0, inner);
     field()
         .relative()
         .w(rpx(width))
@@ -934,6 +970,8 @@ pub fn scrub_with_power(
                 .left_0()
                 .h_full()
                 .w(gpui::relative(fraction))
+                .rounded_l(rpx(inner))
+                .rounded_r(rpx(far))
                 .bg(glass::ink(SCRUB_FILL)),
         )
         .child(
@@ -947,9 +985,9 @@ pub fn scrub_with_power(
                 .text_size(rpx(11.0))
                 .text_color(ladder::foreground())
                 .child(div().flex_1().min_w_0().child(text.clone()))
-                // The number the box draws, published — see
-                // [`crate::luma_slider`]: without it a driver can sweep the
-                // control and has no way to read what it landed on.
+                // The number the box draws, published: without it a driver
+                // can sweep the control and has no way to read what it
+                // landed on.
                 // A slider, because that is what it is: the harness drags a
                 // control by its node, and a value box published as prose is
                 // one no script can move.
@@ -1006,8 +1044,8 @@ const SCRUB_FILL: f32 = 0.07;
 
 /// The padded column a popover's rows sit in: a menu's, a select's, a
 /// picker's. Layout only — the surface under it is [`frosted_card`], which
-/// every anchored host already draws, so a combo box or any other content
-/// that wants its edges flush skips this and gets the same card.
+/// every anchored host already draws, so content that wants its edges flush
+/// skips this and gets the same card.
 pub fn popover_card() -> Div {
     div()
         .flex()
@@ -1023,8 +1061,8 @@ pub fn popover_card() -> Div {
 /// a notice, a drag ghost) calls it directly.
 ///
 /// The rim is painted over the content and takes no layout, so a width set
-/// on the content is the card's width, and content that runs to the edge —
-/// a combo box's header band — still gets an edge.
+/// on the content is the card's width, and content that runs to the edge
+/// still gets an edge.
 ///
 /// It sets its own text colour. A popover is often a child of its trigger,
 /// and a light chip would otherwise give it its dark ink.
@@ -1186,6 +1224,36 @@ pub fn anchored_above(
     hang(id, Side::Above, trigger, content, Phase::Open(dismiss))
 }
 
+/// [`anchored_above`] for a trigger another view draws: hung from the
+/// window-space box `trigger` — written by the trigger as it painted —
+/// rather than from a parent element. A popover that is a view of its own,
+/// mounted apart from its trigger so that redrawing one never redraws the
+/// other, hangs this way.
+pub fn anchored_above_box(
+    id: impl Into<SharedString>,
+    trigger: gpui::Bounds<gpui::Pixels>,
+    dismiss: Dismiss,
+    content: AnyElement,
+) -> AnyElement {
+    let gap = rpx(MENU_GAP);
+    let (card, closing) = card(content, Phase::Open(dismiss));
+    lift(
+        id.into(),
+        gpui::anchored()
+            .position(trigger.top_right())
+            .anchor(gpui::Anchor::BottomRight)
+            .child(
+                // The trigger's height reserved above the card, as in
+                // [`anchored_above`], so a flip clears the trigger.
+                div()
+                    .pt(trigger.size.height)
+                    .child(div().pb(gap).pt(gap).child(card)),
+            ),
+        gpui::Axis::Vertical,
+        closing,
+    )
+}
+
 /// [`anchored_above`] while its exit plays, `progress` from 0 to 1.
 pub fn anchored_above_closing(
     id: impl Into<SharedString>,
@@ -1299,26 +1367,7 @@ pub fn anchored_at(
     dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    at_point(id, at, content, Phase::Open(dismiss))
-}
-
-/// [`anchored_at`] while its exit plays, `progress` from 0 to 1.
-pub fn anchored_at_closing(
-    id: impl Into<SharedString>,
-    at: gpui::Point<gpui::Pixels>,
-    content: AnyElement,
-    progress: f32,
-) -> AnyElement {
-    at_point(id, at, content, Phase::Closing(progress))
-}
-
-fn at_point(
-    id: impl Into<SharedString>,
-    at: gpui::Point<gpui::Pixels>,
-    content: AnyElement,
-    phase: Phase,
-) -> AnyElement {
-    let (card, closing) = card(content, phase);
+    let (card, closing) = card(content, Phase::Open(dismiss));
     lift(
         id.into(),
         gpui::anchored()
@@ -1585,6 +1634,15 @@ impl<T> Picker<T> {
         }
         self.cursor = (self.cursor as isize + delta).rem_euclid(count) as usize;
         Some(self.cursor)
+    }
+
+    /// Put the cursor on the first shown row `is` picks out — a list that opens
+    /// on the value already chosen. Returns its position for a
+    /// `scroll_to_item`; with no such row the cursor stays where it was.
+    pub fn seek(&mut self, is: impl Fn(&T) -> bool) -> Option<usize> {
+        let at = self.shown.iter().position(|&row| is(&self.rows[row]))?;
+        self.cursor = at;
+        Some(at)
     }
 
     /// Put the cursor back on the first row without touching the query — for

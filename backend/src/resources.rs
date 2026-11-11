@@ -7,7 +7,7 @@
 //! python-runtime/   standalone CPython that seeds the managed venv
 //! ffmpeg-runtime/   the ffmpeg binary
 //! python/           the analysis workers (`backend/python`)
-//! resources/        fixtures/, meshes/, skills/
+//! resources/        fixtures/, fixture-library/, meshes/, skills/
 //! ```
 //!
 //! It sits at `Luma.app/Contents/Resources` on macOS and at
@@ -86,10 +86,28 @@ fn newest_library(dir: &Path) -> Option<PathBuf> {
         .max()
 }
 
+/// The Luma fixture library's version directory (`index.json` and
+/// `fixtures/<id>.json`), shipped as `resources/fixture-library/<version>/`.
+///
+/// `LUMA_FIXTURE_LIBRARY_ROOT` wins. Otherwise it is found *through* the
+/// fixtures root, as [`meshes_root`] finds the meshes: a fixtures root is
+/// `<resources>/fixtures/<version>`, so its grandparent's `fixture-library/`
+/// holds the library that ships with it, in the repository and in a bundle
+/// alike. There is deliberately no other fallback: a caller with its own
+/// fixtures root (a test, the UI harness's seeded bundle) has no library
+/// unless it says so, rather than the repository's 900 fixtures turning up in
+/// its search.
+#[must_use]
+pub fn fixture_library_root(fixtures_root: Option<&Path>) -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("LUMA_FIXTURE_LIBRARY_ROOT") {
+        return Some(PathBuf::from(path));
+    }
+    newest_library(&fixtures_root?.parent()?.parent()?.join("fixture-library"))
+}
+
 /// Where the stage GLBs live.
 ///
-/// `LUMA_MESHES_ROOT` wins, so a test or a fixture can supply its own tree.
-/// Otherwise the meshes are found *through* the fixtures root rather than by a
+/// The meshes are found *through* the fixtures root rather than by a
 /// second search: a fixtures root is always `<resources>/fixtures/<version>`,
 /// so its grandparent's `meshes/` is the sibling tree, in the repo and in a
 /// bundle alike: `resources/fixtures` and `resources/meshes` are siblings.
@@ -97,9 +115,6 @@ fn newest_library(dir: &Path) -> Option<PathBuf> {
 /// bundle's copy, and the repo's own copy is the last resort.
 #[must_use]
 pub fn meshes_root(fixtures_root: Option<&Path>) -> PathBuf {
-    if let Some(path) = std::env::var_os("LUMA_MESHES_ROOT") {
-        return PathBuf::from(path);
-    }
     let sibling = fixtures_root
         .and_then(Path::parent)
         .and_then(Path::parent)
@@ -152,6 +167,29 @@ mod tests {
                 "{layout}"
             );
         }
+    }
+
+    #[test]
+    fn the_fixture_library_is_the_one_beside_the_fixtures_root() {
+        let root = tempfile::tempdir().unwrap();
+        let resources = root.path().join("resources");
+        let fixtures = resources.join("fixtures/2511260420");
+        std::fs::create_dir_all(&fixtures).unwrap();
+        // A fixtures root with nothing beside it has no library.
+        assert_eq!(fixture_library_root(Some(&fixtures)), None);
+        for version in ["2026.10.01", "2026.11.09"] {
+            std::fs::create_dir_all(resources.join("fixture-library").join(version)).unwrap();
+        }
+        assert_eq!(
+            fixture_library_root(Some(&fixtures)),
+            Some(resources.join("fixture-library/2026.11.09"))
+        );
+        // The repository's own pair.
+        let repo = source_fixtures_root().unwrap();
+        assert!(fixture_library_root(Some(&repo))
+            .unwrap()
+            .join("index.json")
+            .is_file());
     }
 
     #[test]

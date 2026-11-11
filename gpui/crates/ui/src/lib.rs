@@ -41,11 +41,11 @@
 //! history. A select's open menu is a float ([`float::popover_card`] rows of
 //! [`luma_select_item`], hung by [`float::anchored_below`]).
 //!
-//! [`luma_slider`] drags without owning state, because gpui's drag payload
-//! carries the identity and the event carries the box — see its module docs.
+//! [`float::scrub`] drags without owning state, because gpui's drag payload
+//! carries the identity and the event carries the box — see its docs.
 
 pub mod arg;
-pub mod combo;
+pub mod code_entry;
 pub mod dialog;
 pub mod float;
 pub mod fonts;
@@ -66,6 +66,7 @@ pub mod runtime;
 pub mod scrub_number;
 pub mod sheet;
 pub mod shortcut;
+pub mod smooth_scroll;
 pub mod split;
 pub mod text_input;
 
@@ -118,7 +119,7 @@ pub use button::{
 };
 pub use rem_scale::rem_scaled;
 pub use select::luma_select_item;
-pub use slider::{fader_track, luma_fader, luma_slider};
+pub use slider::{fader_track, luma_fader};
 pub use text::{caption, plate};
 
 pub mod icons;

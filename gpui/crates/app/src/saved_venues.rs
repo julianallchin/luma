@@ -53,7 +53,7 @@ pub(crate) struct SavedVenues {
 impl Default for SavedVenues {
     fn default() -> Self {
         Self {
-            stored: Stored::new(KEY),
+            stored: Stored::new(KEY).per_account(),
             unopened: BTreeMap::new(),
         }
     }
@@ -62,7 +62,7 @@ impl Default for SavedVenues {
 impl SavedVenues {
     /// Take in what the store held at launch.
     pub(crate) fn read(stored: Option<&str>) -> Self {
-        let stored = Stored::<Snapshot>::read(KEY, stored);
+        let stored = Stored::<Snapshot>::read(KEY, stored).per_account();
         Self {
             unopened: stored.value().venues.clone(),
             stored,
@@ -93,7 +93,7 @@ impl Luma {
         &self,
     ) -> impl std::future::Future<Output = Result<Option<String>, crate::LibraryError>> + use<>
     {
-        self.library.get_session_item(KEY)
+        self.library.get_session_item(&self.account_key(KEY))
     }
 
     /// Every venue's state as it stands: the live and parked ones, and the
@@ -178,12 +178,12 @@ impl Luma {
         };
         let listing = self.library.scores_across_venues(&track);
         let generation = songs.load_generation();
-        let user = self.library.user_id();
+        let user = songs.user().to_owned();
         let venue = venue_id.to_string();
         cx.spawn(async move |this, cx| {
             let mut found = HashMap::new();
             if let Ok(summaries) = listing.await {
-                for row in crate::tracks::scores::rows(&summaries, user.as_deref()).iter() {
+                for row in crate::tracks::scores::rows(&summaries, &user).iter() {
                     if row.venue_id.as_ref() == venue {
                         found.insert(row.id.to_string(), crate::tracks::scores::open_row(row));
                     }

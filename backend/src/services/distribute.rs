@@ -76,6 +76,10 @@ use crate::services::patch;
 /// a refusal that had no measurement behind it.
 pub const DEFAULT_FIXTURE_WIDTH_M: f64 = 0.3;
 
+/// How far apart across a face two fixtures may sit and still be one row, in
+/// metres: a row is one line, and a floor holds many.
+pub const ROW_LINE_M: f64 = 1e-3;
+
 /// What a caller asked for.
 #[derive(Debug, Clone)]
 pub struct Request<'a> {
@@ -87,6 +91,9 @@ pub struct Request<'a> {
     pub mode_name: &'a str,
     pub count: usize,
     pub layout: Layout,
+    /// How far off the face's middle the row sits across it, in metres. A
+    /// truss face has no room for one; a floor or a deck top does.
+    pub across_m: f64,
     /// The naming term, if the row should not be named after the model.
     pub label_prefix: Option<&'a str>,
 }
@@ -180,11 +187,17 @@ pub async fn distribute(
 
     let rows = fixtures_db::get_patched_fixtures(access).await?;
     if let Some((from_m, to_m)) = band(&stations, width) {
-        let held_by: Vec<DistributeOccupied> =
-            occupied(&graph, &rows, fixtures_root, &host_id, &host_socket)
-                .into_iter()
-                .filter(|held| held.from_m < to_m - TOUCHING_M && from_m < held.to_m - TOUCHING_M)
-                .collect();
+        let held_by: Vec<DistributeOccupied> = occupied(
+            &graph,
+            &rows,
+            fixtures_root,
+            &host_id,
+            &host_socket,
+            request.across_m,
+        )
+        .into_iter()
+        .filter(|held| held.from_m < to_m - TOUCHING_M && from_m < held.to_m - TOUCHING_M)
+        .collect();
         if !held_by.is_empty() {
             let suggestion = format!(
                 "{from_m:.2}..{to_m:.2} m of this face is already held by {} — \
@@ -236,7 +249,11 @@ pub async fn distribute(
                 fixture_path: request.fixture_path,
                 footprint: *footprint,
                 pinned: false,
-                name: Naming::Minted(request.label_prefix),
+                // One light takes the label as given; a row numbers it.
+                name: match request.label_prefix {
+                    Some(label) if stations.len() == 1 => Naming::Given(label.to_string()),
+                    prefix => Naming::Minted(prefix),
+                },
                 placement: (&edge).into(),
             },
         )
@@ -251,7 +268,7 @@ pub async fn distribute(
             label: fixture.label.clone(),
             params: BTreeMap::from([
                 ("u".to_string(), *station),
-                ("v".to_string(), 0.0),
+                ("v".to_string(), request.across_m),
                 ("trim".to_string(), 0.0),
             ])
             .into_iter()
@@ -458,6 +475,7 @@ fn occupied(
     fixtures_root: &Path,
     host: &str,
     socket: &str,
+    across_m: f64,
 ) -> Vec<DistributeOccupied> {
     let mut widths: BTreeMap<&str, f64> = BTreeMap::new();
     let mut held: Vec<DistributeOccupied> = graph
@@ -473,6 +491,11 @@ fn occupied(
             let width = *widths
                 .entry(row.fixture_path.as_str())
                 .or_insert_with(|| width_of(fixtures_root, &row.fixture_path));
+            // A surface holds rows side by side: only a body within its own
+            // width of this row's line is in its way.
+            if (node.params.get("v", 0.0) - across_m).abs() >= width - TOUCHING_M {
+                return None;
+            }
             let u = node.params.get("u", 0.0);
             Some(DistributeOccupied {
                 label: row.label.clone().unwrap_or_else(|| node.id.clone()),

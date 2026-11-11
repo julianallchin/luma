@@ -42,11 +42,6 @@ impl FixtureOutput {
             ..Self::default()
         }
     }
-    pub fn rgb(&self) -> [f64; 3] {
-        self.color
-            .unwrap_or([1.0; 3])
-            .map(|v| v * self.dimmer.unwrap_or(0.0))
-    }
     /// Capability layout is static across a graph's selected head domain.
     pub fn writes(&self) -> [bool; 6] {
         [

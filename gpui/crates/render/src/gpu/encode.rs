@@ -156,13 +156,16 @@ impl Renderer {
 
         // A cone that emits nothing visible (a black colour at any dimmer)
         // gets no shadow map, no light-index entry and no beam work.
-        let fixture_cones: Vec<_> = frame
+        // Each kept cone with its index in the frame, which its panel names.
+        let (kept, fixture_cones): (Vec<usize>, Vec<_>) = frame
             .fixture_cones
             .iter()
             .map(sanitize_fixture_cone)
-            .filter(|cone| cone.intensity * cone.color.max_element() > DARK_CONE)
+            .enumerate()
+            .filter(|(_, cone)| cone.intensity * cone.color.max_element() > DARK_CONE)
             .take(crate::frame::MAX_FIXTURE_CONES)
-            .collect();
+            .unzip();
+        let (panel_words, panel_of) = crate::panel::pack(&frame.panels, &kept);
         let camera_bits = [
             frame.camera.eye.x,
             frame.camera.eye.y,
@@ -276,7 +279,7 @@ impl Renderer {
                     color: light.color.to_array(),
                     intensity: light.intensity.clamp(0.0, 100.0),
                     cos_field: light.cos_field.clamp(-1.0, 1.0),
-                    wash: light.wash.clamp(0.0, 1.0),
+                    handover: crate::fog_grid::handover(light),
                     gobo: light.gobo.min(2) as f32,
                     gobo_rotation: light.gobo_rotation.rem_euclid(std::f32::consts::TAU),
                     shadow_slot: slot_of[index],
@@ -284,7 +287,8 @@ impl Renderer {
                     inverse_right_length: direction.cross(helper).length().recip(),
                     field_tangent: (1.0 - field * field).max(0.0).sqrt() / field.max(0.05),
                     lens_distance: light.lens_distance(),
-                    lens_reserved: [0.0; 3],
+                    panel: panel_of[index],
+                    lens_reserved: [0.0; 2],
                 }
             })
             .collect();
@@ -409,7 +413,7 @@ impl Renderer {
         let outdoor_sun = frame
             .sky
             .map_or(Vec3::ZERO, |sky| sky.sun_radiance)
-            .extend(Transport::PHASE_G)
+            .extend(0.0)
             .to_array();
         // The compute kernels draw the haze, except for the exhaustive
         // reference's per-ray fragment pass.
@@ -869,8 +873,9 @@ impl Renderer {
                 surface_depth_cull,
                 fog_tile,
                 budget.msaa,
+                slot,
             );
-            let presentation = &t.presentations[slot];
+            let presentation = t.presentation(slot);
             let finish = match presentation {
                 PresentationTarget::Staged {
                     output, readback, ..
@@ -896,6 +901,7 @@ impl Renderer {
                 t.bytes_per_row,
             )
         };
+        self.target_memory.clear(&mut encoder);
         let targets_done = Instant::now();
         let ambient_visibility =
             self.sky_visibility
@@ -922,6 +928,12 @@ impl Renderer {
         self.haze_glow
             .prepare(&self.gpu.device, &self.gpu.queue, &medium, frame);
         let glow_bindings = self.haze_glow.bindings(17);
+        let panel_buf = self.storage(
+            &mut encoder,
+            &panel_words,
+            wgpu::BufferUsages::STORAGE,
+            "panels",
+        );
         let cluster_group = |label: &str, core: &wgpu::Buffer, rest: &wgpu::Buffer| {
             self.gpu
                 .device
@@ -953,6 +965,7 @@ impl Renderer {
                         binding(14, index_bindings.surface_splits.as_entire_binding()),
                         binding(15, wgpu::BindingResource::TextureView(&ambient_visibility)),
                         binding(16, wgpu::BindingResource::TextureView(&shaft_view)),
+                        binding(20, panel_buf.as_entire_binding()),
                     ],
                 })
         };
@@ -1065,12 +1078,7 @@ impl Renderer {
                     let mut sorted: Vec<usize> = casters
                         .iter()
                         .copied()
-                        .filter(|&index| {
-                            !matches!(
-                                &frame.draws[index].editor_object,
-                                Some(crate::frame::EditorObject::Fixture(_))
-                            )
-                        })
+                        .filter(|&index| !crate::frame::is_luminaire(frame, &frame.draws[index]))
                         .collect();
                     // Mesh-major, then draw order, so the buffer contents are
                     // reproducible across frames.
@@ -1459,9 +1467,15 @@ impl Renderer {
                         // Premultiplied radiance and coverage, including each
                         // surface's horizon fade. Transparent draws blend over
                         // them before the composite supplies the background.
+                        // Multisampled, only the resolve outlives the pass:
+                        // the samples are transient (`targets.rs`).
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
+                            store: if msaa_color.is_some() {
+                                wgpu::StoreOp::Discard
+                            } else {
+                                wgpu::StoreOp::Store
+                            },
                         },
                     })],
                     depth_stencil_attachment: Some(depth_attachment_transient(&msaa_depth)),
@@ -1792,7 +1806,7 @@ impl Renderer {
                     ],
                     transport: [
                         Transport::WHITE_LEAK,
-                        Transport::PHASE_G,
+                        0.0,
                         haze_size.1 as f32,
                         haze_size.0 as f32,
                     ],
@@ -1870,6 +1884,7 @@ impl Renderer {
                                     wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
                                 ),
                                 binding(6, fixture_shadow_matrix_buf.as_entire_binding()),
+                                binding(13, panel_buf.as_entire_binding()),
                                 binding(
                                     7,
                                     wgpu::BindingResource::TextureView(&self.fixture_shadow_map),
@@ -1955,6 +1970,7 @@ impl Renderer {
                                     wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
                                 ),
                                 binding(6, fixture_shadow_matrix_buf.as_entire_binding()),
+                                binding(13, panel_buf.as_entire_binding()),
                                 binding(
                                     7,
                                     wgpu::BindingResource::TextureView(&self.fixture_shadow_map),
@@ -2275,7 +2291,11 @@ impl Renderer {
                     CAMERA_NEAR,
                     camera_far,
                     haze_density * Transport::EXTINCTION,
-                    Transport::PHASE_G,
+                    fixture_cones
+                        .iter()
+                        .filter(|cone| cone.haze_gain > 0.0)
+                        .map(|cone| cone.position.distance(frame.camera.eye) + cone.range)
+                        .fold(0.0, f32::max),
                 ],
                 background: frame.clear_color.extend(1.0).to_array(),
                 display: [
@@ -2335,7 +2355,16 @@ impl Renderer {
                 let post = ((frame.look.needs_post() || !frame.lasers.is_empty())
                     && frame.debug_view == crate::scene_desc::DebugView::Pbr
                     && !frame.cluster_debug)
-                    .then(|| self.post.scene_target(&self.gpu.device, t_width, t_height));
+                    .then(|| {
+                        let scene = self.post.scene_target(
+                            &self.gpu.device,
+                            &mut self.target_memory,
+                            t_width,
+                            t_height,
+                        );
+                        self.target_memory.clear(&mut encoder);
+                        scene
+                    });
                 {
                     let (target, pipeline, timestamps) = match &post {
                         Some(scene) => (
@@ -2399,12 +2428,9 @@ impl Renderer {
                         &crate::post::PostFrame {
                             look: frame.look,
                             quality: frame.quality,
-                            cones: &frame.fixture_cones,
                             view_proj,
                             eye: frame.camera.eye,
                             fov_y_deg: frame.camera.fov_y_deg,
-                            near: CAMERA_NEAR,
-                            far: camera_far,
                             width: t_width,
                             height: t_height,
                             headroom: destination.headroom(),
@@ -2424,7 +2450,6 @@ impl Renderer {
                                 (sky.sun_direction, sky.sun_radiance * through)
                             }),
                         },
-                        &depth_view,
                         &output_view,
                         &mut pass_queries,
                         last_timestamp,
@@ -2575,6 +2600,7 @@ impl Renderer {
                         query_count,
                         passes,
                         moved,
+                        exposure: self.post.exposure_state(),
                     }
                 });
             PendingFrame {
@@ -2662,7 +2688,6 @@ fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::Fix
         color: finite_vec(light.color, Vec3::ZERO).clamp(Vec3::ZERO, Vec3::splat(100.0)),
         intensity: finite(light.intensity, 0.0).clamp(0.0, 100.0),
         cos_field,
-        wash: finite(light.wash, 0.0).clamp(0.0, 1.0),
         gobo: light.gobo.min(2),
         gobo_rotation: finite(light.gobo_rotation, 0.0).rem_euclid(std::f32::consts::TAU),
         haze_gain: finite(light.haze_gain, 1.0).clamp(0.0, 1.0),

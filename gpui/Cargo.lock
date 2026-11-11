@@ -1224,6 +1224,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "gpui_util",
  "indexmap 2.14.0",
@@ -1877,6 +1878,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2961,6 +2963,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3051,16 +3054,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
- "glam",
  "gpui",
  "gpui-component",
  "gpui_platform",
  "image",
  "luma",
  "luma-app",
- "luma-chat",
  "luma-patterns",
- "luma-scene",
  "luma-ui",
  "luma-update",
  "rquickjs",
@@ -3175,6 +3175,7 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "block",
@@ -3200,6 +3201,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3251,6 +3253,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3296,6 +3299,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3306,6 +3310,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "console_error_panic_hook",
  "gpui",
@@ -3318,6 +3323,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -3327,6 +3333,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "log",
@@ -3336,6 +3343,7 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3359,6 +3367,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3388,6 +3397,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -3662,6 +3672,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4616,7 +4627,7 @@ dependencies = [
 
 [[package]]
 name = "luma"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
@@ -4632,6 +4643,7 @@ dependencies = [
  "libc",
  "lofty",
  "log",
+ "luma-fixture",
  "luma-patterns",
  "luma-render",
  "luma-scene",
@@ -4681,10 +4693,8 @@ dependencies = [
  "luma-scene",
  "luma-ui",
  "luma-update",
- "png 0.17.16",
  "serde",
  "serde_json",
- "sqlx",
  "tokio",
  "uuid",
 ]
@@ -4702,6 +4712,15 @@ dependencies = [
  "luma-ui",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "luma-fixture"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4737,6 +4756,7 @@ dependencies = [
  "half",
  "image",
  "io-surface",
+ "luma-fixture",
  "luma-scene",
  "objc2 0.6.4",
  "objc2-io-surface",
@@ -4757,6 +4777,7 @@ dependencies = [
  "fixture-kinematics",
  "glam",
  "gltf",
+ "luma-fixture",
  "serde",
  "serde_json",
 ]
@@ -4986,6 +5007,7 @@ dependencies = [
 [[package]]
 name = "media"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "bindgen 0.71.1",
@@ -6215,6 +6237,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "collections",
  "serde",
@@ -7147,6 +7170,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "derive_refineable",
 ]
@@ -7751,6 +7775,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "async-task",
  "backtrace",
@@ -8648,6 +8673,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "heapless",
  "log",
@@ -9848,6 +9874,7 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 [[package]]
 name = "util_macros"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "perf",
  "quote",
@@ -11657,6 +11684,7 @@ dependencies = [
 [[package]]
 name = "zlog"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11673,6 +11701,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "ztracing"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -11683,6 +11712,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
+source = "git+https://github.com/lumashow/gpui?rev=0d8b0925ed9080ec064c067b4727bce2e04aba43#0d8b0925ed9080ec064c067b4727bce2e04aba43"
 
 [[package]]
 name = "zune-core"

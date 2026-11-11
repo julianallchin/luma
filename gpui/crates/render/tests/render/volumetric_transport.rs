@@ -46,16 +46,21 @@ fn scene(pieces: Vec<Piece>) -> Scene {
     }
 }
 
+/// A stock moving head's light through a 43-degree field.
 fn light(gobo: u32) -> FixtureCone {
+    let (cos_beam, cos_field) = (0.975, 0.93);
     FixtureCone {
         position: Vec3::new(0.0, 0.0, 0.15),
         range: 8.0,
         direction: Vec3::Z,
-        cos_beam: 0.975,
+        cos_beam,
         color: Vec3::new(0.2, 0.55, 1.0),
-        intensity: 0.08,
-        cos_field: 0.93,
-        wash: 0.0,
+        intensity: luma_render::photometry::cone_intensity(
+            luma_scene::luminaire::LensClass::Spot.output_lumens(),
+            cos_beam,
+            cos_field,
+        ),
+        cos_field,
         gobo,
         gobo_rotation: 0.31,
         haze_gain: 1.0,
@@ -207,7 +212,6 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
             color: Vec3::from_array(descriptor.light.color),
             intensity: descriptor.light.intensity,
             cos_field: descriptor.light.cos_field,
-            wash: 0.0,
             gobo: (index as u32) % descriptor.light.gobo_modulus,
             gobo_rotation: descriptor.light.gobo_rotation,
             haze_gain: 1.0,
@@ -643,7 +647,6 @@ fn async_viewport_coalesces_in_flight_work_and_presents_the_newest_descriptor() 
 #[test]
 fn broad_grid_resets_colour_and_blackout_without_retaining_light() {
     let mut cone = light(0);
-    cone.wash = 0.9;
     cone.cos_field = 0.5;
     cone.cos_beam = 0.85;
     cone.range = 24.0;
@@ -688,7 +691,6 @@ fn broad_grid_resets_colour_and_blackout_without_retaining_light() {
 #[test]
 fn deterministic_haze_is_independent_of_live_subframe_budget() {
     let mut broad = light(0);
-    broad.wash = 0.9;
     broad.cos_field = 0.5;
     broad.cos_beam = 0.85;
     let mut narrow = light(0);
@@ -788,7 +790,8 @@ fn live_shadow_intervals_agree_with_converged_transport() {
         let p99 = errors[errors.len() * 99 / 100];
         // 0.79-0.85 with a 3/4 m near-source radius; 0.87-2.04 at 1.5/2 m
         // (2026-09-25), where the grid takes more of each broad wash. The
-        // user compared close-ups and saw no difference.
+        // user compared close-ups and saw no difference. Under the fog phase
+        // function, 0.80-2.01 at 1.75/2.5 m (2026-11-09).
         assert!(
             rmse < 2.3 && p99 <= 6.0,
             "{} lost shadow precision: RMSE {rmse:.3}, p99 {p99}",

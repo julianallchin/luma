@@ -14,6 +14,8 @@
 //! [`Luma::sheet_live`], which is where the two hosts part.
 
 use luma_patterns::clip_graph::{ClipGraph, Input, Kind};
+use luma_lib::models::groups::FixtureGroup;
+use luma_lib::services::groups::GroupNames;
 use luma_patterns::Selection;
 use luma_ui::arg::arg_row;
 use luma_ui::arg::color::{ColorArg, ColorArgEditor, ColorArgEvent};
@@ -86,7 +88,7 @@ pub(crate) struct State {
 /// seed and laser element count. `cells` is `None` until the answer lands.
 #[derive(Default)]
 struct Heads {
-    key: Option<(String, String, u64, Option<usize>)>,
+    key: Option<(String, String, Option<usize>)>,
     cells: Option<Rc<[luma_patterns::Cell]>>,
 }
 
@@ -131,7 +133,18 @@ impl State {
 enum Groups {
     NotAsked,
     Loading,
-    Ready(Rc<Vec<SharedString>>),
+    Ready(Rc<Vec<FixtureGroup>>),
+}
+
+impl Groups {
+    /// `selection` by its groups' names, as the field shows it; empty until
+    /// the groups are read.
+    fn spell(&self, selection: &Selection) -> String {
+        match self {
+            Self::Ready(rows) => GroupNames::of_rows(rows).spell(selection),
+            Self::NotAsked | Self::Loading => String::new(),
+        }
+    }
 }
 
 /// Which sheet-owned menu is up. The color editor's two menus are its own.
@@ -200,7 +213,6 @@ pub(super) struct Subject<'a> {
     selection: &'a Selection,
     seed: u64,
     /// The seed the selection resolves with.
-    selection_seed: u64,
     graph: &'a ClipGraph,
     blend: BlendMode,
 }
@@ -267,7 +279,6 @@ impl<'a> Host<'a> {
                     summary: Some(&clip.summary),
                     selection: &core.selection,
                     seed: core.seed,
-                    selection_seed: core.selection_seed.unwrap_or(core.seed),
                     graph: &core.graph,
                     blend: clip.blend,
                 })
@@ -280,7 +291,6 @@ impl<'a> Host<'a> {
                     summary: None,
                     selection: &pattern.selection,
                     seed: pattern.seed,
-                    selection_seed: pattern.seed,
                     graph: &pattern.graph,
                     blend: pattern.blend_mode,
                 })
@@ -502,7 +512,7 @@ fn menu_visibility(sheet: &State, menu: Menu) -> MenuVisibility {
     }
 }
 
-/// Ask for the venue's group names, once.
+/// Ask for the venue's groups, once.
 fn ensure_groups(host: &mut HostMut, cx: &mut Context<Luma>) {
     if !matches!(host.sheet().groups, Groups::NotAsked) {
         return;
@@ -516,13 +526,7 @@ fn ensure_groups(host: &mut HostMut, cx: &mut Context<Luma>) {
         let rows = pending.await;
         this.update(cx, |this, cx| {
             if let Some(sheet) = this.sheet_at(&target) {
-                let names: Vec<SharedString> = rows
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|group| group.name)
-                    .map(SharedString::from)
-                    .collect();
-                sheet.groups = Groups::Ready(Rc::new(names));
+                sheet.groups = Groups::Ready(Rc::new(rows.unwrap_or_default()));
                 cx.notify();
             }
         })
@@ -542,13 +546,11 @@ fn ensure_heads(host: &mut HostMut, cx: &mut Context<Luma>) {
     if !graph.nodes.values().any(|node| node.kind == Kind::Space) {
         return;
     }
-    let seed = subject.selection_seed;
     let selection = subject.selection.clone();
     let elements = graph.laser().map(|laser| laser.count());
     let key = (
         read.venue().to_owned(),
         selection.to_value().to_string(),
-        seed,
         elements,
     );
     let target = read.target();
@@ -563,7 +565,7 @@ fn ensure_heads(host: &mut HostMut, cx: &mut Context<Luma>) {
     cx.spawn(async move |this, cx| {
         let Ok(pending) = this.update(cx, |this, _| {
             this.library
-                .selection_cells(&key.0, &selection, seed, elements)
+                .selection_cells(&key.0, &selection, elements)
         }) else {
             return;
         };
@@ -620,12 +622,16 @@ fn build(host: Host, primary: SharedString, window: &mut Window, cx: &mut Contex
     ));
 
     let groups: Vec<SharedString> = match &host.sheet().groups {
-        Groups::Ready(names) => names.as_ref().clone(),
+        Groups::Ready(rows) => rows
+            .iter()
+            .filter_map(|group| group.name.clone())
+            .map(SharedString::from)
+            .collect(),
         _ => Vec::new(),
     };
-    let expression = subject
-        .as_ref()
-        .map_or_else(String::new, |subject| subject.selection.expression.clone());
+    let expression = subject.as_ref().map_or_else(String::new, |subject| {
+        host.sheet().groups.spell(subject.selection)
+    });
     let selection = cx.new(|cx| {
         GroupExpressionEditor::new(
             groups.iter().cloned(),
@@ -638,8 +644,8 @@ fn build(host: Host, primary: SharedString, window: &mut Window, cx: &mut Contex
     subs.push(cx.subscribe(
         &selection,
         move |this: &mut Luma, _, event: &ExpressionEvent, cx| {
-            let ExpressionEvent::Committed(expression) = event.clone();
-            this.selection_live(cx, |selection| selection.expression = expression.clone());
+            let ExpressionEvent::Committed(typed) = event.clone();
+            this.type_selection(&typed, cx);
         },
     ));
 
@@ -674,8 +680,9 @@ fn resync(host: &mut HostMut, window: &mut Window, cx: &mut Context<Luma>) {
         return;
     };
     let name = (subject.name.to_owned(), subject.placeholder());
-    let (blend, expression) = (subject.blend, subject.selection.expression.clone());
+    let (blend, selection) = (subject.blend, subject.selection.clone());
     let graph = subject.graph.clone();
+    let expression = host.sheet().groups.spell(&selection);
     let Some(built) = host.sheet().built.as_mut() else {
         return;
     };
@@ -929,18 +936,50 @@ impl Luma {
         self.sheet_live(cx, |clip| edit(&mut clip.selection));
     }
 
+    /// Take what was typed in the selection field: group names, joined by
+    /// `|`, become the ids of the groups they name. A name the venue has no
+    /// group for changes nothing, says why, and the field goes back to what
+    /// the selection is.
+    fn type_selection(&mut self, typed: &str, cx: &mut Context<Self>) {
+        let Some(host) = self.sheet_host() else {
+            return;
+        };
+        let Groups::Ready(rows) = &host.sheet().groups else {
+            return;
+        };
+        match GroupNames::of_rows(rows).parse(typed) {
+            Ok(chosen) => self.selection_live(cx, |selection| *selection = chosen.clone()),
+            Err(error) => {
+                self.with_sheet(cx, |sheet| {
+                    if let Some(built) = sheet.built.as_mut() {
+                        built.synced_selection = String::new();
+                    }
+                });
+                self.report_failure("The selection was not changed", error, cx);
+            }
+        }
+    }
+
     /// Open the fixture picker on the subject's selection.
     ///
     /// The sheet reads out what the dialog cannot see for itself: what the
-    /// selection currently says, and the venue's group vocabulary the
-    /// expression field already loaded for its autocomplete — asking for it
-    /// twice would be a second load of the same list.
+    /// selection currently is, and the venue's groups the selection field
+    /// already loaded for its autocomplete — asking for them twice would be a
+    /// second load of the same list.
     fn pick_fixtures(&mut self, cx: &mut Context<Self>) {
         let Some(host) = self.sheet_host() else {
             return;
         };
         let groups = match &host.sheet().groups {
-            Groups::Ready(names) => names.as_ref().clone(),
+            Groups::Ready(rows) => rows
+                .iter()
+                .filter_map(|group| {
+                    Some(crate::fixture_picker::Group {
+                        id: group.id.clone().into(),
+                        name: group.name.clone()?.into(),
+                    })
+                })
+                .collect(),
             Groups::NotAsked | Groups::Loading => Vec::new(),
         };
         let selection = host

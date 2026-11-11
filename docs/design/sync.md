@@ -43,19 +43,24 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   Deferring only fixes the order. A parent the sync rules never ship is
   refused at the commit and refused again on every retry, so a rule that
   reaches a child reaches its parent too: the tracks behind a shared score.
-- Sign-in is required to write. Every synced row has an owner, and there is no
-  signed-out owner. The commands that write an account's own rows — importing
-  tracks, agent threads, sharing and joining venues — ask
-  `AppServices::require_session`; venue content is written through
-  `VenueAccess`, which admits by the local view `auth_venue_access`
-  (migration `20261109120000_one_venue_standing.sql`), and that view gives a
-  signed-out principal no `edit`. Signed out, the guest namespace's venues —
-  the ones nobody owns — still open for reading. A clip carries its score's
-  `uid`, and `clips.uid` is NOT NULL, so a score nobody owns cannot hold one.
-  Reading a library already on this machine needs nothing.
+- Sign-in is required to read or write the library. Every synced row has an
+  owner, and a signed-in account is the only principal: signed out is a state
+  of the host, in which only signing in works. The commands on an account's
+  own rows — listing and importing tracks, listing venues, agent threads,
+  sharing and joining venues — ask `AppServices::require_session`; venue
+  content goes through `VenueAccess` and a track's through
+  `VisibleTrackAccess`, which take the signed-in principal from the admission
+  row in their own transaction and refuse without one. `VenueAccess` then
+  admits by the local view `auth_venue_access` (migration
+  `20261109120000_one_venue_standing.sql`). A clip carries its score's `uid`,
+  and `clips.uid` is NOT NULL, so a score nobody owns cannot hold one.
 
-  `agent_thread_messages` still keeps a CHECK that admits a `signed-out`
-  `principal_key` for the rows written before the rule existed.
+  A library from before the rule may still hold rows whose `uid` is NULL. They
+  are left where they are and no command reaches them. The schema still has
+  room for them: the local views `auth_venue_access` and `auth_visible_tracks`
+  keep a branch for an admission with no `active_uid`, and
+  `agent_thread_messages` keeps a `principal_key` column whose CHECK admits
+  `signed-out`.
 
 ## Score model
 
@@ -64,7 +69,7 @@ A score is rows.
 | table | columns |
 |---|---|
 | `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
-| `clips` | id, uid, score_id, name, graph_json, start, duration, seed (TEXT, decimal u64), selection_seed (TEXT, nullable), selection_json, z_index, blend_mode, created_at, updated_at; `graph` and `inputs_json` are retired form columns, written empty and never read |
+| `clips` | id, uid, score_id, name, graph_json, start, duration, seed (TEXT, decimal u64), selection_json, z_index, blend_mode, created_at, updated_at; `graph` and `inputs_json` are retired form columns, written empty and never read; `selection_seed` (TEXT, nullable) is retired too and never read |
 
 A clip key is unique inside its score, not across the library — two scores
 may each have a `flash`. Sync addresses every row by one global `id`, so

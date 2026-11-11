@@ -45,27 +45,50 @@ pub struct FixtureDefinition {
     #[serde(rename = "Mode", default)]
     pub modes: Vec<Mode>,
     pub physical: Option<Physical>,
+    /// Set on a definition lowered from the fixture library (`lib:<id>`):
+    /// the spec's build and travel, which the QLC+ fields cannot carry.
+    #[serde(skip)]
+    pub library: Option<std::sync::Arc<crate::fixtures::library::Source>>,
 }
 
 /// The QXF `<Type>` of an ILDA laser projector: a fixture Luma draws beams
 /// with from laser clips, through a point stream rather than DMX.
 pub const LASER_PROJECTOR: &str = "Laser Projector";
 
+/// The bundled definition of the ILDA laser projector: the one fixture Luma
+/// offers that the fixture library does not carry.
+pub const LASER_PROJECTOR_PATH: &str = "Generic/Generic-ILDA-Laser-Projector.qxf";
+
 impl FixtureDefinition {
+    /// Whether Luma can drive `mode`'s light: false for a library mode it
+    /// cannot light (its colour only through presets of unknown colour).
+    /// QLC+ definitions are taken as they come.
+    pub fn supports_mode(&self, mode: &str) -> bool {
+        self.library
+            .as_ref()
+            .and_then(|source| source.light.get(mode))
+            .is_none_or(|light| light.lights())
+    }
+
     /// Whether this is an ILDA laser projector ([`LASER_PROJECTOR`]).
     pub fn is_laser_projector(&self) -> bool {
         self.type_ == LASER_PROJECTOR
     }
 
-    /// The full pan and tilt travel in degrees, from the profile's focus
-    /// block: 540 and 270 when it says nothing. Centred on home, so a head
-    /// reaches half of each either way.
-    pub fn focus_range(&self) -> [f32; 2] {
+    /// Pan and tilt travel, `[lo, hi]` degrees from home. A library fixture's
+    /// is its spec's joint range, which can be asymmetric. A QLC+ profile's
+    /// focus block gives only the full sweep (540 and 270 when it says
+    /// nothing), centred on home.
+    pub fn travel(&self) -> [[f32; 2]; 2] {
+        if let Some(travel) = self.library.as_ref().map(|l| l.travel) {
+            return travel;
+        }
         let focus = self.physical.as_ref().and_then(|p| p.focus.as_ref());
         [
-            focus.and_then(|f| f.pan_max).unwrap_or(540) as f32,
-            focus.and_then(|f| f.tilt_max).unwrap_or(270) as f32,
+            focus.and_then(|f| f.pan_max).unwrap_or(540),
+            focus.and_then(|f| f.tilt_max).unwrap_or(270),
         ]
+        .map(|full| [-(full as f32) / 2.0, full as f32 / 2.0])
     }
 
     /// Whether `mode` has a pan channel and a tilt channel.
@@ -111,10 +134,17 @@ pub struct Channel {
     pub group: Option<Group>,
     #[serde(rename = "Capability", default)]
     pub capabilities: Vec<Capability>,
+    /// Set on a channel lowered from the fixture library: the byte of a
+    /// resolved value it is, which says what it is without any name sniffing.
+    #[serde(skip)]
+    pub lowered: Option<Box<crate::fixtures::library::Lowered>>,
 }
 
 impl Channel {
     pub fn get_type(&self) -> ChannelType {
+        if let Some(lowered) = &self.lowered {
+            return lowered.channel_type();
+        }
         if let Some(preset) = &self.preset {
             if preset.starts_with("Intensity") {
                 return ChannelType::Intensity;
@@ -208,6 +238,9 @@ impl Channel {
     }
 
     pub fn get_colour(&self) -> ChannelColour {
+        if let Some(lowered) = &self.lowered {
+            return lowered.channel_colour();
+        }
         if let Some(preset) = &self.preset {
             match preset.as_str() {
                 "IntensityRed" => return ChannelColour::Red,
@@ -341,6 +374,14 @@ pub struct Bulb {
     pub type_: Option<String>,
     #[serde(rename = "@Lumens")]
     pub lumens: Option<u32>,
+    /// Lumens out of the whole fixture, from a datasheet. Not QLC+'s: a
+    /// library fixture lowers its `optics.lumens` here.
+    #[serde(
+        rename = "@OutputLumens",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_lumens: Option<f32>,
     #[serde(rename = "@ColourTemperature")]
     pub colour_temperature: Option<u32>,
 }
@@ -402,7 +443,13 @@ pub struct Layout {
 pub struct FixtureEntry {
     pub manufacturer: String,
     pub model: String,
-    pub path: String, // Relative to fixtures root, e.g., "Acme/Dotline180.qxf"
+    /// What a patch row stores in `fixture_path`: a QLC+ file relative to the
+    /// fixtures root (`Acme/Dotline180.qxf`), or `lib:<id>`.
+    pub path: String,
+    /// A library fixture's index entry: its modes with their footprints and
+    /// how well it has been checked. `None` for a QLC+ file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<crate::fixtures::library::Entry>,
 }
 
 /// A fixture that has been patched to a venue
@@ -434,6 +481,7 @@ pub struct PatchedFixture {
 impl From<&FixtureDefinition> for luma_scene::definition::Definition {
     fn from(def: &FixtureDefinition) -> Self {
         Self {
+            built: def.library.as_ref().map(|l| l.built.clone()),
             kind: def.type_.clone(),
             modes: def
                 .modes
@@ -470,6 +518,10 @@ impl From<&FixtureDefinition> for luma_scene::definition::Definition {
                         // go here when the library carries them.
                         radius_m: None,
                         offset_m: None,
+                    }),
+                    bulb: p.bulb.as_ref().map(|b| luma_scene::definition::Bulb {
+                        lumens: b.lumens.map(|l| l as f32),
+                        output_lumens: b.output_lumens,
                     }),
                 }),
         }

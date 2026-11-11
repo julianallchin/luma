@@ -14,7 +14,7 @@ Luma keeps two kinds of data apart:
 1. **Your library.** Tracks, scores, clips and pattern graphs. This data does not refer to DMX addresses.
 2. **Venues.** A venue records the fixtures in one room, their DMX addresses, their positions and their groups.
 
-A score belongs to one track and one venue. Its clips select fixtures by group name. When the score plays, Luma resolves the group names against the venue.
+A score belongs to one track and one venue. Its clips select the venue's groups, not fixtures. When the score plays, Luma lights the fixtures that are in those groups.
 
 A window shows one venue in one of three modes: **Rig** builds the room, **Arrange** edits a score on its track's timeline, and **Live** follows the DJ and plays the venue's live patterns.
 

@@ -75,12 +75,15 @@ impl RendererProfile {
 pub struct FrameTimings {
     /// Optional overlapping pass brackets, enabled by LUMA_PROFILE_DETAIL=1.
     pub passes: Vec<crate::pass_profile::GpuPassTiming>,
+    /// The exposure the camera had reached when this frame finished, in
+    /// stops, compensation included. `None` before any frame has been through
+    /// the post chain.
+    pub exposure_ev: Option<f32>,
     /// CPU phases from the same submission; durations serialize as secs/nanos.
     pub cpu: CpuSpans,
     /// The whole frame on the GPU timeline: first render pass start through
     /// composite completion, the composite pass being the sink every other
-    /// pass feeds. Within ~10% of the wall clock around submit → queue drained
-    /// on the workloads in `examples/timestamp_lie.rs`.
+    /// pass feeds.
     pub gpu_total_ms: f64,
     /// Scene completion through the last haze pass's completion. Zero when haze did not run — and also when it
     /// ran entirely alongside the scene pass and finished first, in which case

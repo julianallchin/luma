@@ -1,9 +1,9 @@
 @group(2) @binding(0) var fog_grid: texture_3d<f32>;
 
-// The compute kernels integrate every beam deterministically and share
-// distant broad-wash lighting in a 3D grid; only the washes' source regions
-// remain in their per-pixel candidate list, and the complementary smooth
-// source/far windows sum to one. The fragment pass is the exhaustive
+// The compute kernels integrate every beam deterministically and share each
+// beam's light past its handover in a 3D grid (`fog_grid.rs`); only the part
+// of a beam before it remains in the per-pixel candidate list, and the
+// complementary smooth source/far windows sum to one. The fragment pass is the exhaustive
 // reference's MIS estimator.
 
 @vertex
@@ -39,7 +39,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
 }
 
 // The light list of the compute kernels: the second mask plane, which drops
-// broad washes beyond their source region (the grid carries those).
+// each light past its handover (the grid carries it there).
 fn native_lights(frag: vec2<f32>) -> LightCursor {
     var cursor = lights_along(frag * haze.tiles.xy);
     cursor.base += light_index_params.grid.x * light_index_params.grid.y * LIGHT_INDEX_WORDS;

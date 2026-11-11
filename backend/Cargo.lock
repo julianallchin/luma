@@ -2313,7 +2313,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "luma"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
@@ -2329,6 +2329,7 @@ dependencies = [
  "libc",
  "lofty",
  "log",
+ "luma-fixture",
  "luma-patterns",
  "luma-render",
  "luma-scene",
@@ -2360,6 +2361,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "luma-fixture"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "luma-patterns"
 version = "0.1.0"
 dependencies = [
@@ -2381,6 +2391,7 @@ dependencies = [
  "half",
  "image",
  "io-surface",
+ "luma-fixture",
  "luma-scene",
  "objc2",
  "objc2-io-surface",
@@ -2401,6 +2412,7 @@ dependencies = [
  "fixture-kinematics",
  "glam",
  "gltf",
+ "luma-fixture",
  "serde",
  "serde_json",
 ]

@@ -4,8 +4,8 @@
 // progressive MIS estimator. The same density, photometry, gobo and
 // extinction model feed both integrators.
 
-// The compute kernels: the far-field grid carries broad washes beyond their
-// source region and camera transmittance, and no ray is jittered.
+// The compute kernels: the far-field grid carries each beam past its
+// handover and camera transmittance, and no ray is jittered.
 override GRID_FOG: bool = false;
 
 // Lit-interval cache (`docs/design/haze-lit-interval-cache.md`). The shadow
@@ -38,7 +38,9 @@ struct LightRest {
     color: vec3<f32>,
     intensity: f32,
     cos_field: f32,
-    wash: f32,
+    // Where the shared fog grid starts to carry this cone's haze, metres from
+    // its lens (`fog_grid.rs`).
+    handover: f32,
     gobo: f32,
     gobo_rotation: f32,
     // Shadow-map layer for this cone, or negative when it has none. Must match
@@ -53,8 +55,9 @@ struct LightRest {
     // Virtual apex to lens plane, metres; zero for a point source. The core's
     // `position` is the lens centre (`fixture_light.wgsl::lens_cos_angle`).
     lens_distance: f32,
+    // Where this cone's cells start in `panel_data`, or zero (`panel.wgsl`).
+    panel: f32,
     // Tail padding to the 80-byte stride; a beam-waist profile would take it.
-    lens_reserved0: f32,
     lens_reserved1: f32,
     lens_reserved2: f32,
 };
@@ -67,7 +70,7 @@ struct Haze {
     // x: frame index (jitter walk), y: accumulation weight (1/subframes),
     // z: near clamp, w: beam gain.
     tuning: vec4<f32>,
-    // x: white leak, y: phase g, zw: this target's height and width in px.
+    // x: white leak, y: unused, zw: this target's height and width in px.
     transport: vec4<f32>,
     // xy: this pass's pixel → full-resolution pixel scale (the light index is
     // defined in full-res space), z: 2 on the first grid pass, 1 otherwise;
@@ -110,6 +113,8 @@ struct FixtureShadowMatrix {
 @group(0) @binding(10) var medium_cache: texture_3d<f32>;
 @group(0) @binding(11) var shadow_ranges: texture_2d_array<f32>;
 @group(0) @binding(12) var shadow_ranges_extra: texture_2d_array<f32>;
+// The cells behind the cones that a face of cells casts (`panel.rs`).
+@group(0) @binding(13) var<storage, read> panel_data: array<vec4<f32>>;
 
 @group(3) @binding(0) var camera_fog: texture_3d<f32>;
 
@@ -250,16 +255,6 @@ fn linear_view_depth(raw_depth: f32) -> f32 {
     return near * far / max(near + raw_depth * (far - near), 1e-5);
 }
 
-/// Henyey-Greenstein, normalised so isotropic (g=0) == 1 rather than 1/4pi:
-/// the "intensity" here is a 0..1 dimmer, not radiance in watts, so the
-/// absolute scale lives in the beam gain and only the angular shape matters.
-fn henyey_greenstein(cos_t: f32, g: f32) -> f32 {
-    let g2 = g * g;
-    let denom = 1.0 + g2 - 2.0 * g * cos_t;
-    let inverse = inverseSqrt(max(denom, 1e-4));
-    return (1.0 - g2) * inverse * inverse * inverse;
-}
-
 // Progressive best-candidate rank tile. Ranks are visited in a toroidal
 // farthest-point order, giving every prefix blue-noise spacing. A per-tile
 // Cranley rotation breaks the visible 8x8 repeat without changing that local
@@ -348,6 +343,14 @@ fn scene_ray(frag: vec2<f32>) -> SceneRay {
     return SceneRay(ray_dir, hit_dist, view_depth, j, MediumRay(), uv, medium_lighting_span(haze.medium, haze.camera_pos.xyz, ray_dir, haze.shadow.w));
 }
 
+// The shared fog grid's share of a light's haze `distance` metres from its
+// lens: none inside the light's `handover`, all of it past
+// `FOG_HANDOVER_BAND` times that (`fog_grid.rs`). The per-pixel passes carry
+// the rest.
+fn grid_share(handover: f32, distance: f32) -> f32 {
+    return smoothstep(handover, handover * FOG_HANDOVER_BAND, distance);
+}
+
 fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
     let ray_dir = ray.dir;
     let hit_dist = ray.hit_dist;
@@ -356,8 +359,8 @@ fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
     let oc = haze.camera_pos.xyz - core.position;
     let b = dot(oc, ray_dir);
     let oo = dot(oc, oc);
-    let near_only = GRID_FOG && light_rest[li].wash >= FOG_BROAD_WASH && light_rest[li].gobo < 0.5;
-    let range = select(core.range, min(core.range, FOG_SOURCE_OUTER), near_only);
+    // Past its handover the shared grid carries the light.
+    let range = select(core.range, min(core.range, light_rest[li].handover * FOG_HANDOVER_BAND), GRID_FOG);
     let disc = b * b - (oo - range * range);
     if disc <= 0.0 {
         return vec2<f32>(0.0);
@@ -455,6 +458,22 @@ fn clip_to_lens_plane(t_a: ptr<function, f32>, t_b: ptr<function, f32>, axial: f
     return true;
 }
 
+/// The emitted spectrum of light `li`: the saturated colour plus a small
+/// broadband leak — a real fixture is a white source behind an imperfect
+/// filter, plus lens glare. White-hot is EMERGENT from this: near the source
+/// the leak's absolute radiance is enormous, all channels blow out, and AgX
+/// rolls the core to white; mid-beam the leak is invisible and the true
+/// colour shows. No radiance gate, no white mix.
+fn beam_tint(li: u32) -> vec3<f32> {
+    return mix(light_rest[li].color, vec3<f32>(1.0), haze.transport.x);
+}
+
+/// The same spectrum for a face of cells, whose light at a point is the
+/// panel's own (`panel.wgsl`): its colour, and how much of it there is.
+fn panel_tint(light: vec4<f32>) -> vec3<f32> {
+    return mix(light.rgb, vec3<f32>(light.a), haze.transport.x);
+}
+
 /// Single-scattering radiance this ray receives from light `li`, already
 /// multiplied by sigma. Returns zero when the ray misses the light's
 /// cone∩ball, or the span it does cross is occluded by geometry.
@@ -501,16 +520,9 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
     let th_b = atan((t_b - delta) / h);
     let d_th = th_b - th_a;
 
-    let g = haze.transport.y;
     var acc = vec3<f32>(0.0);
 
-    // Emitted spectrum: the saturated colour plus a small broadband leak —
-    // a real fixture is a white source behind an imperfect filter, plus
-    // lens glare. White-hot is EMERGENT from this: near the source the
-    // leak's absolute radiance is enormous, all channels blow out, and AgX
-    // rolls the core to white; mid-beam the leak is invisible and the true
-    // colour shows. No radiance gate, no white mix.
-    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    let tint = beam_tint(li);
 
     // Decorrelate jitter across lights so overlapping cones dither
     // independently — correlated jitter turns overlaps into stripes.
@@ -536,6 +548,22 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         let q = oc + ray_dir * t;
         let d2 = dot(q, q);
         let dist = sqrt(d2);
+        if rest.panel > 0.5 {
+            // A face of cells: the panel's light here, scattered from
+            // where on the face it comes.
+            let cells = panel_scatter(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q, ray_dir);
+            if cells.a <= 0.0 {
+                continue;
+            }
+            let world = haze.camera_pos.xyz + ray_dir * t;
+            var radiance = rest.intensity * beam_range_falloff(dist, core.range) * beam_gain;
+            if haze.shadow.x > 0.0 {
+                radiance *= fixture_shadow_visibility(world, li);
+            }
+            acc += panel_tint(cells) * (radiance * haze_density_at(world)
+                * transport_transmittance(ray, li, t, world) * mis_w);
+            continue;
+        }
         let cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, dist);
 
         let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
@@ -568,7 +596,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         }
         let nz = haze_density_at(sample_world);
         // dot(sample->source, rayDir) = -(b + t)/dist, since q = oc + t·rayDir.
-        let phase = henyey_greenstein(-(b + t) / max(dist, 1e-4), g);
+        let phase = haze_phase(-(b + t) / max(dist, 1e-4));
         acc += tint * (radiance * phase * nz * transport_transmittance(ray, li, t, haze.camera_pos.xyz + ray.dir * t) * mis_w);
     }
 
@@ -584,8 +612,15 @@ const DETAIL_CLOUDINESS: f32 = 0.5;
 // size. A plain beam in gentle haze is capped at `haze.quality.x` pieces: its
 // integrand is smooth apart from the cloud field's low contrast, and the cap
 // keeps long spans from paying for detail the image cannot show.
+// Pieces for a span of the equiangular angle about a source: along the ray
+// the direction from the source turns by that angle, and the haze's forward
+// peak (`haze_phase.rs`) with it.
+fn angular_pieces(th0: f32, th1: f32) -> f32 {
+    return (th1 - th0) / 0.4;
+}
+
 fn quadrature_pieces(a: f32, b: f32, th0: f32, th1: f32) -> u32 {
-    let angular = (th1 - th0) / 0.4;
+    let angular = angular_pieces(th0, th1);
     let cloud = (b - a) / max(haze.medium.shape.y * 0.5, 0.1);
     let full = clamp(u32(ceil(max(cloud, angular))), 1u, 32u);
     if haze.medium.shape.x >= DETAIL_CLOUDINESS { return full; }
@@ -631,10 +666,17 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
     let h = sqrt(max(dot(oc, oc) - delta * delta, haze.tuning.z));
     let th0 = atan((a - delta) / h);
     let th1 = atan((b - delta) / h);
-    let pieces = max(quadrature_pieces(a, b, th0, th1), gobo_pieces(li, ray, a, b));
+    var pieces = max(quadrature_pieces(a, b, th0, th1), gobo_pieces(li, ray, a, b));
+    // A face of cells is integrated in its own colours, finely enough to
+    // resolve the cells the ray passes.
+    let panel = rest.panel > 0.5;
+    var panel_sum = vec3<f32>(0.0);
+    if panel {
+        pieces = max(pieces, panel_pieces(rest.panel, rest.direction, oc + ray.dir * a, oc + ray.dir * b));
+    }
     let nodes = array<f32, 4>(-0.8611363116, -0.3399810436, 0.3399810436, 0.8611363116);
     let weights = array<f32, 4>(0.3478548451, 0.6521451549, 0.6521451549, 0.3478548451);
-    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    let tint = beam_tint(li);
     var sum = 0.0;
     let width = (th1 - th0) / f32(pieces);
     // The two extinction terms — camera transmittance and source optical depth —
@@ -661,9 +703,19 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
             let q = oc + ray.dir * t;
             let d2 = dot(q, q);
             let distance = sqrt(d2);
+            if panel {
+                let cells = panel_scatter(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q, ray.dir);
+                let world = haze.camera_pos.xyz + ray.dir * t;
+                var value = beam_range_falloff(distance, core.range)
+                    * (1.0 - grid_share(rest.handover, distance))
+                    * haze_density_at(world) * mix(left_field, right_field, nodes[j] * 0.5 + 0.5);
+                if traced { value *= stage_visibility(world, core.position); }
+                panel_sum += panel_tint(cells) * (value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j]);
+                continue;
+            }
             let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
-            let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
-            let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5);
+            let phase = haze_phase(-dot(q, ray.dir) / max(distance, 1e-4));
+            let source_weight = 1.0 - grid_share(rest.handover, distance);
             let world = haze.camera_pos.xyz + ray.dir * t;
             let field = mix(left_field, right_field, nodes[j] * 0.5 + 0.5);
             var value = angular * phase * beam_range_falloff(distance, core.range) * source_weight
@@ -677,6 +729,9 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
             sum += value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j];
         }
         left_field = right_field;
+    }
+    if panel {
+        return panel_sum * (rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
     }
     return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
 }

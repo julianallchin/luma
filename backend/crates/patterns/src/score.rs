@@ -12,12 +12,7 @@ pub struct Clip {
     pub start: f64,
     pub duration: f64,
     pub seed: u64,
-    /// Historical clips used independent random draws for resolving the
-    /// selection (which side an `^` takes) and animating it. New clips use
-    /// `seed` for both unless explicitly supplied.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection_seed: Option<u64>,
-    /// Group expression resolved by the host; never physical fixture ids.
+    /// The venue's groups, resolved by the host; never physical fixture ids.
     #[serde(default = "all_selection")]
     pub selection: crate::Selection,
     #[serde(default)]
@@ -73,7 +68,6 @@ impl Score {
     /// and still play the rest of the score.
     pub fn validate_clip(base: &Library, id: &str, clip: &Clip) -> Result<()> {
         crate::graph::identity(id)?;
-        clip.selection.validate()?;
         let name = clip.name.trim();
         let prefix = |error: Error| {
             if name.is_empty() {
@@ -149,15 +143,6 @@ impl Score {
         }
         changed
     }
-    pub fn to_json(&self, base: &Library) -> Result<String> {
-        self.validate(base)?;
-        serde_json::to_string_pretty(self).map_err(|error| Error(error.to_string()))
-    }
-    pub fn from_json(base: &Library, json: &str) -> Result<Self> {
-        let score: Self = serde_json::from_str(json).map_err(|error| Error(error.to_string()))?;
-        score.validate(base)?;
-        Ok(score)
-    }
 }
 
 /// One writer's changes to a score, against the copy it read: each clip it
@@ -224,7 +209,6 @@ mod tests {
                         start,
                         duration: end - start,
                         seed: 0,
-                        selection_seed: None,
                         selection: crate::Selection::all(),
                         z_index: z,
                         blend_mode: crate::BlendMode::Replace,

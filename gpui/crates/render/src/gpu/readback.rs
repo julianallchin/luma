@@ -115,6 +115,8 @@ pub(super) struct PendingProfile {
     pub(super) passes: Vec<(&'static str, u32, u32)>,
     /// `PassQueries::moved`.
     pub(super) moved: Vec<(u32, u32)>,
+    /// The post chain's exposure state, read back behind the timestamps.
+    pub(super) exposure: wgpu::Buffer,
 }
 
 impl PendingProfile {
@@ -135,6 +137,13 @@ impl PendingProfile {
             &self.readback,
             0,
             u64::from(self.query_count) * 8,
+        );
+        encoder.copy_buffer_to_buffer(
+            &self.exposure,
+            0,
+            &self.readback,
+            self.readback.size() - crate::post::EXPOSURE_READBACK,
+            crate::post::EXPOSURE_READBACK,
         );
         self.queue.submit([encoder.finish()]);
         let (mapped_tx, mapped) = mpsc::sync_channel(1);
@@ -286,14 +295,7 @@ impl PendingFrame {
         /// genuinely slow, and a false positive here would look like a driver
         /// bug.
         const DEADLINE: Duration = Duration::from_secs(30);
-        // Exhaustive offline references can exceed the live watchdog on a
-        // laptop. Explicit diagnostic override; live asynchronous rendering
-        // does not use this blocking readback path.
-        let timeout = std::env::var("LUMA_READBACK_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .map_or(DEADLINE, |v| Duration::from_secs(v.clamp(30, 600)));
-        let deadline = Instant::now() + timeout;
+        let deadline = Instant::now() + DEADLINE;
         loop {
             device.poll(wgpu::PollType::Poll)?;
             if let Some(frame) = self.try_complete()? {
@@ -301,7 +303,7 @@ impl PendingFrame {
             }
             anyhow::ensure!(
                 Instant::now() < deadline,
-                "the GPU did not return a frame within {timeout:?}"
+                "the GPU did not return a frame within {DEADLINE:?}"
             );
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -347,6 +349,9 @@ impl PendingFrame {
                 *timestamp =
                     u64::from_ne_bytes(bytes.try_into().expect("timestamp is eight bytes"));
             }
+            let exposure_ev = crate::post::exposure_read_back(
+                &view[view.len() - crate::post::EXPOSURE_READBACK as usize..],
+            );
             drop(view);
             profile.readback.unmap();
             for &(base, sample) in &profile.moved {
@@ -415,6 +420,7 @@ impl PendingFrame {
                     .collect::<anyhow::Result<Vec<_>>>()?;
                 Some(FrameTimings {
                     passes,
+                    exposure_ev,
                     cpu: self.cpu,
                     gpu_total_ms: span(start, composite_end),
                     gpu_volumetric_ms: if haze_ran {

@@ -212,8 +212,8 @@ impl Rig {
     }
 
     /// A corner block bolted to the end of `parent`, and nothing else. It is a
-    /// piece, not a run: the thing the doc's "one universe per structure" claim
-    /// hangs on.
+    /// piece, not a run: the thing the doc's "one block per straight run"
+    /// claim hangs on.
     fn corner(mut self, id: &str, parent: &str, along: f64) -> Rig {
         self.piece(id, NodeKind::Piece, parent, along);
         self
@@ -426,11 +426,11 @@ fn addresses_within_a_run_are_contiguous() {
 }
 
 // ---------------------------------------------------------------------------
-// One universe per run
+// Runs pack
 // ---------------------------------------------------------------------------
 
 #[test]
-fn each_run_gets_a_universe_of_its_own() {
+fn runs_that_fit_share_a_universe_one_block_after_another() {
     let rig = Rig::new()
         .run("upstage")
         .run("downstage")
@@ -438,15 +438,57 @@ fn each_run_gets_a_universe_of_its_own() {
         .fixture("u2", "upstage", 1.0, 8)
         .fixture("d1", "downstage", 0.0, 8);
     let allocation = rig.allocate();
+    assert_disjoint(&allocation);
 
+    let universe = at(&allocation, "u1").universe();
+    for id in ["u2", "d1"] {
+        assert_eq!(
+            at(&allocation, id).universe(),
+            universe,
+            "a rig that fits in one universe uses one"
+        );
+    }
+    // Each run is a block, and one starts where the other ended: the three
+    // fixtures cover the first 24 channels with the run's two side by side.
     assert_eq!(
-        at(&allocation, "u1").universe(),
-        at(&allocation, "u2").universe()
+        at(&allocation, "u2").address(),
+        at(&allocation, "u1").last() + 1
     );
-    assert_ne!(
-        at(&allocation, "u1").universe(),
-        at(&allocation, "d1").universe(),
-        "a data fault on one truss must not reach the other"
+    let last = ["u1", "u2", "d1"]
+        .iter()
+        .map(|id| at(&allocation, id).last())
+        .max();
+    assert_eq!(last, Some(24));
+}
+
+#[test]
+fn a_run_that_does_not_fit_what_is_left_rolls_and_the_next_follows_it() {
+    let mut rig = Rig::new().run("first").run("second").run("third");
+    for index in 0..10 {
+        rig = rig.fixture(&format!("a{index}"), "first", f64::from(index), 40);
+    }
+    for index in 0..5 {
+        rig = rig.fixture(&format!("b{index}"), "second", f64::from(index), 40);
+    }
+    rig = rig.fixture("c0", "third", 0.0, 8);
+    let allocation = rig.allocate();
+    assert_disjoint(&allocation);
+
+    let first = at(&allocation, "a0").universe();
+    let second = at(&allocation, "b0").universe();
+    assert_ne!(first, second, "200 channels do not fit after 400");
+    for index in 0..5 {
+        assert_eq!(
+            at(&allocation, &format!("b{index}")).universe(),
+            second,
+            "a run rolls whole"
+        );
+    }
+    // The run after the rolled one carries on behind it, not in a third.
+    assert_eq!(at(&allocation, "c0").universe(), second);
+    assert_eq!(
+        at(&allocation, "c0").address(),
+        at(&allocation, "b4").last() + 1
     );
 }
 
@@ -556,17 +598,20 @@ fn straight_corner_straight_is_two_runs_and_two_blocks() {
     // The far side of the corner does not.
     assert_eq!(run_of("wing-1").as_deref(), Some("wing"));
 
-    let upstage = at(&allocation, "up-1").universe();
-    let wing = at(&allocation, "wing-1").universe();
-    assert_ne!(
-        upstage, wing,
-        "a corner-connected truss is a second run, so it takes a second universe"
-    );
-    for id in ["up-2", "hook"] {
-        assert_eq!(at(&allocation, id).universe(), upstage);
+    // A corner-connected truss is a second run, so it is a second block:
+    // every fixture on the first is addressed before any on the second.
+    let universe = at(&allocation, "up-1").universe();
+    let order = order_in(&allocation, universe);
+    let place = |id: &str| {
+        order
+            .iter()
+            .position(|placed| *placed == id)
+            .unwrap_or_else(|| panic!("{id} is in the first universe"))
+    };
+    for upstage in ["up-1", "up-2", "hook"] {
+        assert!(place(upstage) < place("wing-1"));
     }
-    assert_eq!(at(&allocation, "wing-2").universe(), wing);
-    assert_eq!(order_in(&allocation, wing), ["wing-1", "wing-2"]);
+    assert_eq!(place("wing-2"), place("wing-1") + 1);
 }
 
 #[test]
@@ -742,11 +787,11 @@ fn the_input_order_of_the_fixture_list_does_not_reach_the_answer() {
 
 /// The bug two occupancies made possible: an offer that the door refuses.
 ///
-/// The rig is what one-at-a-time adds actually write — every fixture packed
-/// into universe 1 in creation order, nobody having auto-patched since — while
-/// the rule would put the second run in universe 2. An offer computed against
-/// the rule alone lands in the hole the rule left in universe 1, which a stored
-/// row is sitting in, and `services::patch::admit` throws it out.
+/// The rig is stored the other way round from the rule — the second run's
+/// fixtures first, nobody having auto-patched since — so the rule would put
+/// every fixture somewhere a different stored row is sitting. An offer
+/// computed against the rule alone lands on one of those rows, and
+/// `services::patch::admit` throws it out.
 #[test]
 fn next_addresses_never_offers_a_stored_slot() {
     let mut rig = Rig::new().run("bar").run("wash");
@@ -756,10 +801,10 @@ fn next_addresses_never_offers_a_stored_slot() {
     for index in 0..4 {
         rig = rig.fixture(&format!("wash-{index}"), "wash", f64::from(index), 16);
     }
-    // Packed sequentially into universe 1, the way the add dialog writes them.
-    for (index, id) in (0..8)
-        .map(|i| format!("bar-{i}"))
-        .chain((0..4).map(|i| format!("wash-{i}")))
+    // Packed sequentially into universe 1, the second run first.
+    for (index, id) in (0..4)
+        .map(|i| format!("wash-{i}"))
+        .chain((0..8).map(|i| format!("bar-{i}")))
         .enumerate()
     {
         rig = rig.stored(
@@ -777,9 +822,12 @@ fn next_addresses_never_offers_a_stored_slot() {
     // The rule really does disagree with the rows — otherwise this test would
     // pass for the wrong reason.
     assert_ne!(
-        at(&rig.allocate(), "wash-0").universe(),
-        1,
-        "the rule puts the second run in its own universe; the rows do not"
+        Some(at(&rig.allocate(), "wash-0")),
+        rig.fixtures
+            .iter()
+            .find(|f| f.id == "wash-0")
+            .and_then(|f| f.address.footprint()),
+        "the rule puts the first run first; the rows do not"
     );
 
     for run in [None, Some("bar"), Some("wash")] {
@@ -814,17 +862,18 @@ fn next_addresses_appends_after_what_is_already_on_the_run() {
 }
 
 #[test]
-fn next_addresses_for_a_run_with_nothing_on_it_takes_a_fresh_universe() {
+fn next_addresses_for_a_run_with_nothing_on_it_follows_the_rig() {
     let rig = Rig::new()
         .run("used")
         .run("empty")
         .fixture("a", "used", 0.0, 8);
-    let taken = at(&rig.allocate(), "a").universe();
+    let placed = at(&rig.allocate(), "a");
     let next = rig.next(Some("empty"), 8, 2);
 
     assert_eq!(next.len(), 2);
-    assert!(next.iter().all(|f| f.universe() != taken));
-    assert_eq!(next[0].universe(), next[1].universe());
+    assert_eq!(next[0].universe(), placed.universe());
+    assert_eq!(next[0].address(), placed.last() + 1);
+    assert_eq!(next[1].address(), next[0].last() + 1);
 }
 
 #[test]

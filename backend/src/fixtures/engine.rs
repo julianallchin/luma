@@ -1,7 +1,11 @@
+use crate::fixtures::light::{
+    hex, luma, nearest_slot, ModeLight, Slot, Value, AMBER_EMITTER, LIME_EMITTER, WHITE_EMITTER,
+};
 use crate::models::fixtures::{
     Channel, ChannelColour, ChannelType, FixtureDefinition, Mode, PatchedFixture,
 };
 use crate::models::universe::{PrimitiveState, UniverseState};
+use luma_fixture::control::Attr;
 use luma_patterns::color_space::Gamut;
 use std::collections::HashMap;
 
@@ -9,10 +13,6 @@ use std::collections::HashMap;
 /// Two strobe values within 1/256 of each other can't be distinguished on the wire,
 /// so they're treated as the same value for cascade decisions.
 const HEADS_AGREE_TOLERANCE: f32 = 1.0 / 256.0;
-
-/// Square-wave gate frequency: `hz = strobe * STROBE_HZ_MAX`. The visualizer uses
-/// the same maximum so on-screen and physical strobe stay phase-coherent.
-const STROBE_HZ_MAX: f64 = 20.0;
 
 /// Cascade rung chosen for the fixture this frame. The cascade prefers, in order:
 /// per-head shutter → master shutter (if heads agree) → per-head dimmer pulse →
@@ -58,16 +58,16 @@ struct FixtureStrobeCtx {
     head_strobes: Vec<f32>,
 }
 
+/// The strobe gate at `t` on the strobe clock: the one the stage draws
+/// ([`luma_scene::strobe::gain`]), sampled as the output tick samples it.
 fn strobe_gate_open(strobe: f32, t: f64) -> bool {
-    if strobe <= 0.0 {
-        return true;
-    }
-    let hz = (strobe as f64) * STROBE_HZ_MAX;
-    if hz <= 0.0 {
-        return true;
-    }
-    let period = 1.0 / hz;
-    (t.rem_euclid(period)) <= period * 0.5
+    luma_scene::strobe::gain(
+        strobe,
+        luma_scene::strobe::Slice {
+            open: t,
+            length: 0.0,
+        },
+    ) > 0.5
 }
 
 fn heads_agree(values: &[f32]) -> bool {
@@ -166,8 +166,15 @@ fn build_strobe_inventory(def: &FixtureDefinition, mode: &Mode) -> StrobeInvento
 /// does the flashing, rather than the engine pulsing a dimmer or a color. The
 /// stage view simulates that clock for these fixtures so it flashes as the rig
 /// does. An unknown mode is `false`.
+///
+/// A library fixture's light ([`ModeLight`]) folds a strobe the engine gates
+/// into its brightness, so any strobe the stage still sees on one is its own
+/// shutter's.
 #[must_use]
 pub fn strobes_on_own_clock(def: &FixtureDefinition, mode_name: &str) -> bool {
+    if def.library.is_some() {
+        return true;
+    }
     def.modes
         .iter()
         .find(|m| m.name == mode_name)
@@ -403,6 +410,27 @@ pub fn generate_dmx(
             None => continue,
         };
 
+        if let Some(light) = def
+            .library
+            .as_ref()
+            .and_then(|source| source.light.get(&mode.name))
+        {
+            let buffer = buffers.entry(fixture.universe).or_insert([0; 512]);
+            let prev = previous_universe_buffers.and_then(|m| m.get(&fixture.universe));
+            write_library(
+                state,
+                fixture,
+                def,
+                mode,
+                light,
+                max_dimmer,
+                frame_time_secs,
+                buffer,
+                prev,
+            );
+            continue;
+        }
+
         let has_master_dimmer = mode.channels.iter().any(|mode_channel| {
             let channel = match def.channels.iter().find(|c| c.name == mode_channel.name) {
                 Some(c) => c,
@@ -417,7 +445,7 @@ pub fn generate_dmx(
         // Each head's color in channel terms, worked out once per head.
         let mut colors: Vec<(*const PrimitiveState, HeadColor)> = Vec::new();
 
-        let [pan_max, tilt_max] = def.focus_range();
+        let [pan_max, tilt_max] = def.travel().map(|[lo, hi]| hi - lo);
 
         let buffer = buffers.entry(fixture.universe).or_insert([0; 512]);
         let prev = previous_universe_buffers.and_then(|m| m.get(&fixture.universe));
@@ -531,6 +559,115 @@ pub fn generate_dmx(
 
     buffers
 }
+
+/// A library fixture's channels, from what its light realizes for the
+/// cells' primitives: each cell reads its own primitive, else the fixture's,
+/// else cell 0's.
+#[allow(clippy::too_many_arguments)]
+fn write_library(
+    state: &UniverseState,
+    fixture: &PatchedFixture,
+    def: &FixtureDefinition,
+    mode: &Mode,
+    light: &ModeLight,
+    max_dimmer: f32,
+    frame_time_secs: f64,
+    buffer: &mut [u8; 512],
+    prev: Option<&[u8; 512]>,
+) {
+    let requests = requests(state, &fixture.id, light.cells());
+    if requests.is_empty() {
+        return;
+    }
+    let slice = luma_scene::strobe::Slice {
+        open: frame_time_secs,
+        length: 0.0,
+    };
+    let realized = light.realize(&requests, max_dimmer, slice);
+    for mode_channel in &mode.channels {
+        let dmx_address = (fixture.address - 1) as usize + mode_channel.number as usize;
+        debug_assert!(
+            dmx_address < 512,
+            "{} channel {} lands at {dmx_address}: mode {} declares more channels than the \
+             patch row's {}",
+            fixture.id,
+            mode_channel.number,
+            fixture.mode_name,
+            fixture.num_channels
+        );
+        if dmx_address >= 512 {
+            continue;
+        }
+        let Some(lowered) = def
+            .channels
+            .iter()
+            .find(|c| c.name == mode_channel.name)
+            .and_then(|c| c.lowered.as_deref())
+        else {
+            continue;
+        };
+        let p = &lowered.param;
+        let byte = match realized.values.get(lowered.index).copied() {
+            Some(Value::Level(v)) => Some(p.byte(
+                (f64::from(v.clamp(0.0, 1.0)) * f64::from(p.max())).round() as u32,
+                lowered.rank,
+            )),
+            Some(Value::Strobe(s)) => {
+                Some(lowered.strobe(s, f64::from(s) * luma_scene::strobe::HZ_PER_UNIT))
+            }
+            Some(Value::Open) => Some(lowered.open()),
+            Some(Value::Slot(b)) => Some(if lowered.rank == 0 { b } else { lowered.home() }),
+            Some(Value::Hold) => None,
+            // Pan and tilt read the first cell they cover (the fixture's
+            // own pan reads cell 0); the rest of the light is in `realized`,
+            // and anything else rests at home.
+            Some(Value::Other) | None if p.attr.is_position() => {
+                let cell = p.cell.map_or(0, |c| c.span()[0] as usize);
+                let degrees = requests.get(cell).unwrap_or(&requests[0]).position
+                    [usize::from(p.attr == Attr::Tilt)];
+                (!degrees.is_nan()).then(|| lowered.position(degrees))
+            }
+            Some(Value::Other) | None => Some(lowered.home()),
+        };
+        match byte {
+            Some(v) => buffer[dmx_address] = v,
+            None => {
+                if let Some(prev) = prev {
+                    buffer[dmx_address] = prev[dmx_address];
+                }
+            }
+        }
+    }
+}
+
+/// Each of a library fixture's `cells` cells' primitive: its own, else the
+/// fixture's, else cell 0's. Empty when the universe has none of them.
+pub(crate) fn requests(state: &UniverseState, id: &str, cells: usize) -> Vec<PrimitiveState> {
+    let fixture = state.primitives.get(id);
+    let first = state.primitives.get(&format!("{id}:0"));
+    if cells <= 1 {
+        return fixture.or(first).into_iter().cloned().collect();
+    }
+    let own: Vec<Option<&PrimitiveState>> = (0..cells)
+        .map(|c| state.primitives.get(&format!("{id}:{c}")))
+        .collect();
+    if own.iter().all(Option::is_none) && fixture.is_none() {
+        return Vec::new();
+    }
+    own.into_iter()
+        .map(|p| p.or(fixture).or(first).cloned().unwrap_or(DARK))
+        .collect()
+}
+
+/// A cell nothing lights.
+const DARK: PrimitiveState = PrimitiveState {
+    dimmer: 0.0,
+    color: [0.0; 3],
+    strobe: 0.0,
+    position: [f32::NAN, f32::NAN],
+    speed: 0.0,
+    aim: None,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MapAction {
@@ -658,23 +795,17 @@ fn map_nearest_color_capability(
     channel: &crate::models::fixtures::Channel,
     desired_rgb: [f32; 3],
 ) -> Option<u8> {
-    let mut best: Option<(f32, u8)> = None;
-
-    for cap in &channel.capabilities {
-        let Some(rgb) = capability_rgb(cap) else {
-            continue;
-        };
-        let d = perceptual_color_distance(rgb, desired_rgb);
-        let value = cap.min;
-
-        match best {
-            None => best = Some((d, value)),
-            Some((best_d, _)) if d < best_d => best = Some((d, value)),
-            _ => {}
-        }
-    }
-
-    best.map(|(_, v)| v)
+    let slots: Vec<Slot> = channel
+        .capabilities
+        .iter()
+        .filter_map(|cap| {
+            Some(Slot {
+                byte: cap.min,
+                rgb: capability_rgb(cap)?,
+            })
+        })
+        .collect();
+    nearest_slot(&slots, desired_rgb).map(|slot| slot.byte)
 }
 
 fn capability_rgb(cap: &crate::models::fixtures::Capability) -> Option<[f32; 3]> {
@@ -688,9 +819,9 @@ fn capability_rgb(cap: &crate::models::fixtures::Capability) -> Option<[f32; 3]>
     // If it's a split/double color capability, approximate by averaging.
     let secondary = cap.res2.as_deref().or(cap.color_2.as_deref());
 
-    let c1 = parse_hex_color(primary)?;
+    let c1 = hex(primary)?;
     if let Some(s) = secondary {
-        if let Some(c2) = parse_hex_color(s) {
+        if let Some(c2) = hex(s) {
             return Some([
                 (c1[0] + c2[0]) * 0.5,
                 (c1[1] + c2[1]) * 0.5,
@@ -702,86 +833,14 @@ fn capability_rgb(cap: &crate::models::fixtures::Capability) -> Option<[f32; 3]>
     Some(c1)
 }
 
-fn parse_hex_color(s: &str) -> Option<[f32; 3]> {
-    // Expect "#RRGGBB"
-    let s = s.trim();
-    let hex = s.strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f32 / 255.0;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f32 / 255.0;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f32 / 255.0;
-    Some([r, g, b])
-}
-
-fn color_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let dr = a[0] - b[0];
-    let dg = a[1] - b[1];
-    let db = a[2] - b[2];
-    dr * dr + dg * dg + db * db
-}
-
-/// Perceptual color distance that considers saturation.
-/// Desaturated colors (grays) should match white/neutral colors on wheels,
-/// not saturated colors that happen to be close in RGB space.
-fn perceptual_color_distance(wheel_rgb: [f32; 3], desired_rgb: [f32; 3]) -> f32 {
-    // Calculate saturation (HSV-style): (max - min) / max
-    fn saturation(rgb: [f32; 3]) -> f32 {
-        let max = rgb[0].max(rgb[1]).max(rgb[2]);
-        let min = rgb[0].min(rgb[1]).min(rgb[2]);
-        if max < 0.0001 {
-            0.0
-        } else {
-            (max - min) / max
-        }
-    }
-
-    let desired_sat = saturation(desired_rgb);
-    let wheel_sat = saturation(wheel_rgb);
-
-    // Base RGB distance
-    let rgb_dist = color_distance(wheel_rgb, desired_rgb);
-
-    // Saturation difference penalty:
-    // If desired color is desaturated (gray-ish), strongly prefer desaturated wheel colors
-    // If desired color is saturated, prefer matching hue (RGB distance handles this)
-    let sat_diff = (desired_sat - wheel_sat).abs();
-
-    // Weight saturation matching more heavily for desaturated colors
-    // When desired_sat is low, we want wheel_sat to also be low
-    let sat_penalty = if desired_sat < 0.3 {
-        // For grays: heavily penalize saturated wheel colors
-        wheel_sat * wheel_sat * 2.0
-    } else {
-        // For saturated colors: small penalty for saturation mismatch
-        sat_diff * 0.5
-    };
-
-    rgb_dist + sat_penalty
-}
-
 fn is_black(rgb: [f32; 3]) -> bool {
     rgb[0] <= 0.0001 && rgb[1] <= 0.0001 && rgb[2] <= 0.0001
-}
-
-/// Rec. 601 luma of a gamma-encoded color (0.0 to 1.0).
-fn color_luminance(rgb: [f32; 3]) -> f32 {
-    0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
 }
 
 /// A 0–1 level as a DMX byte.
 fn level_u8(level: f32) -> u8 {
     (level.clamp(0.0, 1.0) * 255.0).round() as u8
 }
-
-/// Where a fixture's extra emitters sit, as linear sRGB at their full level.
-/// Fixture definitions do not say, so these are assumptions, like the sRGB
-/// primaries assumed for red, green and blue: a D65 white, a 590 nm amber
-/// and a phosphor lime (CIE xy 0.40, 0.55), each clipped into sRGB.
-const WHITE_EMITTER: [f64; 3] = [1.0, 1.0, 1.0];
-const AMBER_EMITTER: [f64; 3] = [1.0, 0.2, 0.0];
-const LIME_EMITTER: [f64; 3] = [0.66, 1.0, 0.0];
 
 /// The emitters a fixture mode mixes color with, besides red, green and
 /// blue.
@@ -853,7 +912,7 @@ impl HeadColor {
         let mut color = Self {
             dimmer: if wheel {
                 // A wheel cannot dim its color, so a dark color dims the lamp.
-                brightness as f32 * color_luminance(srgb)
+                brightness as f32 * luma(srgb)
             } else {
                 brightness as f32
             },
@@ -926,23 +985,27 @@ mod tests {
     #[test]
     fn uses_mode_channel_number_for_addressing_and_prefers_fixture_dimmer_over_head() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: "Moving Head".into(),
             channels: vec![
                 Channel {
+                    lowered: None,
                     name: "Pan".into(),
                     preset: Some("PositionPan".into()),
                     group: None,
                     capabilities: vec![],
                 },
                 Channel {
+                    lowered: None,
                     name: "Master Dimmer".into(),
                     preset: Some("IntensityMasterDimmer".into()),
                     group: None,
                     capabilities: vec![],
                 },
                 Channel {
+                    lowered: None,
                     name: "Red".into(),
                     preset: Some("IntensityRed".into()),
                     group: None,
@@ -1018,10 +1081,12 @@ mod tests {
     #[test]
     fn falls_back_to_head0_when_fixture_primitive_missing() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: "Moving Head".into(),
             channels: vec![Channel {
+                lowered: None,
                 name: "Master Dimmer".into(),
                 preset: Some("IntensityMasterDimmer".into()),
                 group: None,
@@ -1080,6 +1145,7 @@ mod tests {
     #[test]
     fn maps_color_wheel_to_nearest_capability() {
         let channel = Channel {
+            lowered: None,
             name: "Colors".into(),
             preset: None,
             group: Some(crate::models::fixtures::Group {
@@ -1140,6 +1206,7 @@ mod tests {
     #[test]
     fn holds_wheel_value_when_color_is_black() {
         let channel = Channel {
+            lowered: None,
             name: "Colors".into(),
             preset: None,
             group: Some(crate::models::fixtures::Group {
@@ -1189,6 +1256,7 @@ mod tests {
         }];
 
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: "Moving Head".into(),
@@ -1236,17 +1304,20 @@ mod tests {
     #[test]
     fn holds_pan_when_position_axis_is_nan() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: "Moving Head".into(),
             channels: vec![
                 Channel {
+                    lowered: None,
                     name: "Pan".into(),
                     preset: Some("PositionPan".into()),
                     group: None,
                     capabilities: vec![],
                 },
                 Channel {
+                    lowered: None,
                     name: "Pan fine".into(),
                     preset: Some("PositionPanFine".into()),
                     group: None,
@@ -1324,6 +1395,7 @@ mod tests {
 
     fn dim_ch(name: &str) -> Channel {
         Channel {
+            lowered: None,
             name: name.into(),
             preset: Some("IntensityMasterDimmer".into()),
             group: None,
@@ -1333,18 +1405,21 @@ mod tests {
     fn rgb_chs() -> Vec<Channel> {
         vec![
             Channel {
+                lowered: None,
                 name: "Red".into(),
                 preset: Some("IntensityRed".into()),
                 group: None,
                 capabilities: vec![],
             },
             Channel {
+                lowered: None,
                 name: "Green".into(),
                 preset: Some("IntensityGreen".into()),
                 group: None,
                 capabilities: vec![],
             },
             Channel {
+                lowered: None,
                 name: "Blue".into(),
                 preset: Some("IntensityBlue".into()),
                 group: None,
@@ -1354,6 +1429,7 @@ mod tests {
     }
     fn shutter_ch_with_caps() -> Channel {
         Channel {
+            lowered: None,
             name: "Shutter".into(),
             preset: Some("ShutterStrobe".into()),
             group: None,
@@ -1385,6 +1461,7 @@ mod tests {
     }
     fn shutter_ch_no_open_cap() -> Channel {
         Channel {
+            lowered: None,
             name: "Shutter".into(),
             preset: Some("ShutterStrobe".into()),
             group: None,
@@ -1424,6 +1501,7 @@ mod tests {
     #[test]
     fn strobe_via_master_shutter_when_present() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1475,6 +1553,7 @@ mod tests {
         // ch 4: Red head 1
         let mut channels = vec![shutter_ch_with_caps(), dim_ch("Dim0")];
         channels.push(Channel {
+            lowered: None,
             name: "Red0".into(),
             preset: Some("IntensityRed".into()),
             group: None,
@@ -1482,12 +1561,14 @@ mod tests {
         });
         channels.push(dim_ch("Dim1"));
         channels.push(Channel {
+            lowered: None,
             name: "Red1".into(),
             preset: Some("IntensityRed".into()),
             group: None,
             capabilities: vec![],
         });
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "Bar".into(),
@@ -1571,6 +1652,7 @@ mod tests {
         let mut channels = vec![dim_ch("Dimmer")];
         channels.extend(rgb_chs());
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1628,6 +1710,7 @@ mod tests {
     #[test]
     fn strobe_via_master_color_when_no_dimmer_or_shutter() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "RGB".into(),
@@ -1678,6 +1761,7 @@ mod tests {
     #[test]
     fn shutter_open_capability_used_when_strobe_zero() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1715,6 +1799,7 @@ mod tests {
     #[test]
     fn shutter_holds_when_no_open_capability_and_strobe_zero() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1756,17 +1841,20 @@ mod tests {
     #[test]
     fn strobe_does_not_gate_pan_tilt() {
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "Mover".into(),
             channels: vec![
                 Channel {
+                    lowered: None,
                     name: "Pan".into(),
                     preset: Some("PositionPan".into()),
                     group: None,
                     capabilities: vec![],
                 },
                 Channel {
+                    lowered: None,
                     name: "Tilt".into(),
                     preset: Some("PositionTilt".into()),
                     group: None,
@@ -1819,6 +1907,7 @@ mod tests {
         let mut channels = vec![dim_ch("Dimmer")];
         channels.extend(rgb_chs());
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "PAR".into(),
@@ -1877,18 +1966,21 @@ mod tests {
         let mut channels = vec![shutter_ch_with_caps()];
         for i in 0..2 {
             channels.push(Channel {
+                lowered: None,
                 name: format!("R{i}"),
                 preset: Some("IntensityRed".into()),
                 group: None,
                 capabilities: vec![],
             });
             channels.push(Channel {
+                lowered: None,
                 name: format!("G{i}"),
                 preset: Some("IntensityGreen".into()),
                 group: None,
                 capabilities: vec![],
             });
             channels.push(Channel {
+                lowered: None,
                 name: format!("B{i}"),
                 preset: Some("IntensityBlue".into()),
                 group: None,
@@ -1914,6 +2006,7 @@ mod tests {
             });
         }
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "Bar".into(),
@@ -1960,6 +2053,7 @@ mod tests {
     #[test]
     fn speed_presets_are_speed_and_run_fastest_by_their_direction() {
         let speed = |preset: &str| Channel {
+            lowered: None,
             name: "Speed".into(),
             preset: Some(preset.into()),
             group: None,
@@ -1996,6 +2090,7 @@ mod tests {
 
     fn intensity(name: &str) -> Channel {
         Channel {
+            lowered: None,
             name: name.into(),
             preset: Some(format!("Intensity{name}")),
             group: None,
@@ -2008,6 +2103,7 @@ mod tests {
     fn drive(names: &[&str], color: [f64; 3], dimmer: f32) -> Vec<u8> {
         let channels: Vec<Channel> = names.iter().map(|name| intensity(name)).collect();
         let def = FixtureDefinition {
+            library: None,
             manufacturer: "T".into(),
             model: "T".into(),
             type_: "LED".into(),

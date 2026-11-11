@@ -82,7 +82,6 @@ pub(crate) enum Overlay {
     UpdateReady(crate::update::Ready),
     /// Quitting with changes not yet on the server — see [`crate::quit`].
     QuitSync(crate::quit::QuitSync),
-    GroupRepair(patch::groups::Repair),
     /// Rendering the open score to a video file. Boxed like the rest: it
     /// carries paths, names and the running export.
     ShowExport(Box<export_dialog::ExportDialog>),
@@ -102,7 +101,6 @@ impl Overlay {
             Self::Confirm(_) => keymap::context::CONFIRM,
             Self::UpdateReady(_) => keymap::context::UPDATE_READY,
             Self::QuitSync(_) => keymap::context::QUIT_SYNC,
-            Self::GroupRepair(_) => keymap::context::ROOT,
             Self::ShowExport(_) => keymap::context::SHOW_EXPORT,
         }
     }
@@ -306,13 +304,19 @@ impl Luma {
     pub(crate) fn teardown(&mut self, body: Body, cx: &mut Context<Self>) {
         match body {
             Body::TrackEditor(state) => {
-                if let Some(session) = state.playback_session() {
-                    let pause = self.library.pause(session);
-                    cx.background_spawn(async move {
-                        pause.await.ok();
-                    })
-                    .detach();
-                }
+                // The song stops and its decoded audio is freed, and the rig
+                // lets go of the score: nothing on screen is about it now.
+                let release = state
+                    .playback_session()
+                    .map(|session| self.library.release_audio(session));
+                let leave = self.library.leave_score(&state.lit().score);
+                cx.background_spawn(async move {
+                    if let Some(release) = release {
+                        release.await.ok();
+                    }
+                    leave.await.ok();
+                })
+                .detach();
             }
             Body::Patch(_) => {}
             Body::Perform(state) => self.close_perform(&state, cx),
@@ -382,26 +386,16 @@ impl Luma {
                 }
             }
             if let Some(Body::Patch(page)) = self.workspace.active_body_mut() {
-                if page.stage.objects_open {
-                    page.stage.objects_open = false;
+                if page.mode_menu.take().is_some()
+                    || page.menu.take().is_some()
+                    || page.group_menu.take().is_some()
+                    || page.bind_menu.take().is_some()
+                {
                     cx.notify();
                     return;
                 }
-                if page.details_open {
-                    if page.mode_menu.take().is_some() || page.menu.take().is_some() {
-                        cx.notify();
-                        return;
-                    }
-                    if page.panel.take().is_some() {
-                        cx.notify();
-                        return;
-                    }
-                    page.details_open = false;
-                    cx.notify();
-                    return;
-                }
-                if page.group_editor.is_some() && !page.group_busy {
-                    page.group_editor = None;
+                if page.naming.is_some() && !page.group_busy {
+                    page.naming = None;
                     page.group_refusal = None;
                     cx.notify();
                     return;
@@ -430,7 +424,7 @@ impl Luma {
             return;
         }
         match self.overlay.as_open() {
-            Some(Overlay::Venues(_)) if self.songs.is_none() => {}
+            Some(Overlay::Venues(_)) if self.songs.is_none() => self.venue_step_back(cx),
             Some(Overlay::ShowExport(dialog)) if dialog.is_running() => {}
             Some(_) => self.close_overlay(cx),
             // Nothing floating: keep stepping back out, innermost first — the
@@ -627,9 +621,27 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // Settings replaces the page's whole content in one frame: the agent
     // panel is not slid away, it is simply not drawn, and its width is left
     // as it was so it comes back the same way.
-    let row = match &app.settings {
-        Some(_) => settings_page(app, cx),
-        None => working_row(app, window, cx),
+    // Someone with no venue yet has no dialog: the welcome page is the
+    // page's content, inside the same title bar and trim.
+    let welcome = match app.overlay.as_open() {
+        Some(Overlay::Venues(state)) if state.welcoming() => {
+            Some(welcome::page(state, &entity, window))
+        }
+        _ => None,
+    };
+    // The welcome page has the window to itself: no venue to name, no panel
+    // to toggle and no mode to switch, so the title bar is the bare band.
+    let bare = welcome.is_some() && app.settings.is_none();
+    // Its two choices ask their one question in the picker's card, over it.
+    let asking = matches!(
+        app.overlay.as_open(),
+        Some(Overlay::Venues(state)) if state.asking()
+    );
+    let page_only = welcome.is_some() && !asking;
+    let row = match (&app.settings, welcome) {
+        (Some(_), _) => settings_page(app, cx),
+        (None, Some(welcome)) => welcome,
+        (None, None) => working_row(app, window, cx),
     };
 
     // Reap a dismissed dialog once its out-animation has played, and keep
@@ -691,17 +703,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         true,
         cx,
     );
-    let page = div()
-        .flex_1()
-        .min_h_0()
-        .mx(px(glass::WINDOW_TRIM))
-        .flex()
-        .flex_col()
-        .relative()
-        .bg(ladder::background())
-        .child(row)
-        .child(page_corners())
-        .agent_node(Role::Card, "Page");
+    let page = page_plate(row).agent_node(Role::Card, "Page");
     let mut window_root = div()
         .size_full()
         .flex()
@@ -710,7 +712,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         .bg(glass::window_trim())
         // The title bar spans the window: it is on the trim, not on the
         // page, so the agent panel's coming and going never moves it.
-        .child(title_bar(app, lights, &entity, cx))
+        .child(title_bar(app, lights, bare, &entity, cx))
         .child(page)
         .child(cached(
             status_bar,
@@ -725,16 +727,15 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         // the window. See [`crate::chrome`] for the anchor rule.
         // Disabled on a page without the panel (the song list): there is
         // nothing to toggle, and the remembered state is what it names.
-        .children(app.settings.is_none().then(|| {
+        .children((app.settings.is_none() && !bare).then(|| {
             chrome::agent_toggle(&entity, !app.agent_hidden, app.page_has_agent(), lights)
                 .into_any_element()
         }))
         .children(
-            app.settings
-                .is_none()
+            (app.settings.is_none() && !bare)
                 .then(|| chrome::mode_switch(app, &entity, cx).into_any_element()),
         );
-    if let Some(overlay) = app.overlay.get() {
+    if let Some(overlay) = app.overlay.get().filter(|_| !page_only) {
         window_root = window_root.child(overlay_layer(app, overlay, &entity, window, cx));
     }
     // Last, so nothing — least of all an overlay — can cover the only controls
@@ -788,7 +789,7 @@ fn working_row(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> D
         // re-wrapping it.
         row = row
             .child(
-                pane::pane(px(agent_w), px(open_width), agent_panel(app))
+                pane::pane(px(agent_w), px(open_width), agent_panel(app, cx))
                     .agent_node(Role::Card, "Agent"),
             )
             .child(seam());
@@ -809,6 +810,22 @@ fn working_row(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> D
         row = row.child(agent_grip(agent_w + SEAM_WIDTH / 2.0, cx));
     }
     row
+}
+
+/// The page: the app's ground as a rounded plate inside the window's trim,
+/// with `content` on it. The shell's regions sit on one, and so do the
+/// screens before there is a shell — the window keeps one frame throughout.
+pub(crate) fn page_plate(content: impl IntoElement) -> Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .mx(px(glass::WINDOW_TRIM))
+        .flex()
+        .flex_col()
+        .relative()
+        .bg(ladder::background())
+        .child(content)
+        .child(page_corners())
 }
 
 /// The page's rounded corners. gpui clips to rectangles, so the panels inside
@@ -832,7 +849,21 @@ fn page_corners() -> Div {
 /// The agent panel: the chat of the body on screen, unchanged, flush at the
 /// page's left. With nothing open — Arrange before a score is picked — it
 /// says where a conversation comes from.
-fn agent_panel(app: &Luma) -> AnyElement {
+fn agent_panel(app: &Luma, cx: &App) -> AnyElement {
+    // The model picker is the chat's, but mounted here beside it rather than
+    // inside it: scrolling or typing in the picker then redraws only the
+    // picker, where a view nested in the chat would redraw the chat with it.
+    let picker = app.front_chat().map(|chat| {
+        let picker = chat.read(cx).model_picker().clone();
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .child(luma_ui::node::cached_view(
+                picker,
+                gpui::StyleRefinement::default().size_0(),
+            ))
+    });
     let chat = app.front_chat().cloned().map(|chat| {
         luma_ui::node::cached_view(chat, gpui::StyleRefinement::default().size_full())
             .into_any_element()
@@ -866,6 +897,7 @@ fn agent_panel(app: &Luma) -> AnyElement {
                 )
                 .into_any_element()
         }))
+        .children(picker)
         .into_any_element()
 }
 
@@ -877,10 +909,40 @@ const NO_CHAT: &str = "Open a score to talk about it.";
 /// reserved by the band's insets, the agent toggle and the mode switch
 /// anchored over its two ends. The song and score are Arrange's open score;
 /// with none, the venue stands alone.
-fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) -> impl IntoElement {
+fn title_bar(
+    app: &Luma,
+    lights: bool,
+    bare: bool,
+    entity: &gpui::Entity<Luma>,
+    cx: &App,
+) -> impl IntoElement {
     let trail = div().flex_1().min_w_0().flex().items_center().gap(px(2.));
     let trail = match app.settings {
         Some(_) => trail.child(settings::back(entity)),
+        // The venue menu holds the account's way out; without the menu the
+        // band carries it itself.
+        None if bare => {
+            let out = entity.clone();
+            let signing_out = app.account_action.signing_out;
+            trail.child(div().flex_1()).child(
+                div()
+                    .flex_none()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        luma_ui::button(
+                            if signing_out {
+                                "Signing out…"
+                            } else {
+                                "Sign out"
+                            },
+                            luma_ui::Enabled::from(!signing_out),
+                        )
+                        .id("welcome-sign-out")
+                        .on_click(move |_, _, cx| out.update(cx, |this, cx| this.sign_out(cx)))
+                        .agent_node(Role::Button, "Sign out"),
+                    ),
+            )
+        }
         None => {
             let crumbs = crate::score_switcher::crumbs(app, entity);
             let slash = || {
@@ -901,7 +963,7 @@ fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) ->
                 })
         }
     };
-    chrome::band(lights, app.settings.is_none())
+    chrome::band(lights, app.settings.is_none() && !bare)
         .child(trail)
         .agent_node(Role::Card, "Title bar")
 }
@@ -910,6 +972,20 @@ fn title_bar(app: &Luma, lights: bool, entity: &gpui::Entity<Luma>, cx: &App) ->
 /// or the song list in their place.
 fn content(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
     if app.songs.is_none() {
+        // A joined venue on its way down has the page until it can open: the
+        // song list's own waiting line, where the song list is about to be.
+        if app.arriving_venue.is_some() {
+            return div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(luma_ui::plate(
+                    "Downloading the venue…".to_string(),
+                    ladder::muted_foreground(),
+                ))
+                .agent_node(Role::Text, "Downloading the venue")
+                .into_any_element();
+        }
         // The venue picker is up over this.
         return div().flex_1().into_any_element();
     }
@@ -1366,6 +1442,7 @@ fn active_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> A
     // being tracked twice, or nowhere.
     let holds_focus = matches!(app.focus_slot(), FocusSlot::Body(_));
     let focus = app.focus.clone();
+    let stage_view = app.stage_view();
     let Some(body) = app.workspace.body_mut(&target) else {
         return div().into_any_element();
     };
@@ -1398,7 +1475,7 @@ fn active_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> A
         Body::TrackEditor(state) => {
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
-        Body::Patch(state) => patch::patch(state, &entity).into_any_element(),
+        Body::Patch(state) => patch::patch(state, stage_view.as_ref(), &entity).into_any_element(),
         Body::Perform(state) => {
             crate::perform::pattern_sheet::sync(state, window, cx);
             crate::perform::perform(state, &entity)
@@ -1471,10 +1548,6 @@ fn overlay_layer(
             fixture_picker::render(state, entity, window),
             "Fixture picker dialog",
         ),
-        Overlay::GroupRepair(state) => (
-            patch::groups::repair_dialog(state, entity),
-            "Group repair dialog",
-        ),
         Overlay::ShowExport(state) => (export_dialog::render(state, entity), "Export show dialog"),
         Overlay::Confirm(state) => (
             confirm::render(
@@ -1512,15 +1585,16 @@ fn overlay_layer(
         ),
     };
     // A running export is closed by its own Cancel, never by a stray click.
-    let scrim_dismiss =
-        if (matches!(overlay, Overlay::Venues(_)) && app.songs.is_none()) || app.exporting_show() {
-            luma_ui::dialog::ScrimDismiss::Disabled
-        } else {
-            let dismissed = entity.clone();
-            luma_ui::dialog::ScrimDismiss::Enabled(Box::new(move |_, cx| {
-                dismissed.update(cx, |this, cx| this.dismiss_overlay(cx));
-            }))
-        };
+    // The picker with no venue open cannot close, but a press outside still
+    // steps back — `dismiss_overlay` owns that rule.
+    let scrim_dismiss = if app.exporting_show() {
+        luma_ui::dialog::ScrimDismiss::Disabled
+    } else {
+        let dismissed = entity.clone();
+        luma_ui::dialog::ScrimDismiss::Enabled(Box::new(move |_, cx| {
+            dismissed.update(cx, |this, cx| this.dismiss_overlay(cx));
+        }))
+    };
     div()
         .absolute()
         .inset_0()
@@ -1533,7 +1607,10 @@ fn overlay_layer(
                 focused: app.dialog_focus.contains_focused(window, cx),
                 label: label.into(),
                 scrim_dismiss,
-                closing: app.overlay.closing_since(),
+                closing: app.overlay.closing_since().or(match overlay {
+                    Overlay::Venues(state) => state.leaving(),
+                    _ => None,
+                }),
             }
             .render(card),
         )

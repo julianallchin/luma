@@ -65,7 +65,6 @@ fn lights(frame: &mut Frame, count: usize) {
             cos_field: 30_f32.to_radians().cos(),
             color: Vec3::new(0.15, 0.4, 1.0),
             intensity: 0.1 * (16.0 / count as f32).min(1.0),
-            wash: 0.8,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
@@ -289,38 +288,4 @@ fn haze_controls_round_trip_and_invalid_values_are_bounded() {
     )
     .unwrap();
     assert_eq!(old.appearance, HazeAppearance::default());
-}
-#[test]
-#[ignore = "GPU benchmark; run explicitly on an otherwise idle device"]
-fn profile_cloudy_haze() {
-    let mut renderer = Renderer::new_profiled().unwrap();
-    let mut f = frame();
-    for count in [16, 128, 512] {
-        lights(&mut f, count);
-        for cloudiness in [0.0, 1.0] {
-            f.haze_appearance.cloudiness = cloudiness;
-            f.haze_resolution = 0.5;
-            let mut times = Vec::new();
-            for step in 0..12 {
-                f.time = step as f32 / 60.0;
-                let timing = renderer.profile_live_frame(&f, 1280, 720, 1).unwrap();
-                if step >= 4 {
-                    times.push(timing.gpu_total_ms);
-                    if step == 11 {
-                        eprintln!(
-                            "passes haze={:.3} composite={:.3} grid={:.3}",
-                            timing.gpu_volumetric_ms,
-                            timing.gpu_composite_ms,
-                            timing.gpu_fog_grid_ms
-                        );
-                    }
-                }
-            }
-            times.sort_by(f64::total_cmp);
-            eprintln!(
-                "lights={count} cloudiness={cloudiness} median_gpu_ms={:.3}",
-                times[times.len() / 2]
-            );
-        }
-    }
 }

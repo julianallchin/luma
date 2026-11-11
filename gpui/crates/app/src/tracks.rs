@@ -57,7 +57,7 @@ pub(crate) enum Page {
     Songs(Option<String>),
 }
 
-/// Which tracks the ownership filter admits. Mutually exclusive, and `Mine` is
+/// Which tracks the ownership filter admits. Mutually exclusive, and `All` is
 /// the default.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Ownership {
@@ -66,7 +66,7 @@ pub enum Ownership {
 }
 
 impl Ownership {
-    const ALL: [Ownership; 2] = [Ownership::Mine, Ownership::All];
+    const ALL: [Ownership; 2] = [Ownership::All, Ownership::Mine];
 
     fn label(self) -> &'static str {
         match self {
@@ -75,15 +75,11 @@ impl Ownership {
         }
     }
 
-    /// A track with no `uid` is in the guest namespace, which every host reads
-    /// as its own.
-    fn admits(self, track: &TrackBrowserRow, user: Option<&str>) -> bool {
+    /// `user` is the signed-in account; `Mine` is the tracks it owns.
+    fn admits(self, track: &TrackBrowserRow, user: &str) -> bool {
         match self {
             Ownership::All => true,
-            Ownership::Mine => match &track.uid {
-                None => true,
-                Some(uid) => Some(uid.as_str()) == user,
-            },
+            Ownership::Mine => track.uid.as_deref() == Some(user),
         }
     }
 }
@@ -166,9 +162,9 @@ pub struct Tracks {
     query: String,
     search: Entity<luma_ui::text_input::TextInput>,
     _search_subscription: Subscription,
-    /// The signed-in principal, snapshotted when the venue was selected. The
-    /// ownership filter reads it.
-    user: Option<String>,
+    /// The signed-in account, snapshotted when the venue was opened. The
+    /// ownership filter reads it, and a score's row is written for it.
+    user: String,
     search_focus: FocusHandle,
     /// A score chosen from another venue's menu, to open here once this
     /// venue's catalogue has landed — it needs its track's row. Taken in
@@ -197,6 +193,11 @@ impl Tracks {
     /// The venue a score opens in.
     pub(crate) fn venue_id(&self) -> &str {
         &self.venue_id
+    }
+
+    /// The account the venue was opened for.
+    pub(crate) fn user(&self) -> &str {
+        &self.user
     }
 
     pub(crate) fn load_generation(&self) -> u64 {
@@ -251,9 +252,7 @@ impl Tracks {
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                row.is_in_venue
-                    && self.ownership.admits(row, self.user.as_deref())
-                    && matches(row, &query)
+                row.is_in_venue && self.ownership.admits(row, &self.user) && matches(row, &query)
             })
             .map(|(index, _)| index)
             .collect()
@@ -362,14 +361,22 @@ impl Luma {
     /// it was saved at the last quit. The venue being left keeps its state,
     /// parked.
     pub(crate) fn open_venue(&mut self, venue: Venue, cx: &mut Context<Self>) {
+        // A venue opens for whoever is signed in. While nobody is, the
+        // sign-in screen is the whole app and nothing opens behind it.
+        let Some(user) = self.library.user_id() else {
+            return;
+        };
         self.venue_selection_generation = self.venue_selection_generation.wrapping_add(1);
         let generation = self.venue_selection_generation;
         let venue_id = venue.id.clone();
+        // Whatever opens is where the window is: a joined venue still on its
+        // way down no longer takes it over when it lands.
+        self.arriving_venue = None;
         self.close_overlay(cx);
         let pending = self.library.tracks(&venue.id);
         let remember = self
             .library
-            .set_session_item(crate::welcome::LAST_VENUE, &venue.id);
+            .set_session_item(&self.last_venue_key(), &venue.id);
         let search = cx.new(|cx| {
             let mut field = luma_ui::text_input::TextInput::search(PLACEHOLDER, cx);
             field.set_text_size(HEADER_TEXT, cx);
@@ -410,11 +417,11 @@ impl Luma {
             rename: None,
             loaded: false,
             load_failed: false,
-            ownership: Ownership::Mine,
+            ownership: Ownership::All,
             query: String::new(),
             search,
             _search_subscription: search_subscription,
-            user: self.library.user_id(),
+            user,
             search_focus,
             arrival: None,
             landing: None,
@@ -989,7 +996,7 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
 /// What the search says while it is empty.
 const PLACEHOLDER: &str = "Search tracks";
 
-/// The `mine` / `all` axis: always exactly one pressed.
+/// The `all` / `mine` axis: always exactly one pressed.
 fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
     float::segmented().children(Ownership::ALL.into_iter().map(|ownership| {
         let app = app.clone();

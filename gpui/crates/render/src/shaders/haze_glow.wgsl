@@ -31,7 +31,7 @@ struct LightRest {
     color: vec3<f32>,
     intensity: f32,
     cos_field: f32,
-    wash: f32,
+    handover: f32,
     gobo: f32,
     gobo_rotation: f32,
     shadow_slot: f32,

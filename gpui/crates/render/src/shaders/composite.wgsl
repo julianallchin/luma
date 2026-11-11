@@ -7,7 +7,8 @@ struct Composite {
     inv_view_proj: mat4x4<f32>,
     // xy: haze buffer size, z: bilateral depth sigma, w: debug-view code.
     params: vec4<f32>,
-    // xy: camera near/far planes, z: mean extinction sigma in 1/metres, w: haze phase g.
+    // xy: camera near/far planes, z: mean extinction sigma in 1/metres, w: the
+    // farthest from the eye any fixture's haze reaches, metres.
     depth: vec4<f32>,
     // rgb: the frame's clear colour, i.e. what a pixel with no geometry and no
     // visible environment shows.
@@ -74,11 +75,35 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(xy, 0.0, 1.0);
 }
 
+/// A view depth as the haze sees it: past the farthest any fixture's haze
+/// reaches, how deep a surface lies changes nothing the haze target holds.
+fn haze_depth(depth: f32) -> f32 {
+    return min(depth, cfg.depth.w);
+}
+
+/// How far the surface under pixel `coord` runs in depth across one haze
+/// texel, metres. Each way it is the smaller of the steps to the two
+/// neighbours, so a silhouette beside the pixel is not taken for its slope.
+fn depth_run(coord: vec2<i32>, depth: f32) -> f32 {
+    let last = vec2<i32>(textureDimensions(depth_tex)) - 1;
+    let left = haze_depth(linear_view_depth(textureLoad(depth_tex, clamp(coord - vec2<i32>(1, 0), vec2<i32>(0), last), 0)));
+    let right = haze_depth(linear_view_depth(textureLoad(depth_tex, clamp(coord + vec2<i32>(1, 0), vec2<i32>(0), last), 0)));
+    let up = haze_depth(linear_view_depth(textureLoad(depth_tex, clamp(coord - vec2<i32>(0, 1), vec2<i32>(0), last), 0)));
+    let down = haze_depth(linear_view_depth(textureLoad(depth_tex, clamp(coord + vec2<i32>(0, 1), vec2<i32>(0), last), 0)));
+    let step = vec2<f32>(min(abs(right - depth), abs(depth - left)), min(abs(down - depth), abs(depth - up)));
+    let texel = vec2<f32>(last + 1) / cfg.params.xy;
+    return dot(step, texel);
+}
+
 /// Depth-aware upsample of the (possibly low-res) haze. Each of the four
 /// nearest taps is weighted by its bilinear position and by how close the
 /// depth it saw is to this pixel's — that keeps haze from bleeding across
-/// silhouettes the way plain bilinear would.
-fn upsample_haze(uv: vec2<f32>, full_depth: f32) -> vec3<f32> {
+/// silhouettes the way plain bilinear would. `run` is how far this pixel's
+/// own surface runs in depth across a haze texel ([`depth_run`]): taps that
+/// far off saw the same surface. Without it a floor seen along its length,
+/// metres deeper from one texel to the next, matched no tap and took a
+/// single one, and the beams before it were drawn in blocks.
+fn upsample_haze(uv: vec2<f32>, full_depth: f32, run: f32) -> vec3<f32> {
     let r = cfg.params.xy;
     let lr = uv * r - 0.5;
     let base = floor(lr);
@@ -90,11 +115,11 @@ fn upsample_haze(uv: vec2<f32>, full_depth: f32) -> vec3<f32> {
     let s01 = textureSampleLevel(haze_tex, haze_sampler, (base + vec2<f32>(0.5, 1.5)) / r, 0.0);
     let s11 = textureSampleLevel(haze_tex, haze_sampler, (base + vec2<f32>(1.5, 1.5)) / r, 0.0);
 
-    let k = 1.0 / max(cfg.params.z, 1e-5);
-    let w00 = (1.0 - f.x) * (1.0 - f.y) * exp(-abs(s00.a - full_depth) * k);
-    let w10 = f.x * (1.0 - f.y) * exp(-abs(s10.a - full_depth) * k);
-    let w01 = (1.0 - f.x) * f.y * exp(-abs(s01.a - full_depth) * k);
-    let w11 = f.x * f.y * exp(-abs(s11.a - full_depth) * k);
+    let k = 1.0 / max(cfg.params.z + run, 1e-5);
+    let w00 = (1.0 - f.x) * (1.0 - f.y) * exp(-abs(haze_depth(s00.a) - full_depth) * k);
+    let w10 = f.x * (1.0 - f.y) * exp(-abs(haze_depth(s10.a) - full_depth) * k);
+    let w01 = (1.0 - f.x) * f.y * exp(-abs(haze_depth(s01.a) - full_depth) * k);
+    let w11 = f.x * f.y * exp(-abs(haze_depth(s11.a) - full_depth) * k);
 
     let total = w00 + w10 + w01 + w11;
     if total < 1e-4 {
@@ -102,10 +127,10 @@ fn upsample_haze(uv: vec2<f32>, full_depth: f32) -> vec3<f32> {
         // wrong-side answers paints the far side's haze onto a near surface;
         // the least-wrong single tap is the one whose depth is closest.
         var best = s00;
-        var best_err = abs(s00.a - full_depth);
-        if abs(s10.a - full_depth) < best_err { best = s10; best_err = abs(s10.a - full_depth); }
-        if abs(s01.a - full_depth) < best_err { best = s01; best_err = abs(s01.a - full_depth); }
-        if abs(s11.a - full_depth) < best_err { best = s11; }
+        var best_err = abs(haze_depth(s00.a) - full_depth);
+        if abs(haze_depth(s10.a) - full_depth) < best_err { best = s10; best_err = abs(haze_depth(s10.a) - full_depth); }
+        if abs(haze_depth(s01.a) - full_depth) < best_err { best = s01; best_err = abs(haze_depth(s01.a) - full_depth); }
+        if abs(haze_depth(s11.a) - full_depth) < best_err { best = s11; }
         return best.rgb;
     }
     let haze = w00 * s00.rgb + w10 * s10.rgb + w01 * s01.rgb + w11 * s11.rgb;
@@ -218,7 +243,8 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         // haze bilateral pass consumes, not a camera-specific beauty view.
         return vec4<f32>(vec3<f32>(1.0 - raw_depth), 1.0);
     }
-    var haze = upsample_haze(uv, depth);
+    let seen = haze_depth(depth);
+    var haze = upsample_haze(uv, seen, depth_run(coord, seen));
     if cfg.medium.min.w > 0.0 {
         haze += glow_along(uv, raw_depth);
     }

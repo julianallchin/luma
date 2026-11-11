@@ -1,0 +1,299 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "oppsk/960led-stage-strobe-light",
+  "name": "OPPSK 960LED Stage Strobe Light",
+  "manufacturer": "OPPSK",
+  "model": "960LED Stage Strobe Light",
+  "category": "strobe_or_blinder",
+  "description": "Flat rectangular LED strobe panel, 500 W, hung from a U bracket over the top with side knobs for manual tilt. Front: two RGB plates of 4 zones each (9 x 12 SMD 5050 LEDs per zone, 864 total) split by a central strip of 96 cool-white 5730 LEDs in 8 zones (2 x 6 per zone). 16 independently controllable cells. Rear panel: powerCON in/out, 3-pin DMX in/out, fan, 4-digit display and 4 buttons.",
+  "provenance": {
+   "source": "manufacturer user manual (OPPSK '960频闪' User Guide, 24 pp), user-supplied Amazon photos; DMX cross-checked with ONYX '960LED Stage Strobe Light' (4/11/32/39 ch)",
+   "dims_src": "manual p23: 40.5 x 24 (incl. bracket) x 7.5 cm body, 17.5 cm deep with bracket swung back; body 39.7 x 21 cm; 4.2 kg; p21 pixel zones",
+   "weight_kg": 4.2,
+   "power_w": 500,
+   "manual": "https://cdn.shopify.com/s/files/1/0241/9579/2960/files/960led_strobe_User_Guide.pdf",
+   "amazon_title": "LED Stage Strobe Light - 500W 960 LEDs RGBW DJ Strobe Light with 16 Zones Chasing by DMX RDM Control",
+   "import": {"from": "custom", "old_id": "custom:OPPSK/960LED Stage Strobe Light"},
+   "sources": [
+    {"sha": "7c269427b359c14ee345a5d8315b2c77558e9c3900c8ef9a4797110e9ac9b9a7", "kind": "manual"},
+    {"sha": "4c0021423ab6f2881eaae2a8298be74f1c5c58d03c8d46a16ddd38c73a90eb4b", "kind": "photo"},
+    {"sha": "bcf4bb8cf9405841be54a76c08bd9278462777e42212c15f96d2610ead46fd10", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.405, 0.24, 0.075]},
+ "optics": {"type": "strobe"},
+ "materials": {"body": {"rgb": [0.02, 0.02, 0.02]}},
+ "rig": {
+  "mount": {
+   "type": "bail",
+   "base": null,
+   "hang": true,
+   "yoke": {
+    "w": 0.405,
+    "y1": 0.14,
+    "d": 0.028,
+    "gap": 0.004,
+    "arm": {"profile": "straight", "t": [0.004, 0.004], "d": [0.028, 0.028], "round_top": 0}
+   }
+  },
+  "joints": {
+   "pan": null,
+   "tilt": {"drive": "manual", "axis": [1, 0, 0], "range": [-90, 90], "rest": 90, "per_head": false},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.397,
+   "len": 0.075,
+   "d": 0.21,
+   "off": 0.0,
+   "tilt_y": 0.135,
+   "features": ["connectors"],
+   "corner": 0.0
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [0.37, 0.185],
+    "layout": {"kind": "place", "boxes": [[0, 0, 1, 0.44], [0, 0.56, 1, 1], [0, 0.455, 1, 0.545]]},
+    "children": [
+     {
+      "layout": {"kind": "grid", "rows": 1, "cols": 4, "gap": 0.01},
+      "child": {
+       "cell": true,
+       "layout": {"kind": "grid", "rows": 9, "cols": 12, "gap": 0},
+       "child": {"fill": 0.55, "emitter": {"kind": "led", "colour": "rgb"}, "outline": "rect"}
+      }
+     },
+     {
+      "layout": {"kind": "grid", "rows": 1, "cols": 4, "gap": 0.01},
+      "child": {
+       "cell": true,
+       "layout": {"kind": "grid", "rows": 9, "cols": 12, "gap": 0},
+       "child": {"fill": 0.55, "emitter": {"kind": "led", "colour": "rgb"}, "outline": "rect"}
+      }
+     },
+     {
+      "layout": {"kind": "line", "n": 8, "gap": 0.004},
+      "child": {
+       "cell": true,
+       "layout": {"kind": "grid", "rows": 2, "cols": 6, "gap": 0},
+       "child": {"fill": [0.6, 0.8], "emitter": {"kind": "led", "colour": "white"}, "outline": "rect"}
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "cells": {"count": 16, "emitters": 960},
+ "sources": [{"cell_ranges": [[0, 3]]}, {"cell_ranges": [[4, 7]]}, {"cell_ranges": [[8, 15]]}],
+ "control": {
+  "modes": [
+   {
+    "name": "4ch",
+    "options": {"channels": "4"},
+    "footprint": 4,
+    "channels": [
+     {"attr": "colour/red", "cell": [0, 7]},
+     {"attr": "colour/green", "cell": [0, 7]},
+     {"attr": "colour/blue", "cell": [0, 7]},
+     {"attr": "colour/white", "cell": [8, 15]}
+    ],
+    "prov": {"agree": ["manual", "onyx"], "doc": "7c269427b359", "page": 14, "status": "manual"}
+   },
+   {
+    "name": "11ch",
+    "options": {"channels": "11"},
+    "footprint": 11,
+    "channels": [
+     {"attr": "dimmer"},
+     {
+      "attr": "shutter/fx",
+      "n": 1,
+      "cell": [0, 7],
+      "ranges": [{"dmx": [0, 255], "phys": [0, 100], "unit": "%"}]
+     },
+     {
+      "attr": "fx/macro",
+      "n": 1,
+      "cell": [0, 7],
+      "ranges": [{"dmx": [0, 2], "state": "off"}, {"dmx": [3, 255], "state": "macro"}]
+     },
+     {
+      "attr": "fx/speed",
+      "n": 1,
+      "cell": [0, 7],
+      "ranges": [{"dmx": [0, 255], "phys": [0, 100], "unit": "%"}]
+     },
+     {"attr": "colour/red", "cell": [0, 7]},
+     {"attr": "colour/green", "cell": [0, 7]},
+     {"attr": "colour/blue", "cell": [0, 7]},
+     {
+      "attr": "shutter/fx",
+      "n": 2,
+      "cell": [8, 15],
+      "ranges": [{"dmx": [0, 255], "phys": [0, 100], "unit": "%"}]
+     },
+     {
+      "attr": "fx/macro",
+      "n": 2,
+      "cell": [8, 15],
+      "ranges": [{"dmx": [0, 5], "state": "off"}, {"dmx": [6, 255], "state": "macro"}]
+     },
+     {
+      "attr": "fx/speed",
+      "n": 2,
+      "cell": [8, 15],
+      "ranges": [{"dmx": [0, 255], "phys": [0, 100], "unit": "%"}]
+     },
+     {"attr": "colour/white", "cell": [8, 15]}
+    ],
+    "prov": {
+     "agree": ["manual", "onyx"],
+     "doc": "7c269427b359",
+     "page": 14,
+     "note": "ch fx/macro: outer RGB programs (manual 'Mode effect 1', p17-19); colour channels set the background colour when it is 33-251. Program sub-ranges simplified. inner white programs (manual 'Mode effect 2', p19-20); white channel sets background when 6-179 or 204-255.",
+     "status": "manual"
+    }
+   },
+   {
+    "name": "32ch",
+    "options": {"channels": "32"},
+    "footprint": 32,
+    "channels": [
+     {"attr": "colour/red", "cell": 0},
+     {"attr": "colour/green", "cell": 0},
+     {"attr": "colour/blue", "cell": 0},
+     {"attr": "colour/red", "cell": 1},
+     {"attr": "colour/green", "cell": 1},
+     {"attr": "colour/blue", "cell": 1},
+     {"attr": "colour/red", "cell": 2},
+     {"attr": "colour/green", "cell": 2},
+     {"attr": "colour/blue", "cell": 2},
+     {"attr": "colour/red", "cell": 3},
+     {"attr": "colour/green", "cell": 3},
+     {"attr": "colour/blue", "cell": 3},
+     {"attr": "colour/red", "cell": 4},
+     {"attr": "colour/green", "cell": 4},
+     {"attr": "colour/blue", "cell": 4},
+     {"attr": "colour/red", "cell": 5},
+     {"attr": "colour/green", "cell": 5},
+     {"attr": "colour/blue", "cell": 5},
+     {"attr": "colour/red", "cell": 6},
+     {"attr": "colour/green", "cell": 6},
+     {"attr": "colour/blue", "cell": 6},
+     {"attr": "colour/red", "cell": 7},
+     {"attr": "colour/green", "cell": 7},
+     {"attr": "colour/blue", "cell": 7},
+     {"attr": "colour/white", "cell": 8},
+     {"attr": "colour/white", "cell": 9},
+     {"attr": "colour/white", "cell": 10},
+     {"attr": "colour/white", "cell": 11},
+     {"attr": "colour/white", "cell": 12},
+     {"attr": "colour/white", "cell": 13},
+     {"attr": "colour/white", "cell": 14},
+     {"attr": "colour/white", "cell": 15}
+    ],
+    "prov": {"agree": ["manual", "onyx"], "doc": "7c269427b359", "page": 15, "status": "manual"}
+   },
+   {
+    "name": "39ch",
+    "options": {"channels": "39"},
+    "footprint": 39,
+    "channels": [
+     {"attr": "dimmer"},
+     {
+      "attr": "shutter/fx",
+      "n": 1,
+      "cell": [0, 7],
+      "ranges": [{"dmx": [0, 255], "phys": [0, 100], "unit": "%"}]
+     },
+     {
+      "attr": "fx/macro",
+      "n": 1,
+      "cell": [0, 7],
+      "ranges": [{"dmx": [0, 2], "state": "off"}, {"dmx": [3, 255], "state": "macro"}]
+     },
+     {
+      "attr": "fx/speed",
+      "n": 1,
+      "cell": [0, 7],
+      "ranges": [{"dmx": [0, 255], "phys": [0, 100], "unit": "%"}]
+     },
+     {"attr": "colour/red", "cell": 0},
+     {"attr": "colour/green", "cell": 0},
+     {"attr": "colour/blue", "cell": 0},
+     {"attr": "colour/red", "cell": 1},
+     {"attr": "colour/green", "cell": 1},
+     {"attr": "colour/blue", "cell": 1},
+     {"attr": "colour/red", "cell": 2},
+     {"attr": "colour/green", "cell": 2},
+     {"attr": "colour/blue", "cell": 2},
+     {"attr": "colour/red", "cell": 3},
+     {"attr": "colour/green", "cell": 3},
+     {"attr": "colour/blue", "cell": 3},
+     {"attr": "colour/red", "cell": 4},
+     {"attr": "colour/green", "cell": 4},
+     {"attr": "colour/blue", "cell": 4},
+     {"attr": "colour/red", "cell": 5},
+     {"attr": "colour/green", "cell": 5},
+     {"attr": "colour/blue", "cell": 5},
+     {"attr": "colour/red", "cell": 6},
+     {"attr": "colour/green", "cell": 6},
+     {"attr": "colour/blue", "cell": 6},
+     {"attr": "colour/red", "cell": 7},
+     {"attr": "colour/green", "cell": 7},
+     {"attr": "colour/blue", "cell": 7},
+     {
+      "attr": "shutter/fx",
+      "n": 2,
+      "cell": [8, 15],
+      "ranges": [{"dmx": [0, 255], "phys": [0, 100], "unit": "%"}]
+     },
+     {
+      "attr": "fx/macro",
+      "n": 2,
+      "cell": [8, 15],
+      "ranges": [{"dmx": [0, 5], "state": "off"}, {"dmx": [6, 255], "state": "macro"}]
+     },
+     {
+      "attr": "fx/speed",
+      "n": 2,
+      "cell": [8, 15],
+      "ranges": [{"dmx": [0, 255], "phys": [0, 100], "unit": "%"}]
+     },
+     {"attr": "colour/white", "cell": 8},
+     {"attr": "colour/white", "cell": 9},
+     {"attr": "colour/white", "cell": 10},
+     {"attr": "colour/white", "cell": 11},
+     {"attr": "colour/white", "cell": 12},
+     {"attr": "colour/white", "cell": 13},
+     {"attr": "colour/white", "cell": 14},
+     {"attr": "colour/white", "cell": 15}
+    ],
+    "prov": {
+     "agree": ["manual", "onyx"],
+     "doc": "7c269427b359",
+     "page": 16,
+     "note": "ch fx/macro: outer RGB programs (manual 'Mode effect 1', p17-19); colour channels set the background colour when it is 33-251. Program sub-ranges simplified. inner white programs (manual 'Mode effect 2', p19-20); white channel sets background when 6-179 or 204-255.",
+     "status": "manual"
+    }
+   }
+  ],
+  "prov": {
+   "cells": {
+    "agree": ["manual"],
+    "doc": "7c269427b359",
+    "page": 21,
+    "note": "manual p21: RGB1-4 top plate left to right, W1-W8 centre strip, RGB5-8 bottom plate. Canonical cells (build order): 0-3 RGB1-4, 4-7 RGB5-8, 8-15 W1-W8. Program channels: n=1 outer RGB programs (manual Mode effect 1), n=2 inner white programs (Mode effect 2); program sub-ranges not itemised."
+   }
+  }
+ }
+}

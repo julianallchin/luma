@@ -357,7 +357,14 @@ impl AppServices {
         let Some(output) = &self.output else {
             return;
         };
-        let mut ticks = tokio::time::interval(std::time::Duration::from_millis(23));
+        // One tick per output frame, mid-frame on the strobe clock, so every
+        // tick samples one frame of the strobe gate (`luma_scene::strobe`).
+        let frame = std::time::Duration::from_secs_f64(luma_scene::strobe::FRAME_S);
+        let first = luma_scene::strobe::epoch()
+            + std::time::Duration::from_secs_f64(luma_scene::strobe::next_frame_middle(
+                luma_scene::strobe::clock(),
+            ));
+        let mut ticks = tokio::time::interval_at(tokio::time::Instant::from_std(first), frame);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut had_output = false;
         loop {
@@ -445,8 +452,12 @@ impl AppServices {
     ///
     /// If the admission or the open rows cannot be read.
     pub(crate) async fn recover_open_agent_messages(&self) -> Result<(), CommandError> {
-        let principal = self.admitted_principal().await?;
-        crate::agent::recover_open_rows(self, principal.as_deref())
+        // Signed out, no turn is anybody's to recover: the rows wait for the
+        // boot that follows their owner's sign-in.
+        let Some(principal) = self.admitted_principal().await? else {
+            return Ok(());
+        };
+        crate::agent::recover_open_rows(self, &principal)
             .await
             .map_err(CommandError::Internal)
     }
@@ -472,35 +483,38 @@ impl AppServices {
         workspaces
     }
 
-    /// The principal admitted for signed writes in the app database.
+    /// The principal the app database admits, or `None` while nobody is
+    /// signed in. A command wants [`Self::require_session`]; this is for the
+    /// host's own work that has nothing to do until someone is.
     ///
     /// # Errors
     ///
     /// [`CommandError::Internal`] if the admission gate cannot be read.
-    pub(crate) async fn admitted_principal(&self) -> Result<Option<String>, CommandError> {
+    async fn admitted_principal(&self) -> Result<Option<String>, CommandError> {
         match &self.fixture_principal {
             Some(principal) => Ok(Some(principal.clone())),
             None => Ok(auth::admitted_principal(&self.db.0).await?),
         }
     }
 
-    /// The owner every synced row is written under.
+    /// The signed-in account: whose library a command reads, and the owner
+    /// every row it writes is written under.
     ///
-    /// Sync is not optional and neither is identity: a synced table's `uid` is
-    /// who the row belongs to, and there is no such person while nobody is
-    /// signed in. A command that writes one asks here, and the answer is either
-    /// a principal or a refusal the user can act on — the shell's sign-in
-    /// screen. Reads do not go through this; a signed-out app can still open
-    /// the library it already has.
+    /// Sync is not optional and neither is identity: a row's `uid` is who it
+    /// belongs to, and there is no such person while nobody is signed in. A
+    /// command that reads or writes the library asks here — or opens a
+    /// `VenueAccess` or `VisibleTrackAccess`, which ask the same question in
+    /// their own transaction — and the answer is either a principal or a
+    /// refusal the user can act on: the shell's sign-in screen.
     ///
     /// # Errors
     ///
     /// [`CommandError::Unauthorized`] when no session exists, and
     /// [`CommandError::Internal`] if the gate cannot be read.
     pub async fn require_session(&self) -> Result<String, CommandError> {
-        self.admitted_principal().await?.ok_or_else(|| {
-            CommandError::Unauthorized("Sign in to Luma before changing anything".to_string())
-        })
+        self.admitted_principal()
+            .await?
+            .ok_or_else(|| CommandError::Unauthorized(auth::SIGN_IN_REQUIRED.to_string()))
     }
 }
 

@@ -319,6 +319,7 @@ impl Visualizer {
             return;
         }
         fly.moved = true;
+        self.toured(tour::Move::Fly);
         let speed = navigate::fly_speed(&self.framing) * self.fly_speed;
         self.camera.fly(keys, speed, dt, self.framing.floor_z());
     }
@@ -337,6 +338,7 @@ impl Visualizer {
             self.fly_speed = (self.fly_speed / factor).clamp(lo, hi);
         } else {
             self.zoom(factor, Some(at));
+            self.toured(tour::Move::Zoom);
         }
     }
 
@@ -399,6 +401,7 @@ impl Visualizer {
                 let turn = std::f32::consts::TAU / height;
                 self.camera
                     .orbit_about(pivot, -turn * dx, -turn * dy, &self.framing);
+                self.toured(tour::Move::Orbit);
             }
             // The same turn about the eye: a look.
             Drag::Fly => self.look(dx, dy),
@@ -413,6 +416,7 @@ impl Visualizer {
                 let right = forward.cross(Vec3::Z).normalize();
                 let up = right.cross(forward);
                 self.camera.target += (right * -dx + up * dy) * (extent / height);
+                self.toured(tour::Move::Pan);
             }
         }
     }

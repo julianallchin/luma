@@ -68,6 +68,9 @@ pub(crate) struct QualityBudget {
     /// Most pixels a live viewport renders before the compositor upscales,
     /// when the level sets its own limit.
     pub pixel_budget: Option<f64>,
+    /// Frames a second a live viewport holds at this level: it renders
+    /// fewer pixels when a frame takes longer than that allows.
+    pub frame_rate: f32,
 }
 
 impl QualityBudget {
@@ -102,6 +105,7 @@ impl QualityBudget {
                 haze_resolution_cap: None,
                 haze_steps_cap: None,
                 pixel_budget: None,
+                frame_rate: 30.0,
             },
             // A laptop budget: twice the shadow walk's footprint allowance
             // and half its steps, and twice again while the camera moves.
@@ -135,12 +139,14 @@ impl QualityBudget {
                 haze_resolution_cap: Some(0.5),
                 haze_steps_cap: Some(4),
                 pixel_budget: Some(1.0e6),
+                frame_rate: 60.0,
             },
             Quality::Low => Self {
                 marched: false,
                 fixture_shadows: false,
                 ambient_divisor: 2,
                 haze_resolution_cap: Some(0.25),
+                frame_rate: 120.0,
                 ..Self::of(Quality::Medium)
             },
         }
@@ -186,6 +192,7 @@ mod tests {
             assert!(below.ambient_divisor >= above.ambient_divisor);
             assert!(above.marched || !below.marched);
             assert!(above.fixture_shadows || !below.fixture_shadows);
+            assert!(below.frame_rate >= above.frame_rate);
         }
         for quality in Quality::ALL {
             let still = QualityBudget::of(quality);

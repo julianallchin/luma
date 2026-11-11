@@ -1,5 +1,7 @@
 pub mod engine;
 pub mod layout;
+pub mod library;
+pub mod light;
 pub mod parser;
 
 use std::collections::HashMap;
@@ -13,6 +15,11 @@ use crate::models::fixtures::FixtureDefinition;
 
 /// The definition at `fixture_path` under `root`, parsed at most once per file
 /// per process.
+///
+/// A `lib:<id>` path names a fixture of the library beside `root`
+/// ([`crate::resources::fixture_library_root`]): its spec is read, built and
+/// lowered ([`library::load`]) under the same memo. Anything else is a
+/// QLC+ `.qxf` relative to `root`.
 ///
 /// `fixture_path` comes from synced rows and from callers on the seam, and is
 /// joined onto a directory, so one that would escape `root` is refused rather
@@ -32,10 +39,16 @@ pub fn definition(root: &Path, fixture_path: &str) -> Result<Arc<FixtureDefiniti
     type Parsed = HashMap<PathBuf, (Option<SystemTime>, Arc<FixtureDefinition>)>;
     static CACHE: Lazy<Mutex<Parsed>> = Lazy::new(Default::default);
 
-    let path = root.join(
-        confined(fixture_path)
-            .ok_or_else(|| format!("fixture path escapes the fixtures root: {fixture_path}"))?,
-    );
+    let escapes = || format!("fixture path escapes the fixtures root: {fixture_path}");
+    let path = match library::id(fixture_path) {
+        Some(id) => {
+            let library = crate::resources::fixture_library_root(Some(root))
+                .ok_or_else(|| format!("{fixture_path}: no fixture library is installed"))?;
+            confined(id).ok_or_else(escapes)?;
+            library::spec_path(&library, id)
+        }
+        None => root.join(confined(fixture_path).ok_or_else(escapes)?),
+    };
     let changed = std::fs::metadata(&path)
         .map_err(|error| format!("{fixture_path}: {error}"))?
         .modified()
@@ -44,7 +57,11 @@ pub fn definition(root: &Path, fixture_path: &str) -> Result<Arc<FixtureDefiniti
     if let Some((_, hit)) = cache().get(&path).filter(|(seen, _)| *seen == changed) {
         return Ok(hit.clone());
     }
-    let parsed = Arc::new(parser::parse_definition(&path)?);
+    let parsed = Arc::new(if library::id(fixture_path).is_some() {
+        library::load(&path).map_err(|error| format!("{fixture_path}: {error}"))?
+    } else {
+        parser::parse_definition(&path)?
+    });
     cache().insert(path, (changed, parsed.clone()));
     Ok(parsed)
 }

@@ -312,28 +312,30 @@ const CDJ_W_M: f64 = 0.343;
 const CDJ_INNER_M: f64 = (MIXER_W_M + CDJ_W_M) / 2.0 + BOOTH_GAP_M;
 const CDJ_OUTER_M: f64 = CDJ_INNER_M + CDJ_W_M + BOOTH_GAP_M;
 
-/// The quarter-turn that lays a unit's control face along the booth's run.
+/// The quarter-turn that lays the deck's 2 m run across the booth.
 ///
-/// The deck is modelled with its 2 m axis on `Z` and the players with their
-/// width on `X`, so one of the two has to turn for a row of players to run the
-/// length of the deck. Turning the *players* rather than the deck is what
-/// keeps the booth landing in a room exactly as the bare deck it is made of
-/// lands — the assembly introduces no orientation of its own.
-const BOOTH_UNIT_TURN: i8 = 1;
+/// The deck is modelled with its 2 m axis on `Z`; turning it puts the run on
+/// `X`, so the players stand in a row along it.
+const BOOTH_DECK_TURN: i8 = 1;
+
+/// The half-turn that puts each unit's control face (its modelled `+Z`, where
+/// the DJ stands) on the booth's `-Z`. The booth's `+Z` is then its back, the
+/// side the crowd sees, which is the side every booth already placed in a
+/// room was turned to meet the house with.
+const BOOTH_UNIT_TURN: i8 = 2;
 
 /// The DJ booth: a 2 x 1 m deck — already a metre tall as modelled, which is
-/// standing height — wearing a mixer and four players.
+/// standing height — wearing a mixer and four players in a row.
 ///
 /// Authored centred on the origin in plan, so the piece's footprint centre
-/// *is* its origin and its footing socket is symmetric: the booth is
-/// indifferent to which way a room calls upstage.
+/// *is* its origin and its footing socket is symmetric.
 static DJ_BOOTH_PARTS: &[Part] = &[
-    Part::new(DECK_2X1, DVec2::ZERO, Rest::Ground),
+    Part::new(DECK_2X1, DVec2::ZERO, Rest::Ground).turned(BOOTH_DECK_TURN),
     Part::new(MIXER, DVec2::ZERO, Rest::Deck).turned(BOOTH_UNIT_TURN),
-    Part::new(CDJ, DVec2::new(0.0, -CDJ_INNER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
-    Part::new(CDJ, DVec2::new(0.0, CDJ_INNER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
-    Part::new(CDJ, DVec2::new(0.0, -CDJ_OUTER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
-    Part::new(CDJ, DVec2::new(0.0, CDJ_OUTER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(-CDJ_INNER_M, 0.0), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(CDJ_INNER_M, 0.0), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(-CDJ_OUTER_M, 0.0), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(CDJ_OUTER_M, 0.0), Rest::Deck).turned(BOOTH_UNIT_TURN),
 ];
 
 const DECK_2X1: &str = "stage_lab/stage_praticavel_2x1x1.glb";
@@ -1218,6 +1220,7 @@ impl StatedHousing {
     #[must_use]
     pub fn stock_head() -> Self {
         Self(Definition {
+            built: None,
             kind: "Moving Head".into(),
             modes: Vec::new(),
             physical: Some(crate::definition::Physical {
@@ -1228,6 +1231,7 @@ impl StatedHousing {
                 }),
                 layout: None,
                 lens: None,
+                bulb: None,
             }),
         })
     }
@@ -1320,9 +1324,13 @@ impl Housings {
 /// `housing_draws` scales the mesh itself — to the definition's physical
 /// height. Everything else is drawn as its dimension box turned onto the mount
 /// normal, so its clamp is half its depth: the box is centred on the origin, so
-/// its back face is `depth / 2` above it.
+/// its back face is `depth / 2` above it. A library fixture is its build's top
+/// above its pivot.
 #[must_use]
 pub fn clamp_standoff(def: &Definition, mesh: impl Fn(ModelKind) -> Option<DAabb>) -> f64 {
+    if let Some(built) = &def.built {
+        return f64::from(crate::library::clamp_height(built));
+    }
     let dims = def.dimensions_m();
     let half_depth = f64::from(dims[2]) / 2.0;
     if is_procedural(def) {

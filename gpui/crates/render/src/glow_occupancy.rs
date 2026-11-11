@@ -17,7 +17,7 @@ use std::hash::{Hash, Hasher};
 
 use glam::{UVec3, Vec3};
 
-use crate::frame::{EditorObject, Frame};
+use crate::frame::Frame;
 
 /// Sub-cells along each axis of a glow cell.
 const SUB: u32 = 4;
@@ -69,7 +69,7 @@ impl Occupancy {
                 .draws
                 .iter()
                 .take(frame.draws.len() - frame.transparent.len())
-                .filter(|d| !matches!(d.editor_object, Some(EditorObject::Fixture(_))))
+                .filter(|d| !crate::frame::is_luminaire(frame, d))
         };
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         size.hash(&mut hash);

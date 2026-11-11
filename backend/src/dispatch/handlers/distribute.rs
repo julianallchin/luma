@@ -529,6 +529,56 @@ mod tests {
         assert_eq!(report["fixtures"].as_array().unwrap().len(), 30);
     }
 
+    /// A fixture taken from the library is patched by its `lib:` id in one of
+    /// the library's modes, at that mode's footprint, and its node names the
+    /// same id, so the clamp is measured off the library build.
+    #[tokio::test]
+    async fn a_library_fixture_patches_at_its_modes_footprint() {
+        let (_dir, services, venue) = room().await;
+        let report = dispatch(
+            &services,
+            "distribute",
+            &json!({
+                "venueId": venue,
+                "hostNodeId": null,
+                "hostSocket": null,
+                "fixturePath": "lib:claypaky/sharpy",
+                "modeName": "16ch",
+                "count": 2,
+                "layout": { "kind": "spacing", "metres": 1.0 },
+                "labelPrefix": null,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(report["refusal"], json!(null), "{report}");
+        let rows = patch(&services, &venue).await;
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            assert_eq!(row["fixturePath"], "lib:claypaky/sharpy");
+            assert_eq!(row["modeName"], "16ch");
+            assert_eq!(row["numChannels"], 16);
+        }
+        let mut addresses: Vec<i64> = rows
+            .iter()
+            .map(|row| row["address"].as_i64().unwrap())
+            .collect();
+        addresses.sort_unstable();
+        assert!(addresses[1] - addresses[0] >= 16, "{addresses:?}");
+        let graph = dispatch(&services, "get_venue_graph", &json!({ "venueId": venue }))
+            .await
+            .unwrap();
+        let refs: Vec<&Value> = graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["kind"] == "fixture")
+            .map(|n| &n["catalogRef"])
+            .collect();
+        assert_eq!(refs.len(), 2, "{graph}");
+        assert!(refs.iter().all(|r| *r == "lib:claypaky/sharpy"), "{refs:?}");
+    }
+
     // -----------------------------------------------------------------------
     // Edges of the vocabulary
     // -----------------------------------------------------------------------

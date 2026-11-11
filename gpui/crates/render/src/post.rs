@@ -1,25 +1,26 @@
-//! The camera: auto-exposure, lens glow, tone curve and glare.
+//! The camera: auto-exposure, tone curve and glare.
 //!
 //! Runs only when a frame's [`Look`] asks for more than the single composite
 //! pass does ([`Look::needs_post`]). The composite pass then writes
 //! scene-linear light into [`Post::scene_target`] instead of the output, and
 //! this chain finishes the frame:
 //!
-//! 1. **Lens glow** (`post_lens.wgsl`). Each lit cone's lens is a small
-//!    camera-facing disc at its lens centre, the lens's own radius. It is as bright as the beam's peak when
-//!    the camera is within three quarters of the beam angle, and only a faint
-//!    glow from the side. It is hidden by nearer geometry. On with the glare.
-//! 2. **Metering** (`post_exposure.wgsl`). A 128-bin log-luminance histogram
+//! 1. **Metering** (`post_exposure.wgsl`). A 128-bin log-luminance histogram
 //!    of a quarter of the pixels, centre-weighted. The mean of the band
 //!    between two percentiles of the lit pixels sets the target exposure,
-//!    clamped to `[min_ev, max_ev]`; the compensation is added after the
-//!    clamp. Near-black pixels are not metered, so a dark room with a few
+//!    clamped to [`crate::photometry::ADAPT_EV`], and the exposure goes
+//!    [`crate::photometry::ADAPTATION`] of the way there, so a brighter room
+//!    is still a brighter picture; the compensation is added after that. Near-black pixels are not metered, so a dark room with a few
 //!    beams is exposed for what is lit, and the clamps stop it lifting the
 //!    room further. A frame with almost nothing lit holds the last exposure.
-//!    The exposure moves toward the target with separate speeds up and down,
-//!    and snaps on a standalone frame so a capture is a function of its
-//!    frame alone.
-//! 3. **Glare** (`post_glare.wgsl`, `psf.rs`). The exposed frame's light
+//!    The exposure moves toward the target as an eye does: it opens for a
+//!    darker scene at one speed and closes for a brighter one at another,
+//!    but closes fast only as far as a pupil does
+//!    ([`crate::photometry::PUPIL_STOPS`]) and adapts the rest of the way
+//!    over about a minute, so a light in the face is blinding until then. It
+//!    snaps on a standalone frame so a capture is a function of its frame
+//!    alone.
+//! 2. **Glare** (`post_glare.wgsl`, `psf.rs`). The exposed frame's light
 //!    above a threshold, averaged into a padded FFT grid (1024 × 512 at High,
 //!    512 × 256 at Low; the frame fills at most its top-left quarter), and
 //!    convolved with the glare kernel by FFT: the whole frame at once, so an
@@ -29,7 +30,7 @@
 //!    hexagonal star or an eye, with the lens's dust and scratches; its
 //!    spectrum is computed again only when the style, the diffraction amount
 //!    or the field of view changes.
-//! 4. **Tonemap** (`post_tonemap.wgsl`). Exposure, the footage look's
+//! 3. **Tonemap** (`post_tonemap.wgsl`). Exposure, the footage look's
 //!    sensor noise, the tone curve, HDR expansion, then the glare added over
 //!    the tone-mapped picture: it saturates at the display's white, so a
 //!    white core stays white and the halo spreads over its surroundings.
@@ -37,7 +38,6 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 
-use crate::frame::FixtureCone;
 use crate::gpu::SCENE_FORMAT;
 use crate::psf;
 use crate::scene_desc::{GlareStyle, Look, Quality};
@@ -64,30 +64,27 @@ const HISTOGRAM_SLOTS: u64 = 129;
 /// lenses and beam cores.
 const METER_LOW: f32 = 0.60;
 const METER_HIGH: f32 = 0.98;
-/// log2 of the scene-linear value the band's mean is exposed to. Set so an
-/// ordinary lit frame meters close to 0 EV, the exposure the transport was
-/// tuned at.
-const METER_KEY_LOG2: f32 = -1.0;
 /// Stops per second of the exposure's approach to its target, per stop of
 /// difference: opening up (a darker scene) and closing down (a brighter one).
 const ADAPT_UP: f32 = 1.2;
 const ADAPT_DOWN: f32 = 3.0;
+/// The same, for the part of closing down the pupil cannot do: the eye's own
+/// adaptation to a brighter scene, which takes about a minute.
+const ADAPT_BEHIND_PUPIL: f32 = 1.0 / 60.0;
+/// Bytes of the exposure state: `Exposed` in `post_exposure.wgsl`.
+const STATE_SIZE: u64 = 32;
+/// Bytes of it that say what the exposure is: `Exposed::now`.
+pub(crate) const EXPOSURE_READBACK: u64 = 16;
+
+/// The exposure in `Exposed::now` as it was read back, in stops, once a frame
+/// has set one.
+pub(crate) fn exposure_read_back(now: &[u8]) -> Option<f32> {
+    let now: [f32; 4] = bytemuck::pod_read_unaligned(now);
+    (now[2] > 0.5).then_some(now[0])
+}
 /// Longest step one adaptation takes. A viewport that sat idle for a minute
 /// does not jump on its next frame.
 const MAX_ADAPT_STEP_S: f32 = 0.1;
-
-/// Lens radius in metres for a point-source cone (a house lamp, a synthetic
-/// test cone), which carries none: a hard beam and a wide wash.
-const LENS_RADIUS_BEAM_M: f32 = 0.05;
-const LENS_RADIUS_WASH_M: f32 = 0.12;
-/// Scene-linear radiance of a lens on its axis, per unit of cone intensity:
-/// about 600 times diffuse white. A real lamp's lens is thousands, and its
-/// glare comes from that range. The glare kernel is physical, so a
-/// reflection on a truss, a few times white, glares only faintly; a gain on
-/// the glare itself made every such reflection bloom like a lens.
-const LENS_GAIN: f32 = 600.0;
-/// Depth slack for the lens's own glass and bezel, which sit at its centre.
-const LENS_OCCLUSION_SLACK_M: f32 = 0.1;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -95,23 +92,7 @@ struct MeterUniform {
     exposure: [f32; 4],
     adapt: [f32; 4],
     meter: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct LensUniform {
-    view_proj: [[f32; 4]; 4],
-    camera: [f32; 4],
-    viewport: [f32; 4],
-    depth: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct LensInstance {
-    position: [f32; 4],
-    direction: [f32; 4],
-    color: [f32; 4],
+    eye: [f32; 4],
 }
 
 #[repr(C)]
@@ -146,15 +127,12 @@ fn noise_seed(time: f32) -> f32 {
 }
 
 /// Everything the chain needs from the frame.
-pub(crate) struct PostFrame<'a> {
+pub(crate) struct PostFrame {
     pub look: Look,
     pub quality: Quality,
-    pub cones: &'a [FixtureCone],
     pub view_proj: Mat4,
     pub eye: Vec3,
     pub fov_y_deg: f32,
-    pub near: f32,
-    pub far: f32,
     pub width: u32,
     pub height: u32,
     /// Display headroom; 1 in SDR.
@@ -200,8 +178,6 @@ pub(crate) struct Pipelines {
     exposure_layout: wgpu::BindGroupLayout,
     histogram: wgpu::ComputePipeline,
     adapt: wgpu::ComputePipeline,
-    lens_layout: wgpu::BindGroupLayout,
-    lens: wgpu::RenderPipeline,
     fft_layout: wgpu::BindGroupLayout,
     /// High, then Low.
     fft: [Fft; 2],
@@ -266,19 +242,6 @@ fn module(device: &wgpu::Device, label: &str, source: String) -> wgpu::ShaderMod
         source: wgpu::ShaderSource::Wgsl(source.into()),
     })
 }
-
-const ADDITIVE: wgpu::BlendState = wgpu::BlendState {
-    color: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Add,
-    },
-    alpha: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::Zero,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Add,
-    },
-};
 
 impl Pipelines {
     /// `output_formats` are the output targets the tonemap writes, in
@@ -379,40 +342,6 @@ impl Pipelines {
                 cache: None,
             })
         };
-
-        let lens_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("post-lens"),
-            entries: &[
-                entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT, uniform()),
-                entry(1, wgpu::ShaderStages::VERTEX, storage(true)),
-                entry(
-                    2,
-                    wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                ),
-            ],
-        });
-        let lens_module = module(
-            device,
-            "post-lens",
-            format!(
-                "const WHITE_LEAK: f32 = {:?};\n{}",
-                crate::gpu::Transport::WHITE_LEAK,
-                include_str!("shaders/post_lens.wgsl")
-            ),
-        );
-        let lens = render_pipeline(
-            "post-lens",
-            &lens_layout,
-            &lens_module,
-            SCENE_FORMAT,
-            Some(ADDITIVE),
-            &[],
-        );
 
         let fft_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post-glare"),
@@ -534,8 +463,6 @@ impl Pipelines {
             exposure_layout,
             histogram,
             adapt,
-            lens_layout,
-            lens,
             fft_layout,
             fft,
             patterns: std::sync::OnceLock::new(),
@@ -658,8 +585,6 @@ pub(crate) struct Post {
     histogram: wgpu::Buffer,
     state: wgpu::Buffer,
     meter: wgpu::Buffer,
-    lens: wgpu::Buffer,
-    lenses: Option<(wgpu::Buffer, u64)>,
     fft: wgpu::Buffer,
     tonemap: wgpu::Buffer,
     /// The clock of the last metered frame.
@@ -687,7 +612,7 @@ impl Post {
             ),
             state: buffer(
                 "post-exposure-state",
-                16,
+                STATE_SIZE,
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             ),
             meter: buffer(
@@ -695,12 +620,6 @@ impl Post {
                 std::mem::size_of::<MeterUniform>() as u64,
                 wgpu::BufferUsages::UNIFORM,
             ),
-            lens: buffer(
-                "post-lens",
-                std::mem::size_of::<LensUniform>() as u64,
-                wgpu::BufferUsages::UNIFORM,
-            ),
-            lenses: None,
             fft: buffer(
                 "post-glare",
                 std::mem::size_of::<FftUniform>() as u64,
@@ -714,6 +633,11 @@ impl Post {
             last_adapt: None,
             was_auto: None,
         }
+    }
+
+    /// The buffer the exposure lives in, `Exposed::now` first.
+    pub(crate) fn exposure_state(&self) -> wgpu::Buffer {
+        self.state.clone()
     }
 
     /// The exposure the last post-chain frame used and the one it was
@@ -752,26 +676,30 @@ impl Post {
     pub(crate) fn scene_target(
         &mut self,
         device: &wgpu::Device,
+        memory: &mut crate::gpu::target_memory::TargetMemory,
         width: u32,
         height: u32,
     ) -> wgpu::TextureView {
         let size = [width.max(1), height.max(1)];
         if self.targets.as_ref().is_none_or(|t| t.size != size) {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("post-scene"),
-                size: wgpu::Extent3d {
-                    width: size[0],
-                    height: size[1],
-                    depth_or_array_layers: 1,
+            let texture = memory.texture(
+                device,
+                &wgpu::TextureDescriptor {
+                    label: Some("post-scene"),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: SCENE_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
                 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: SCENE_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
+            );
             self.targets = Some(Targets {
                 size,
                 scene: texture.create_view(&wgpu::TextureViewDescriptor::default()),
@@ -791,8 +719,7 @@ impl Post {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        frame: &PostFrame<'_>,
-        depth: &wgpu::TextureView,
+        frame: &PostFrame,
         output: &wgpu::TextureView,
         pass_queries: &mut crate::pass_profile::PassQueries<'q>,
         last: Option<wgpu::RenderPassTimestampWrites<'q>>,
@@ -800,99 +727,10 @@ impl Post {
         let look = frame.look;
         let glare_on = look.glare.on();
 
-        // --- lens glow ------------------------------------------------------
-        let lenses: Vec<LensInstance> = if glare_on {
-            frame
-                .cones
-                .iter()
-                .filter(|cone| cone.intensity > 0.0)
-                .map(|cone| LensInstance {
-                    // `position` is the lens centre on the front glass.
-                    position: cone
-                        .position
-                        .extend(if cone.lens.radius > 0.0 {
-                            cone.lens
-                                .radius
-                                .min(luma_scene::luminaire::Lens::MAX_RADIUS_M)
-                        } else {
-                            LENS_RADIUS_BEAM_M
-                                + (LENS_RADIUS_WASH_M - LENS_RADIUS_BEAM_M) * cone.wash
-                        })
-                        .to_array(),
-                    direction: cone.direction.extend(cone.cos_beam).to_array(),
-                    color: cone.color.extend(cone.intensity).to_array(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
         let targets = self
             .targets
             .as_mut()
             .expect("scene_target allocates the targets first");
-        if !lenses.is_empty() {
-            let bytes = bytemuck::cast_slice::<_, u8>(&lenses);
-            let needed = bytes.len() as u64;
-            if self.lenses.as_ref().is_none_or(|(_, size)| *size < needed) {
-                let size = needed.next_power_of_two().max(1024);
-                self.lenses = Some((
-                    device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("post-lenses"),
-                        size,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }),
-                    size,
-                ));
-            }
-            let (lens_buffer, _) = self.lenses.as_ref().expect("just allocated");
-            queue.write_buffer(lens_buffer, 0, bytes);
-            let focal = frame.height as f32 * 0.5 / (frame.fov_y_deg.to_radians() * 0.5).tan();
-            queue.write_buffer(
-                &self.lens,
-                0,
-                bytemuck::bytes_of(&LensUniform {
-                    view_proj: frame.view_proj.to_cols_array_2d(),
-                    camera: frame.eye.extend(1.0).to_array(),
-                    viewport: [
-                        frame.width as f32,
-                        frame.height as f32,
-                        focal,
-                        LENS_GAIN * look.glare.strength.min(1.0),
-                    ],
-                    depth: [frame.near, frame.far, LENS_OCCLUSION_SLACK_M, 0.0],
-                }),
-            );
-            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("post-lens"),
-                layout: &pipelines.lens_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.lens.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: lens_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(depth),
-                    },
-                ],
-            });
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("post-lens"),
-                color_attachments: &[Some(attachment(&targets.scene, false))],
-                depth_stencil_attachment: None,
-                timestamp_writes: pass_queries.render("post-lens", None),
-                ..Default::default()
-            });
-            pass.set_pipeline(&pipelines.lens);
-            pass.set_bind_group(0, &bind, &[]);
-            pass.draw(0..6, 0..lenses.len() as u32);
-        }
-
         // --- metering ---------------------------------------------------------
         let auto = look.exposure.auto;
         let snap = !frame.temporal || self.was_auto != Some(auto) || self.last_adapt.is_none();
@@ -907,12 +745,30 @@ impl Post {
             bytemuck::bytes_of(&MeterUniform {
                 exposure: [
                     f32::from(u8::from(auto)),
-                    look.exposure.ev,
-                    look.exposure.min_ev,
-                    look.exposure.max_ev.max(look.exposure.min_ev),
+                    if auto {
+                        look.exposure.ev
+                    } else {
+                        look.exposure.fixed()
+                    },
+                    *crate::photometry::ADAPT_EV.start(),
+                    *crate::photometry::ADAPT_EV.end(),
                 ],
                 adapt: [dt, f32::from(u8::from(snap)), ADAPT_UP, ADAPT_DOWN],
-                meter: [METER_LOW, METER_HIGH, METER_KEY_LOG2, 1.0],
+                // A reflected meter puts the luminance it reads on middle
+                // grey (ISO 2720), the same grey the incident reading for 0
+                // EV does (`photometry.rs`); the band is what it reads.
+                meter: [
+                    METER_LOW,
+                    METER_HIGH,
+                    crate::photometry::MIDDLE_GREY.log2(),
+                    1.0,
+                ],
+                eye: [
+                    crate::photometry::PUPIL_STOPS,
+                    ADAPT_BEHIND_PUPIL,
+                    crate::photometry::ADAPTATION,
+                    0.0,
+                ],
             }),
         );
         let exposure_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1170,7 +1026,7 @@ fn attachment(view: &wgpu::TextureView, clear: bool) -> wgpu::RenderPassColorAtt
 /// The tonemap draws the sun's veil (not its diffraction rays) from its
 /// direction, and fades that in over a few glare texels as the disc leaves
 /// the frame, as the convolution's own copy fades out.
-fn off_frame_sun(frame: &PostFrame<'_>, texel_px: f32) -> ([f32; 4], [f32; 4]) {
+fn off_frame_sun(frame: &PostFrame, texel_px: f32) -> ([f32; 4], [f32; 4]) {
     let Some((direction, light)) = frame.sun else {
         return ([0.0; 4], [0.0; 4]);
     };

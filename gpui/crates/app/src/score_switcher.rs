@@ -65,23 +65,21 @@ impl Luma {
             rename: None,
         });
         let pending = self.library.scores_across_venues(&track_id);
-        let user = self.library.user_id();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let listing = pending.await;
             this.update(cx, |this, cx| {
                 // An answer about another song is a stale one: the menu was
                 // closed and reopened over a different score meanwhile.
-                if let Some(menu) = this
-                    .score_switcher
-                    .open_mut()
-                    .filter(|menu| menu.track_id == track_id)
-                {
+                if let (Some(menu), Some(songs)) = (
+                    this.score_switcher
+                        .open_mut()
+                        .filter(|menu| menu.track_id == track_id),
+                    &this.songs,
+                ) {
                     menu.rows = Some(
                         listing
-                            .map(|summaries| {
-                                crate::tracks::scores::rows(&summaries, user.as_deref())
-                            })
+                            .map(|summaries| crate::tracks::scores::rows(&summaries, songs.user()))
                             .map_err(|error| {
                                 log::warn!("Could not load the song's scores: {error}");
                             }),

@@ -10,6 +10,8 @@
 const LINE = "A softly lit stage.";
 
 fixture({
+  // These tests read a finished turn's tool rows, which compact turns fold away.
+  sql: ["INSERT OR REPLACE INTO settings (key, value) VALUES ('compact_turns', 'false')"],
   window: [1280, 720],
   motion: true,
   model_cadence_ms: 10,
@@ -112,7 +114,10 @@ test("folding a tool call leaves the transcript above it still", () => {
     app.click(app.snapshot().find({ role: "button", label: "Send" }));
   };
   send("Light the stage");
-  until("the first reply", (s) => !busy(s) && texts(s).includes(LINE));
+  until(
+    "the first reply",
+    (s) => !busy(s) && texts(s).includes(LINE) && s.find({ role: "button", label: "Send" }),
+  );
   send("where does the ramp peak?");
   until("the answer", (s) => !busy(s) && texts(s).some((l) => l.includes("It peaks at bar 3.")));
   // Let the pin bring the end into view and park.

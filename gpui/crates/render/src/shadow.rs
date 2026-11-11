@@ -242,10 +242,7 @@ pub(crate) fn fixture_shadow_caster_hash(frame: &Frame, opaque: usize) -> u64 {
         hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
     };
     for draw in frame.draws.iter().take(opaque) {
-        if matches!(
-            &draw.editor_object,
-            Some(crate::frame::EditorObject::Fixture(_))
-        ) {
+        if crate::frame::is_luminaire(frame, draw) {
             continue;
         }
         for byte in frame.meshes[draw.mesh].key.as_bytes() {
@@ -320,7 +317,6 @@ mod tests {
             color: Vec3::ONE,
             intensity: 1.0,
             cos_field: half.cos(),
-            wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
@@ -352,7 +348,6 @@ mod tests {
             color: Vec3::ONE,
             intensity: 1.0,
             cos_field: 0.9,
-            wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
@@ -406,7 +401,6 @@ mod tests {
                 color: Vec3::ONE,
                 intensity: 1.0,
                 cos_field: 0.95,
-                wash: 0.0,
                 gobo: 0,
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,
@@ -446,7 +440,6 @@ mod tests {
             color: Vec3::ONE,
             intensity,
             cos_field: 0.95,
-            wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
@@ -502,7 +495,6 @@ mod tests {
             color: Vec3::ONE,
             intensity: 1.0,
             cos_field: 0.9,
-            wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,

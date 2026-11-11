@@ -188,7 +188,6 @@ impl PerformPattern {
             start,
             duration,
             seed: self.seed,
-            selection_seed: None,
             selection: self.selection.clone(),
             z_index: self.z_index,
             blend_mode: self.blend_mode,
@@ -291,7 +290,7 @@ pub enum CellContent {
         #[serde(default)]
         step: Option<Step>,
     },
-    /// A venue group, by name (or `all`), to choose: tapped, it is chosen
+    /// A venue group, by id (or `all`), to choose: tapped, it is chosen
     /// or not; held, what is pressed meanwhile acts on it alone. An empty
     /// label shows the group's.
     #[serde(rename_all = "camelCase")]
@@ -387,18 +386,8 @@ impl CellContent {
     /// Why this cannot be stored with `patterns`, if it cannot: a fader
     /// moving what is no number, a list mixing colors and numbers, setting
     /// what is not of its kind, or with its values, fade or step out of
-    /// range, or a group cell holding what is no group name.
+    /// range.
     fn misfit(&self, patterns: &[PerformPattern]) -> Option<String> {
-        if let CellContent::Group { group, .. } = self {
-            return (group != "all")
-                .then(|| crate::models::groups::validate_group_name(group).err())
-                .flatten()
-                .map(|why| {
-                    format!(
-                        "a group cell holds a venue group's name, such as front_wash, or all: {why}"
-                    )
-                });
-        }
         if let CellContent::List {
             values,
             fade,

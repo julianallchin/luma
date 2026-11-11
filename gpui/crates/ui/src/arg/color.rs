@@ -774,16 +774,18 @@ impl ColorArgEditor {
             .children(fields);
         if let ColorMode::Mix(amount) = mode {
             let this = cx.entity();
-            plate.child(crate::luma_slider(
+            plate.child(crate::float::scrub(
                 format!("{}:mix", self.id),
-                amount,
+                f64::from(amount),
                 0.,
                 1.,
+                0.01,
                 PICKER_WIDTH,
                 move |mix, _, cx| {
                     this.update(cx, |editor, cx| {
+                        #[allow(clippy::cast_possible_truncation)]
                         let value = ColorArg {
-                            mode: ColorMode::Mix(mix),
+                            mode: ColorMode::Mix(mix as f32),
                             ..editor.value
                         };
                         editor.commit(value, cx);

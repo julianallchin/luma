@@ -251,7 +251,7 @@ impl LaserRig {
                 let definition = definition(&fixture.fixture_path)
                     .filter(|definition| definition.is_laser_projector())?;
                 let pose = venue.pose(&fixture.id)?;
-                let [across, up] = definition.focus_range();
+                let [across, up] = definition.travel().map(|[lo, hi]| hi - lo);
                 Some(Projector {
                     id: fixture.id.clone(),
                     basis: Basis::of(&crate::fixtures::layout::fixture_mount(pose)),

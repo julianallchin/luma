@@ -1,19 +1,15 @@
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::models::beat_grid::BeatGrid;
-use crate::models::tracks::{TrackBrowserRow, TrackImportResult, TrackSummary};
+use crate::models::tracks::{TrackBrowserRow, TrackImportResult};
 use crate::services::tracks::{self as track_service, ImportRequest};
-
-/// The whole library, unscoped and without album-art bytes.
-pub async fn list_tracks(services: &AppServices) -> Result<Vec<TrackSummary>, CommandError> {
-    Ok(crate::database::local::tracks::list_tracks(&services.db.0).await?)
-}
 
 /// `None` when beat detection has not run for this track.
 pub async fn get_track_beats(
     services: &AppServices,
     track_id: String,
 ) -> Result<Option<BeatGrid>, CommandError> {
+    services.require_session().await?;
     Ok(crate::database::local::tracks::get_track_beats(&services.db.0, &track_id).await?)
 }
 
@@ -53,6 +49,7 @@ pub async fn list_tracks_enriched(
     services: &AppServices,
     venue_id: Option<String>,
 ) -> Result<Vec<TrackBrowserRow>, CommandError> {
+    services.require_session().await?;
     Ok(track_service::list_tracks_enriched(&services.db.0, venue_id.as_deref()).await?)
 }
 

@@ -254,7 +254,7 @@ by node id — but do not build that first.
 
 ## Goldens
 
-`harness/goldens/snap*.json` pin `solve_snap` numerically and carry over unchanged —
+`harness/goldens/stage-snap.json` pins `solve_snap` numerically and carries over unchanged —
 the resolver's contract is not what is changing. Two new families: `describe()` per
 fixture venue (a much tighter diff than a render), and per-node resolved world poses
 captured at the end of phase 3 as the migration's proof. Render goldens recapture once

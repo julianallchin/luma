@@ -17,7 +17,10 @@ use gpui::{AnyView, App, AppContext as _, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use serde_json::Value;
 
-const LAST_VENUE: &str = "last-venue";
+/// Where the fixture account's last venue is remembered.
+fn last_venue() -> String {
+    format!("last-venue:{}", session::PRINCIPAL)
+}
 
 async fn seed(dir: &Path, venues: &[(&str, &str)], remembered: Option<&str>, tracks: bool) {
     let db = luma_lib::database::local::database::init_app_db_at(dir)
@@ -64,7 +67,7 @@ async fn seed(dir: &Path, venues: &[(&str, &str)], remembered: Option<&str>, tra
         .await
         .expect("failed to open fixture state database");
     if let Some(remembered) = remembered {
-        luma_lib::database::local::auth::set_session_item(&state.0, LAST_VENUE, remembered)
+        luma_lib::database::local::auth::set_session_item(&state.0, &last_venue(), remembered)
             .await
             .expect("failed to seed remembered venue");
     }
@@ -419,9 +422,10 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     assert_eq!(out["picker"], true);
     assert_eq!(out["onboarding"], true);
     drop(stale);
-    assert_eq!(session_item(&stale_dir, LAST_VENUE), None);
+    assert_eq!(session_item(&stale_dir, &last_venue()), None);
 
-    // Zero venues is a focused create state. Submission goes through the real
+    // Zero venues is the welcome page, one press from a focused create
+    // field. Submission goes through the real
     // create_venue command, opens the result, and the next launch restores it.
     let empty_dir = fixture_dir("empty", &[], None, false);
     let mut empty = harness(
@@ -434,6 +438,10 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     let out = empty.run(
         &support::script(r#"
         const loading = app.snapshot().find(n => n.role === "text" && n.label === "Loading") !== undefined;
+        const welcome = until("the welcome page", (s) =>
+            s.find({ role: "button", label: "Get started" }) !== undefined);
+        const dialogless = welcome.find({ role: "card", label: "Venue dialog" }) === undefined;
+        app.click(welcome.find({ role: "button", label: "Get started" }));
         const create = until("first venue onboarding", (s) =>
             s.find({ role: "input", label: "Venue name" })?.focused === true);
         const input = create.find({ role: "input", label: "Venue name" });
@@ -454,6 +462,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         const opened = until("the new venue's empty song list", (s) =>
             s.find({ role: "text", label: "No tracks imported" }) !== undefined ? s : undefined);
         ({ loading,
+           dialogless,
            focused: create.find({ role: "input", label: "Venue name" }).focused,
            opened: opened.find({ role: "text", label: "No tracks imported" }) !== undefined,
            setup: !!setup })
@@ -461,6 +470,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         Duration::from_secs(90),
     );
     assert_eq!(out["loading"], true);
+    assert_eq!(out["dialogless"], true);
     assert_eq!(out["focused"], true);
     assert_eq!(out["opened"], true);
     assert_eq!(out["setup"], true);
@@ -520,7 +530,10 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
     );
     assert_eq!(out, Value::Bool(true));
     drop(fifo);
-    assert_eq!(session_item(&fifo_dir, LAST_VENUE).as_deref(), Some("beta"));
+    assert_eq!(
+        session_item(&fifo_dir, &last_venue()).as_deref(),
+        Some("beta")
+    );
     let mut fifo_restore = harness(
         &fifo_dir,
         luma_app::NavigationFixture {

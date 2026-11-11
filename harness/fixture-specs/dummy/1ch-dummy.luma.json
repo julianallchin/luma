@@ -1,0 +1,43 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "dummy/1ch-dummy",
+  "name": "Dummy 1ch Dummy",
+  "manufacturer": "Dummy",
+  "model": "1ch Dummy",
+  "category": "other",
+  "description": "This is a placeholder test asset named 1ch Dummy, not a real stage fixture. It is a plain black cube, probably about 0.2 m square and roughly 0.25 m tall with the light included. There is no yoke, arm, base or bracket, so it probably sits fixed as one solid body with no pan, tilt or other motion axes. The only optic is bare: one dome-shaped glowing LED sits flush at the centre of the top face, a single circular emitter rather than a grid or ring. That one cell is the entire controllable output, driven by a single channel that handles both dimmer and strobe. Notable: the LED is probably a dome, and the overall form is too simple to match any known product.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "strobe",
+   "dims_src": "mesh",
+   "import": {"from": "depence", "old_id": "7935b07b-9115-4ae2-90e4-87784af98420"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.2, 0.2501, 0.2]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "box",
+   "outline": "square",
+   "w": 0.2,
+   "len": 0.2501,
+   "d": 0.2,
+   "off": 0.0,
+   "tilt_y": 0.1251,
+   "features": []
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "zones": [{"layout": {"kind": "single", "n": 1, "stagger": false}, "cell": "circle", "optic": "open", "cells": 1}]
+  }
+ ],
+ "cells": {"count": 1, "emitters": 1},
+ "sources": [{"cell_ranges": [[0, 0]]}]
+}

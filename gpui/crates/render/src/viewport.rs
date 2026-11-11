@@ -97,14 +97,14 @@ pub const PRESENTATION_SLOTS: usize = 5;
 /// GPU backs up past a frame period — during exactly the hitch someone would be
 /// debugging.
 ///
-/// With `D = 2` in the vendored `gpui_apple/src/metal_renderer.rs`, three is the
+/// With `D = 2` in gpui's `gpui_apple/src/metal_renderer.rs`, three is the
 /// smallest safe value. Change either number and you must recheck the other; the
 /// comment there says the same from its side.
 ///
 /// # The standing invitation to delete this coupling
 ///
 /// A counting argument that two files must agree on is exactly the kind of
-/// invariant a vendored-dependency refresh can silently falsify. Retaining the
+/// invariant a gpui refresh can silently falsify. Retaining the
 /// `CVPixelBuffer` in the window command buffer's completed handler and
 /// releasing the slot from that callback would replace it with a real fence, and
 /// then neither number needs to know about the other.
@@ -662,6 +662,16 @@ impl<J, R> Slots<J, R> {
         census
     }
 
+    /// Whether a submitted frame has yet to finish: one waiting to start, or
+    /// one on the GPU.
+    fn in_flight(&self) -> bool {
+        self.queued.is_some()
+            || self
+                .gpu
+                .iter()
+                .any(|slot| matches!(slot, GpuSlot::Rendering { .. }))
+    }
+
     /// The slot a new frame would be rendered into. Idle first; failing that,
     /// a completed frame the UI has not consumed and no longer needs to.
     /// Reserved slots are neither, whatever state they are in.
@@ -942,6 +952,24 @@ impl AsyncViewport {
         drop(displaced);
         self.shared.work.notify_one();
         (serial, outcome, occupancy)
+    }
+
+    /// Whether a submitted frame has yet to finish, and the slots as they are
+    /// now.
+    ///
+    /// A caller that paces itself submits only when this is false. Frames on
+    /// one queue run in turn, so a second frame submitted behind the first
+    /// does not finish sooner: measured live, two in flight each took twice
+    /// as long, finished together, and [`Self::take_latest`] threw one of
+    /// each pair away.
+    #[must_use]
+    pub fn in_flight(&self) -> (bool, Occupancy) {
+        let slots = self
+            .shared
+            .slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (slots.in_flight(), slots.occupancy())
     }
 
     /// Take the newest completed frame, if one exists, without polling or
@@ -1994,6 +2022,22 @@ mod tests {
             "the newest completed frame is still protected"
         );
         assert_eq!(startable, ready[0], "the oldest is the one recycled");
+    }
+
+    /// What a caller that paces itself waits on: a frame is in flight from
+    /// its submission until it completes, whether or not anyone has taken it.
+    #[test]
+    fn a_frame_is_in_flight_from_submission_until_it_completes() {
+        let mut slots = Slots::<u32, u32>::default();
+        assert!(!slots.in_flight(), "nothing was submitted");
+        slots.submit(1, 10);
+        assert!(slots.in_flight(), "it is waiting to start");
+        let (slot, serial, _, _) = slots.begin_latest().expect("a free slot");
+        assert!(slots.in_flight(), "it is on the GPU");
+        slots.complete(slot, serial, 10);
+        assert!(!slots.in_flight(), "it is ready, and the GPU is free");
+        assert_eq!(slots.take_latest(), Some(10));
+        assert!(!slots.in_flight());
     }
 
     #[test]

@@ -1,35 +1,13 @@
-# Genre model — provisioning and licensing
+# Genre model — provisioning
 
 The `genre` preprocessor classifies every bar into the 400-style Discogs
-taxonomy using **Discogs-EffNet** from the Essentia / MTG-UPF model zoo. Unlike
-every other model in Luma, its weights are **not bundled**: they are downloaded
-on first use, directly from MTG's server, checksum-pinned
-(`genre::process::ensure_model`).
+taxonomy using **Discogs-EffNet** from the Essentia / MTG-UPF model zoo. Its
+weights are **not bundled**: they are downloaded on first use, directly from
+MTG's server, checksum-pinned (`genre::process::ensure_model`).
 
-## Licensing (read this first)
-
-> All the models are available under the **CC BY-NC-ND 4.0** license for
-> non-commercial use, and are also available under a proprietary license upon
-> request.
->
-> — <https://essentia.upf.edu/licensing_information.html>
-
-That is Attribution + **NonCommercial** + **NoDerivatives**, which is stricter
-than it first looks:
-
-- **NC** — a paid or commercially distributed Luma build cannot ship these
-  weights. Local and development use is fine.
-- **ND** — redistributing a modified or converted copy is not permitted. Note
-  the ONNX file itself is a conversion of the upstream TensorFlow model, so
-  even re-hosting the converted file is legally awkward.
-- **BY** — attribute MTG-UPF wherever genre output is surfaced to users.
-
-Why auto-download is acceptable: the ONNX file at MTG's URL is **their own
-hosted conversion** (the checksum pin below matches their server byte for
-byte), and Luma fetches from the source rather than re-hosting — so Luma never
-redistributes the weights, and the ND clause is not tripped. The NC clause is
-carried by Luma being internal. **Before shipping genre detection in a
-commercial build, obtain the proprietary license from MTG.**
+The weights are MTG-UPF's, published under CC BY-NC-ND 4.0
+(<https://essentia.upf.edu/licensing_information.html>). Luma fetches the file
+from MTG's server and does not re-host it.
 
 ## How the weights arrive
 
@@ -42,7 +20,6 @@ into the app config `models` directory:
 
 - macOS: `~/Library/Application Support/com.luma.luma/models/`
 - Linux: `~/.config/com.luma.luma/models/`
-- Windows: `%APPDATA%\com.luma.luma\models\`
 
 The download is SHA-256-pinned (`MODEL_SHA256` in `preprocessing/workers/genre/process.rs`) and lands
 via `.part` + atomic rename, so a crashed or corrupt download can never be

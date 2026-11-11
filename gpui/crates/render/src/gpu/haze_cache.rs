@@ -83,11 +83,39 @@ impl Renderer {
                         mapped_at_creation: false,
                     })
                 };
+                // Only the header follows the frame's shape. The payload table
+                // and its claims are sized by the device, and what they hold
+                // stays unreadable across a resize by itself: entries are keyed
+                // by generations that are never reissued and claims by epochs
+                // that never repeat. So a resize drag, which changes the shape
+                // on nearly every frame, keeps them rather than reallocating
+                // (and having the kernel map) the largest buffers in the frame.
+                // The header is kept while it is big enough and otherwise
+                // grows with headroom, for the same drag.
+                let previous = self
+                    .interval_pools
+                    .take()
+                    .filter(|pools| pools.table.size() == (table_entries * entry_words * 4).max(4));
+                let header = previous
+                    .as_ref()
+                    .filter(|pools| pools.header.size() >= u64::from(header_words) * 4)
+                    .map(|pools| pools.header.clone())
+                    .unwrap_or_else(|| {
+                        let grown = (u64::from(header_words) * 5 / 4).min(limit_words);
+                        buffer("interval-cache-header", grown)
+                    });
+                let (claims, table) = match previous {
+                    Some(pools) => (pools.claims, pools.table),
+                    None => (
+                        buffer("interval-cache-claims", table_entries),
+                        buffer("interval-cache-table", table_entries * entry_words),
+                    ),
+                };
                 self.interval_pools = Some(IntervalCachePools {
                     shape: (blocks_total, capacity),
-                    header: buffer("interval-cache-header", u64::from(header_words)),
-                    claims: buffer("interval-cache-claims", table_entries),
-                    table: buffer("interval-cache-table", table_entries * entry_words),
+                    header,
+                    claims,
+                    table,
                     bucket_mask: (table_entries / 4 - 1) as u32,
                 });
                 self.interval_cache.resize(header_words / 2);
@@ -131,7 +159,7 @@ impl Renderer {
                         range: cone.range.to_bits(),
                         cos_field: cone.cos_field.to_bits(),
                         lens_distance: rests[index].lens_distance.to_bits(),
-                        wash: cone.wash.to_bits(),
+                        handover: rests[index].handover.to_bits(),
                         scatters: rests[index].haze_gain > 0.0,
                         gobo: cone.gobo != 0,
                         rect: block_rect(tiles, scale, [blocks.0, blocks.1]),

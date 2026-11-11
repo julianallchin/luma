@@ -1,0 +1,194 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "claypaky/astroscan-mirror",
+  "name": "Clay Paky AstroScan Mirror",
+  "manufacturer": "Clay Paky",
+  "model": "AstroScan Mirror",
+  "category": "scanner",
+  "description": "Clay Paky AstroScan (HMI 1200): a Golden Scan style body stood upright, about 1.16 m tall overall. A tall square-section column (about 0.24 x 0.33 m) sits on a small foot frame and has a side hanging bracket. The lamp beam fires straight up into a patented rotating head on top: a faceted cone mirror under a round domed cap carried on two struts, which splits the beam into 10 beams. One HMI source has one intensity channel, so it is one DMX cell. It has a colour wheel and gobos.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "scanner",
+   "dims_src": "mesh",
+   "import": {"from": "depence", "old_id": "d8501862-eea6-4fc2-81d5-2eabfff3f985"},
+   "sources": []
+  }
+ },
+ "template": "deflector",
+ "dims": {"size": [0.45, 1.16, 0.33]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {
+   "pan": {"drive": "dmx", "range": [-6.0, 6.0], "per_head": false, "axis": [0, 1, 0]},
+   "tilt": {"drive": "dmx", "range": [-6.0, 6.0], "per_head": false, "axis": [1, 0, 0]},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.24,
+   "len": 0.8,
+   "d": 0.33,
+   "off": 0.0,
+   "tilt_y": 0.4,
+   "lens_d": 0.1452,
+   "features": ["foot"]
+  },
+  "parts": [
+   {
+    "attach": "base",
+    "shape": "cyl",
+    "r": 0.13,
+    "len": 0.07,
+    "pos": [0, 1.115, 0],
+    "rot": [90, 0, 0],
+    "mat": "body",
+    "name": "head_cap"
+   },
+   {
+    "attach": "base",
+    "shape": "cone",
+    "r": 0.08,
+    "len": 0.08,
+    "pos": [0, 1.02, 0],
+    "rot": [90, 0, 0],
+    "mat": "metal",
+    "name": "cone_mirror"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.015, 0.3, 0.03],
+    "pos": [-0.12, 0.94, 0],
+    "mat": "body",
+    "name": "strut_l"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.015, 0.3, 0.03],
+    "pos": [0.12, 0.94, 0],
+    "mat": "body",
+    "name": "strut_r"
+   },
+   {
+    "attach": "base",
+    "shape": "cyl",
+    "r": 0.07,
+    "len": 0.07,
+    "pos": [0, 0.83, 0],
+    "rot": [90, 0, 0],
+    "mat": "metal",
+    "name": "lens_collar"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.11, 0.03, 0.2],
+    "pos": [0.175, 0.48, 0],
+    "mat": "metal",
+    "name": "side_bracket"
+   }
+  ]
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "layout": {"kind": "single"},
+    "child": {"outline": "circle", "fill": 0.5, "emitter": {"kind": "lens", "colour": "white"}}
+   }
+  }
+ ],
+ "deflector": {"element": "mirror", "pos": [0.0, 0.0, 0.0]},
+ "cells": {"count": 1, "emitters": 1},
+ "sources": [{"cell_ranges": [[0, 0]]}],
+ "control": {
+  "modes": [
+   {
+    "name": "9ch",
+    "options": {"channels": "9"},
+    "footprint": 9,
+    "channels": [
+     {"attr": "beam/iris"},
+     {"attr": "colour/wheel", "ranges": "t1"},
+     {"attr": "control"},
+     {"attr": "shutter", "ranges": "t2"},
+     {"attr": "position/pan"},
+     {"attr": "position/tilt"},
+     {"attr": "gobo/wheel", "ranges": "t3"},
+     {"attr": "gobo/rot", "ranges": "t4"},
+     {"attr": "other"}
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "14ch",
+    "options": {"channels": "14"},
+    "footprint": 14,
+    "channels": [
+     {"attr": "beam/iris"},
+     {"attr": "colour/wheel", "ranges": "t1"},
+     {"attr": "control"},
+     {"attr": "shutter", "ranges": "t2"},
+     {"attr": "position/pan"},
+     {"attr": "position/tilt"},
+     {"attr": "gobo/wheel", "ranges": "t3"},
+     {"attr": "gobo/rot", "ranges": "t4"},
+     {"attr": "other", "n": 1},
+     {"attr": "other", "n": 2},
+     {"attr": "other", "n": 3},
+     {"attr": "other", "n": 4},
+     {"attr": "other", "n": 5},
+     {"attr": "other", "n": 6}
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   }
+  ],
+  "prov": {},
+  "tables": {
+   "t1": [
+    {"dmx": [0, 7], "slot": 0, "state": "slot"},
+    {"dmx": [8, 23], "slot": 1, "state": "slot"},
+    {"dmx": [24, 39], "slot": 2, "state": "slot"},
+    {"dmx": [40, 55], "slot": 3, "state": "slot"},
+    {"dmx": [56, 71], "slot": 4, "state": "slot"},
+    {"dmx": [72, 87], "slot": 5, "state": "slot"},
+    {"dmx": [88, 103], "slot": 6, "state": "slot"},
+    {"dmx": [104, 119], "slot": 7, "state": "slot"},
+    {"dmx": [120, 127], "slot": 8, "state": "slot"},
+    {"dmx": [128, 255], "state": "cw"}
+   ],
+   "t2": [
+    {"dmx": [0, 128], "state": "open"},
+    {"dmx": [129, 139], "state": "open"},
+    {"dmx": [140, 243], "state": "strobe"},
+    {"dmx": [244, 255], "state": "open"}
+   ],
+   "t3": [
+    {"dmx": [0, 51], "slot": 0, "state": "slot"},
+    {"dmx": [52, 102], "slot": 1, "state": "slot"},
+    {"dmx": [103, 155], "slot": 2, "state": "slot"},
+    {"dmx": [156, 207], "slot": 3, "state": "slot"},
+    {"dmx": [208, 255], "slot": 4, "state": "slot"}
+   ],
+   "t4": [
+    {"dmx": [0, 127], "state": "index"},
+    {"dmx": [128, 190], "state": "cw"},
+    {"dmx": [191, 192], "state": "stop"},
+    {"dmx": [193, 255], "state": "ccw"}
+   ]
+  }
+ }
+}

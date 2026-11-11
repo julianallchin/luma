@@ -132,14 +132,28 @@ impl Library {
         })
     }
 
-    /// Redeem a share code, answering with the venue once it has downloaded.
+    /// Redeem a share code, answering with the id of the venue it admits
+    /// this account to. Its rows follow by download — see
+    /// [`Self::joined_venue`].
     pub fn join_venue(
         &self,
         code: &str,
-    ) -> impl Future<Output = Result<Venue, LibraryError>> + use<> {
+    ) -> impl Future<Output = Result<String, LibraryError>> + use<> {
         let code = code.to_owned();
         self.call("join_venue", |services| async move {
             handlers::venues::join_venue(&services, code).await
+        })
+    }
+
+    /// A joined venue once it has downloaded far enough to open, `None`
+    /// while it is still on its way.
+    pub fn joined_venue(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<Option<Venue>, LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("joined_venue", |services| async move {
+            handlers::venues::joined_venue(&services, venue_id).await
         })
     }
 

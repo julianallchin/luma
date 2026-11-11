@@ -117,16 +117,18 @@ impl Visualizer {
                 pick.camera.position() - pivot,
                 self.gizmo_mode,
             ) {
-                // What the widget may actually grab: fixtures, and a piece
-                // whose joint leaves it free — a bolted piece's pose is a
-                // relation, and axes over a relation is a widget that lies.
+                // What the widget may actually grab: whatever its joint
+                // leaves free — a bolted piece's pose is a relation, and axes
+                // over a relation is a widget that lies.
                 let build = self.build.as_ref();
                 let originals: Vec<_> = self
                     .selection
                     .selected()
                     .iter()
                     .filter(|object| match object {
-                        EditorObject::Fixture(_) => true,
+                        EditorObject::Fixture(id) => {
+                            build.is_none_or(|build| build.gizmo_space(id).is_some())
+                        }
                         EditorObject::StagePiece(id) => {
                             build.is_some_and(|build| build.gizmo_space(id).is_some())
                         }
@@ -198,8 +200,7 @@ impl Visualizer {
         }
         if let Some(build) = self.build.as_ref() {
             let mut spaces = self.selection.selected().iter().map(|object| match object {
-                EditorObject::StagePiece(id) => build.gizmo_space(id),
-                EditorObject::Fixture(_) => None,
+                EditorObject::StagePiece(id) | EditorObject::Fixture(id) => build.gizmo_space(id),
             });
             spaces
                 .next()
@@ -316,18 +317,18 @@ impl Visualizer {
                 }
             }
             EditorDrag::Marquee(marquee) => self.selection.replace(pick.marquee(marquee, viewport)),
-            // A finished gizmo drag on stage pieces owes the graph its poses:
-            // the drag previewed by writing the scene, and the scene is not
-            // where a piece's position lives.
+            // A finished gizmo drag in a venue being built owes the graph its
+            // poses: the drag previewed by writing the scene, and the scene is
+            // not where a node's position lives.
             EditorDrag::Gizmo { originals, .. } => {
-                let pieces: Vec<String> = originals
+                let nodes: Vec<String> = originals
                     .iter()
-                    .filter_map(|(object, _, _)| match object {
-                        EditorObject::StagePiece(id) => Some(id.clone()),
-                        EditorObject::Fixture(_) => None,
+                    .filter(|_| self.build.is_some())
+                    .map(|(object, _, _)| match object {
+                        EditorObject::StagePiece(id) | EditorObject::Fixture(id) => id.clone(),
                     })
                     .collect();
-                return (!pieces.is_empty()).then_some(ReleaseAct::CommitPose(pieces));
+                return (!nodes.is_empty()).then_some(ReleaseAct::CommitPose(nodes));
             }
             _ => return None,
         }
@@ -382,6 +383,21 @@ impl Visualizer {
         None
     }
 
+    /// Teach the room a fixture it holds none of yet, so one in the hand is
+    /// drawn as itself before the first is placed.
+    pub(crate) fn learn_definition(
+        &mut self,
+        path: &str,
+        definition: &luma_lib::models::fixtures::FixtureDefinition,
+    ) {
+        let mut stage = self.stage.borrow_mut();
+        stage
+            .definitions
+            .entry(path.to_string())
+            .or_insert_with(|| luma_scene::definition::Definition::from(definition));
+        stage.idle = None;
+    }
+
     /// Update only transient scene positions; the builder owns persistence on release.
     pub(crate) fn preview_stage_positions(&mut self, positions: &[(String, [f64; 3])]) {
         let mut stage = self.stage.borrow_mut();
@@ -402,18 +418,25 @@ impl Visualizer {
         stage.idle = None;
     }
 
-    /// One dragged piece's current *previewed* pose, in the socket layer's
+    /// One dragged piece's or fixture's current *previewed* pose, in the socket layer's
     /// frame — what the gizmo wrote into the scene, read back so the commit
     /// inverts exactly what is on screen.
     pub(crate) fn piece_pose_three(&self, id: &str) -> Option<glam::DMat4> {
         let stage = self.stage.borrow();
-        let piece = stage
-            .scene
-            .as_ref()?
+        let scene = stage.scene.as_ref()?;
+        let (pos, rot) = scene
             .pieces
             .iter()
-            .find(|piece| piece.id == id)?;
-        Some(coords::three_pose_from_data(piece.pos, piece.rot).as_dmat4())
+            .find(|piece| piece.id == id)
+            .map(|piece| (piece.pos, piece.rot))
+            .or_else(|| {
+                scene
+                    .fixtures
+                    .iter()
+                    .find(|fixture| fixture.id == id)
+                    .map(|fixture| (fixture.pos, fixture.rot))
+            })?;
+        Some(coords::three_pose_from_data(pos, rot).as_dmat4())
     }
 
     /// The viewport's own laid-out bounds. Laid out — and recorded — whether
@@ -654,6 +677,7 @@ mod tests {
                 mode_name: "Default".into(),
                 pos: [0.0, 0.0, 1.0],
                 rot: [0.0; 3],
+                aim: [0.0; 2],
             }],
         });
         // Numeric scrubbing has neither a camera drag nor a gizmo drag to

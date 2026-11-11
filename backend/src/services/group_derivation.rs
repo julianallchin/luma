@@ -1126,6 +1126,7 @@ mod tests {
 
     fn channel(name: &str, group: &str) -> Channel {
         Channel {
+            lowered: None,
             name: name.into(),
             preset: None,
             group: Some(Group {
@@ -1138,6 +1139,7 @@ mod tests {
 
     fn coloured(name: &str, preset: &str) -> Channel {
         Channel {
+            lowered: None,
             name: name.into(),
             preset: Some(preset.into()),
             group: None,
@@ -1147,6 +1149,7 @@ mod tests {
 
     fn definition(type_: &str, channels: Vec<Channel>) -> FixtureDefinition {
         FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Test".into(),
             type_: type_.into(),
@@ -2299,60 +2302,6 @@ mod goldens {
         "spots/top",
         "spots/bottom",
     ];
-
-    /// What the role table makes of the whole shipped catalogue, printed rather
-    /// than asserted: the counts move whenever a definition is added, and a
-    /// test that pinned them would fail on a library update rather than on a
-    /// rule that broke. Run it when the table changes.
-    ///
-    /// ```sh
-    /// cargo test --lib the_shipped_catalogue_survey -- --ignored --nocapture
-    /// ```
-    #[test]
-    #[ignore = "a survey, not an assertion"]
-    fn the_shipped_catalogue_survey() {
-        let mut counts: std::collections::BTreeMap<FixtureRole, usize> = Default::default();
-        let mut by_type: std::collections::BTreeMap<(String, FixtureRole), usize> =
-            Default::default();
-        let mut unreadable = 0usize;
-        let mut total = 0usize;
-        let mut stack = vec![repo_root().join("resources/fixtures")];
-        while let Some(directory) = stack.pop() {
-            for entry in std::fs::read_dir(&directory)
-                .into_iter()
-                .flatten()
-                .flatten()
-            {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                if path.extension().is_none_or(|e| e != "qxf") {
-                    continue;
-                }
-                total += 1;
-                let Ok(def) = parse_definition(&path) else {
-                    unreadable += 1;
-                    continue;
-                };
-                let Some(mode) = def.modes.first() else {
-                    continue;
-                };
-                let role = FixtureRole::of(&def, mode);
-                *counts.entry(role).or_default() += 1;
-                *by_type.entry((def.type_.clone(), role)).or_default() += 1;
-            }
-        }
-        println!("{total} definitions, {unreadable} unreadable");
-        for (role, n) in &counts {
-            println!("{:>8}  {n}", role.as_str());
-        }
-        println!("--- Type -> role");
-        for ((type_, role), n) in &by_type {
-            println!("{type_:>20} -> {:<8} {n}", role.as_str());
-        }
-    }
 
     #[test]
     fn the_venue_groups_golden_is_current() {

@@ -3,6 +3,7 @@
 
 mod haze;
 mod quality;
+mod resize;
 mod shadows;
 
 use std::sync::Arc;
@@ -79,7 +80,7 @@ fn surface_profiling_keeps_live_targets_and_reports_every_frame() -> anyhow::Res
         assert_eq!([targets.width, targets.height], size);
         #[cfg(target_os = "macos")]
         assert!(matches!(
-            targets.presentations[0],
+            targets.presentation(0),
             super::targets::PresentationTarget::Shared(_)
         ));
     }
@@ -436,7 +437,10 @@ fn surface_depth_culling_preserves_subpixel_and_coplanar_receivers() -> anyhow::
     rx.recv()??;
     let mapped = readback.slice(..).get_mapped_range()?;
     let values: &[u32] = bytemuck::cast_slice(&mapped);
-    let plane = values.len() / crate::light_index::MASK_PLANES;
+    // The planes of the last frame's grid, 64 by 48: the buffer keeps the
+    // room of the larger frames before it.
+    let tiles = |pixels: u32| pixels.div_ceil(crate::light_index::TILE_SIZE) as usize;
+    let plane = tiles(64) * tiles(48) * crate::light_index::MASK_WORDS;
     let full = &values[..plane];
     let surface = &values[2 * plane..3 * plane];
     let surface_b = &values[3 * plane..];
@@ -517,7 +521,6 @@ fn fixture_surface_frame(count: usize) -> Frame {
                 color: Vec3::ONE,
                 intensity: 3.0 / count.max(1) as f32,
                 cos_field: 0.88,
-                wash: 0.0,
                 gobo: 0,
                 gobo_rotation: 0.0,
                 haze_gain: 1.0,
@@ -544,6 +547,7 @@ fn fixture_surface_frame(count: usize) -> Frame {
         overlays: Vec::new(),
         floor: None,
         fixture_cones,
+        panels: Vec::new(),
         lasers: Vec::new(),
         fixture_shadow_capacity_hint: 0,
         fixture_surface_lighting: true,
@@ -646,6 +650,7 @@ fn overlay_test_frame(
             depth,
         }],
         fixture_cones: Vec::new(),
+        panels: Vec::new(),
         lasers: Vec::new(),
         fixture_shadow_capacity_hint: 0,
         fixture_surface_lighting: false,

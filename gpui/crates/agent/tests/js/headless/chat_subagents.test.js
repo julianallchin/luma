@@ -15,6 +15,8 @@ const DESCRIPTION = "Fitting the chorus ramp";
 const ANSWER = "Raised the ramp two bars early.";
 
 fixture({
+  // These tests read a finished turn's tool rows, which compact turns fold away.
+  sql: ["INSERT OR REPLACE INTO settings (key, value) VALUES ('compact_turns', 'false')"],
   window: [1280, 900],
   motion: true,
   model_cadence_ms: 25,

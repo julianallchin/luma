@@ -169,7 +169,7 @@ Zeron's tokens (`zeron-dark.json`), held in `luma_ui::glass`:
   and Live, the venue stands alone. Settings puts Back in the trail's place.
 - **Venue menu** (the venue crumb). The menu holds the venues with their status dots and a
   "Shared with you" mark, New venue…, Join with code…, Share, Settings…, and
-  Sign out / Sign in. The venue dialog is still what a window with no venue
+  Sign out. The venue dialog is still what a window with no venue
   shows (browse, create, join).
 - **Song crumb** (`score_switcher`): the song's title. A press goes up a
   level: the open score closes (its pending edit written, its playback

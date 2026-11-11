@@ -107,8 +107,7 @@ use crate::host_audio::HostAudioSnapshot;
 use crate::inputs::{Binding, InputState, Mode};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
-    AgentThread, AgentThreadMessage, AgentThreadUsage, AppendAgentThreadMessagesInput,
-    CreateAgentThreadInput,
+    AgentThread, AgentThreadMessage, AppendAgentThreadMessagesInput, CreateAgentThreadInput,
 };
 use crate::models::background::BackgroundWork;
 use crate::models::beat_grid::BeatGrid;
@@ -123,8 +122,7 @@ use crate::models::scores::{Score, ScoreSummary};
 use crate::models::selection::Selection;
 use crate::models::sync::SyncStatus;
 use crate::models::tracks::{
-    BeatValidation, BeatValidationReason, BeatValidationVerdict, TrackBrowserRow,
-    TrackImportResult, TrackSummary,
+    BeatValidation, BeatValidationReason, BeatValidationVerdict, TrackBrowserRow, TrackImportResult,
 };
 use crate::models::universe::UniverseState;
 use crate::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
@@ -139,7 +137,6 @@ commands! {
     composable_patterns::selection_cells(
         venue_id: String,
         selection: Selection,
-        seed: u64,
         elements: Option<usize>,
     ) -> Vec<luma_patterns::Cell>;
 
@@ -155,7 +152,6 @@ commands! {
     ) -> Vec<AgentThreadMessage>;
     agent_threads::agent_thread_set_model(thread_id: String, selection: crate::agent::engine::catalog::Selection) -> AgentThread;
     agent_threads::agent_thread_set_actor(thread_id: String, actor: String) -> ();
-    agent_threads::agent_thread_record_usage(usage: AgentThreadUsage) -> ();
     agent_threads::agent_thread_delete(thread_id: String) -> ();
 
     agent_execution::run_python_cell(
@@ -189,8 +185,7 @@ commands! {
     fixtures::remove_patched_fixture(venue_id: String, id: String) -> ();
     fixtures::rename_patched_fixture(venue_id: String, id: String, label: String) -> ();
 
-    group_references::missing_venue_groups(venue_id: String) -> Vec<crate::models::groups::MissingGroup>;
-    group_references::resolve_venue_group(venue_id: String, missing: String, replacement: Option<String>, fixtures: Vec<String>) -> ();
+    group_references::venue_group_usage(venue_id: String) -> Vec<crate::models::groups::GroupUsage>;
     folders::list_folders(venue_id: String) -> Vec<Folder>;
     folders::create_folder(venue_id: String, name: String) -> Folder;
     folders::rename_folder(folder_id: String, name: String) -> ();
@@ -203,11 +198,6 @@ commands! {
     groups::list_groups(venue_id: String) -> Vec<FixtureGroup>;
     groups::delete_group(id: String) -> ();
     groups::list_group_tree(venue_id: String) -> Vec<GroupTreeNode>;
-    groups::preview_selection_query(
-        venue_id: String,
-        query: String,
-        seed: Option<u64>,
-    ) -> Vec<PatchedFixture>;
     groups::highlight_selection(
         venue_id: String,
         selection: Selection,
@@ -232,7 +222,6 @@ commands! {
 
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
 
-    tracks::list_tracks() -> Vec<TrackSummary>;
     tracks::list_tracks_enriched(venue_id: Option<String>) -> Vec<TrackBrowserRow>;
     tracks::get_track_beats(track_id: String) -> Option<BeatGrid>;
     tracks::get_track_beat_validation(track_id: String) -> Option<BeatValidation>;
@@ -360,7 +349,8 @@ commands! {
     venues::revoke_share_code(venue_id: String) -> ();
     venues::list_venue_members(venue_id: String) -> Vec<VenueMember>;
     venues::remove_venue_member(venue_id: String, uid: String) -> ();
-    venues::join_venue(code: String) -> Venue;
+    venues::join_venue(code: String) -> String;
+    venues::joined_venue(venue_id: String) -> Option<Venue>;
 
     inputs::input_open(venue_id: String) -> InputState;
     inputs::input_state() -> InputState;
@@ -542,8 +532,8 @@ mod tests {
         }
     }
 
-    /// `docs/specs/ipc-manifest.{json,md}` are the command surface written
-    /// down. Rebuilding them here is what keeps the two from drifting.
+    /// `docs/specs/ipc-manifest.md` is the command surface written down.
+    /// Rebuilding it here is what keeps the two from drifting.
     #[test]
     fn ipc_manifest_matches_the_command_table() {
         manifest::check(TABLE);
@@ -578,6 +568,62 @@ mod tests {
             decode::<String>(&json!({ "id": "p1" }), "id").unwrap(),
             "p1"
         );
+    }
+
+    /// A host with nobody signed in — `luma-cli` before the app has signed
+    /// anyone in — has no library: a command that reads or writes one refuses
+    /// and says to sign in, whether or not an old library still holds rows
+    /// nobody owns. What belongs to the machine still answers.
+    #[tokio::test]
+    async fn a_signed_out_host_refuses_the_library_and_says_to_sign_in() {
+        let directory = tempfile::tempdir().unwrap();
+        let services =
+            crate::test_support::signed_out(directory.path(), directory.path().to_path_buf()).await;
+        sqlx::query(
+            "INSERT INTO venues (id, uid, name) VALUES ('old-venue', NULL, 'Old');
+             INSERT INTO tracks (id, uid, track_hash, file_path)
+             VALUES ('old-track', NULL, 'old-hash', '/old.wav');
+             INSERT INTO agent_threads (id, agent_kind) VALUES ('old-thread', 'unbound')",
+        )
+        .execute(&services.db.0)
+        .await
+        .unwrap();
+
+        let thread =
+            json!({ "requestId": "00000000-0000-4000-8000-000000000000", "agentKind": "unbound" });
+        for (command, args) in [
+            ("list_venues", json!({})),
+            ("get_venue", json!({ "id": "old-venue" })),
+            ("create_venue", json!({ "name": "New" })),
+            ("list_groups", json!({ "venueId": "old-venue" })),
+            ("list_tracks_enriched", json!({})),
+            ("list_tracks_enriched", json!({ "venueId": "old-venue" })),
+            ("get_track_beats", json!({ "trackId": "old-track" })),
+            (
+                "get_track_beat_validation",
+                json!({ "trackId": "old-track" }),
+            ),
+            ("get_track_waveform", json!({ "trackId": "old-track" })),
+            (
+                "list_scores_across_venues",
+                json!({ "trackId": "old-track" }),
+            ),
+            ("agent_thread_list", json!({})),
+            ("agent_thread_create", json!({ "input": thread })),
+            ("agent_thread_delete", json!({ "threadId": "old-thread" })),
+            ("cancel_python_cell", json!({ "threadId": "old-thread" })),
+        ] {
+            match dispatch(&services, command, &args).await {
+                Err(error) => assert!(
+                    error.to_string().contains("Sign in to Luma"),
+                    "`{command}` refused a signed-out host without saying to sign in: {error}"
+                ),
+                Ok(answer) => panic!("`{command}` answered a signed-out host: {answer}"),
+            }
+        }
+        dispatch(&services, "get_settings", &json!({}))
+            .await
+            .expect("settings are the machine's, not an account's");
     }
 
     /// The wire contract: an error's text is exactly the message, never a

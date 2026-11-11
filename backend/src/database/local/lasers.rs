@@ -47,7 +47,7 @@ pub async fn save_zone(
         turn,
         tilt,
     };
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     let query = if id.is_some() {
         "UPDATE laser_zones SET name = ?, turn_min = ?, turn_max = ?, tilt_min = ?, tilt_max = ?
          WHERE id = ? AND venue_id = ?"
@@ -107,7 +107,7 @@ mod migration_tests {
 
     const LASER_ELEMENTS: i64 = 20_261_025_130_000;
     const LASER_FIGURES: i64 = 20_261_026_120_000;
-    const PROJECTOR: &str = "Generic/Generic-ILDA-Laser-Projector.qxf";
+    const PROJECTOR: &str = crate::models::fixtures::LASER_PROJECTOR_PATH;
 
     /// A venue of two projectors and a par, migrated up to `until`.
     async fn database(directory: &tempfile::TempDir, until: i64) -> SqlitePool {

@@ -58,7 +58,6 @@ fn floor() -> Frame {
         cos_field: 60_f32.to_radians().cos(),
         color: Vec3::new(1.0, 0.0, 0.4),
         intensity: 1.0,
-        wash: 1.0,
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,

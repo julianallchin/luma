@@ -1,6 +1,6 @@
 // The value slider, dragged through the same pointer path a person uses.
 //
-// Every slider is one `luma_ui::luma_slider`, which once painted a value
+// Every slider is one `luma_ui::float::scrub`, which once painted a value
 // without accepting one. DMX output's Max Brightness is the subject because its
 // value goes through the settings write seam and comes back out of a fresh
 // `get_settings`: a slider whose value lives in the view would pass on a
@@ -14,7 +14,7 @@ const isMaxBrightness = (n) => n.role === "slider" && n.label.startsWith("Max Br
 // The reading is a node of its own ("<id> = <value>"), so the slider can be
 // addressed by name while the value changes under the drag.
 function reading(shot) {
-  const node = shot.find((n) => n.role === "text" && n.label.startsWith("max_dimmer = "));
+  const node = shot.find((n) => n.label.startsWith("max_dimmer = "));
   return node === undefined ? null : Number(node.label.split(" = ")[1]);
 }
 

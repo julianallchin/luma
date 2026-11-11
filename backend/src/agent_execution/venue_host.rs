@@ -30,13 +30,13 @@ use sqlx::SqlitePool;
 use tokio::runtime::Handle;
 
 use crate::agent_execution::cell_host::{call_limit, decode, supervise};
+use crate::agent_execution::spoken_groups::SpokenGroups;
 use crate::agent_execution::track_host::TrackHost;
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::agent_execution::workspace::Workspace;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::eval::{Arena, Scope};
 use crate::models::distribute::DistributeLayout;
-use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
 use crate::services::groups;
 use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
@@ -96,6 +96,12 @@ impl VenueHost {
                 "choose an edit preview or a full-brightness group highlight, not both",
             ));
         }
+        if request.camera.is_some() && request.focus.is_some() {
+            return Err(HostCallError::new(
+                "invalid_camera",
+                "choose camera= to place the camera or focus= to frame something, not both",
+            ));
+        }
         let view = View::from_str(&request.view)
             .map_err(|error| HostCallError::new("invalid_view", error.to_string()))?;
         let width = checked_dimension("width", request.width)?;
@@ -126,32 +132,25 @@ impl VenueHost {
         // A highlight *replaces* the lighting: the question it answers is
         // "which heads are these?", and a score playing over the answer is
         // only noise on top of it.
-        let state = match request.highlight.as_deref() {
+        let state = match &request.highlight {
             None => self.state_at(time, request.edit.as_ref()).await?,
-            Some(expression) => {
-                let tree = groups::GroupSources::read(&self.resource_root, &mut access)
-                    .await
-                    .map_err(|error| HostCallError::new("invalid_selection", error))?
-                    .tree();
-                groups::validate_selection_names(expression, &tree)
-                    .map_err(|error| HostCallError::new("invalid_selection", error))?;
-                Some(
-                    stage_render::highlight(
-                        &self.resource_root,
-                        &mut access,
-                        &Selection::new(expression),
-                    )
-                    .await
-                    .map_err(|error| HostCallError::new("invalid_selection", error))?,
-                )
+            Some(targets) => Some(stage_render::highlight_members(
+                &self.marked(&mut access, &geometry, targets).await?,
+            )),
+        };
+        let lens = match (&request.camera, &request.focus) {
+            (Some(camera), _) => Lens::Exact(camera.camera()?),
+            (None, Some(targets)) => {
+                Lens::Focus(view, self.marked(&mut access, &geometry, targets).await?)
             }
+            (None, None) => Lens::View(view),
         };
         drop(access);
 
         self.shoot(
             geometry,
             Shoot {
-                view,
+                lens,
                 time,
                 state,
                 size: (width, height),
@@ -168,13 +167,18 @@ impl VenueHost {
     /// with nothing in it but the draft.
     async fn shoot(&self, geometry: VenueGeometry, shot: Shoot) -> Result<Value, HostCallError> {
         let Shoot {
-            view,
+            lens,
             time,
             state,
             size: (width, height),
             bare,
         } = shot;
         let (mut scene, definitions) = geometry.scene();
+        // The look the operator's stage uses, so a still is what they see:
+        // the same metered exposure, curve and glare.
+        if let Ok(settings) = crate::settings::load_settings(&self.pool).await {
+            scene.render.look = luma_render::scene_desc::Look::stored(&settings.stage_look);
+        }
         if bare {
             // A draft is looked at for its shape. The floor and its grid are
             // the *room's* furniture, and a component being previewed is not in
@@ -183,7 +187,9 @@ impl VenueHost {
             scene.render.show_floor = false;
         }
         let booth = geometry.booth();
+        let (camera, visible) = lens.camera(&scene, &definitions, booth, (width, height));
         let lasers = geometry.lasers.clone();
+        let lights = geometry.lights();
         let meshes_root = crate::resources::meshes_root(Some(&self.resource_root));
 
         // The GPU render is a blocking submit-and-map. Running it on a blocking
@@ -193,12 +199,13 @@ impl VenueHost {
                 scene,
                 definitions,
                 Shot {
-                    view,
+                    aim: stage_render::Aim::Camera(camera),
                     booth,
                     state,
                     time,
                     size: (width, height),
                     lasers,
+                    lights,
                 },
                 meshes_root,
             )
@@ -210,12 +217,20 @@ impl VenueHost {
         .map_err(|error| HostCallError::new("render_failed", error))?;
 
         let artifact_rel = self.write_figure(&png).await?;
+        let eye = camera.position();
         Ok(json!({
             "artifactRel": artifact_rel,
             "width": width,
             "height": height,
-            "view": view.name(),
+            "view": lens.name(),
             "t": time,
+            "camera": {
+                "eye": [eye.x, eye.y, eye.z],
+                "target": [camera.target.x, camera.target.y, camera.target.z],
+                "fov": camera.fov_y_deg,
+                "looking": camera.describe(),
+            },
+            "visible": visible,
         }))
     }
 
@@ -358,6 +373,37 @@ impl VenueHost {
     }
 
     /// This thread's venue, open for reading.
+    /// `targets` resolved in the venue behind `access`: what a highlight
+    /// lights and a focus frames. A name or an id that is not in the venue,
+    /// or a cell past a fixture's last, is refused rather than skipped.
+    async fn marked(
+        &self,
+        access: &mut VenueAccess<'_, Read>,
+        geometry: &VenueGeometry,
+        targets: &Targets,
+    ) -> Result<Vec<stage_render::Marked>, HostCallError> {
+        let invalid = |error: String| HostCallError::new("invalid_selection", error);
+        let expression = match targets {
+            Targets::Expression(expression) => expression,
+            Targets::Members(members) => return marked_members(geometry, members).map_err(invalid),
+        };
+        let selection = SpokenGroups::read(&self.resource_root, access)
+            .await
+            .map_err(invalid)?
+            .selection(expression)
+            .map_err(invalid)?;
+        let resolved = groups::resolve_selection(&self.resource_root, access, &selection)
+            .await
+            .map_err(invalid)?;
+        Ok(resolved
+            .into_iter()
+            .map(|entry| stage_render::Marked {
+                fixture: entry.fixture.id,
+                heads: entry.heads,
+            })
+            .collect())
+    }
+
     async fn read_access(&self) -> Result<VenueAccess<'_, Read>, HostCallError> {
         VenueAccess::<Read>::read(&self.pool, VenueResource::Venue(&self.venue_id))
             .await
@@ -482,11 +528,24 @@ impl VenueHost {
             .write_access()
             .await
             .map_err(|error| HostCallError::new("invalid_group", error))?;
+        let members: Vec<(String, i64)> = request
+            .fixtures
+            .iter()
+            .map(|member| match member.rsplit_once(':') {
+                Some((id, cell)) if cell.parse::<i64>().is_ok() => {
+                    (id.to_string(), cell.parse().expect("checked"))
+                }
+                _ => (
+                    member.clone(),
+                    crate::database::local::groups::WHOLE_FIXTURE,
+                ),
+            })
+            .collect();
         let group = groups::set_named_group(
             &self.resource_root,
             &mut access,
             &request.name,
-            &request.fixtures,
+            &members,
             request.replace,
         )
         .await
@@ -498,6 +557,51 @@ impl VenueHost {
         crate::database::local::venue_graph::rig_changed();
         let rows = crate::agent_execution::bindings::providers::venue::group_rows(&[group]);
         Ok(json!({ "group": rows.into_iter().next() }))
+    }
+
+    /// The patch, read now: what `luma.venue.fixtures` shows, after this
+    /// cell's own edits.
+    async fn fixtures(&self) -> Result<Value, HostCallError> {
+        let mut access = self.read_access().await?;
+        let invalid = |error: String| HostCallError::new("invalid_venue", error);
+        let venue = crate::venue_graph::resolved(&mut access, &self.resource_root)
+            .await
+            .map_err(|error| invalid(error.to_string()))?;
+        let rows = crate::database::local::fixtures::get_patched_fixtures(&mut access)
+            .await
+            .map_err(invalid)?;
+        Ok(json!({
+            "fixtures": crate::agent_execution::bindings::providers::venue::fixture_rows(
+                &rows, &venue,
+            ),
+        }))
+    }
+
+    /// Set one fixture's DMX universe and address by hand, and pin it there.
+    /// Either left out keeps where the fixture stands. Refused, with the
+    /// reason, when it runs off the universe or lands on another fixture.
+    async fn patch(&self, request: PatchRequest) -> Result<Value, HostCallError> {
+        let invalid = |error: String| HostCallError::new("invalid_patch", error);
+        let mut access = self.write_access().await.map_err(invalid)?;
+        let rows = crate::database::local::fixtures::get_patched_fixtures(&mut access)
+            .await
+            .map_err(invalid)?;
+        let row = rows
+            .iter()
+            .find(|row| row.id == request.fixture)
+            .ok_or_else(|| invalid(format!("no fixture `{}` in this venue", request.fixture)))?;
+        let universe = request
+            .universe
+            .unwrap_or(u16::try_from(row.universe).unwrap_or(1));
+        let address = request
+            .address
+            .unwrap_or(u16::try_from(row.address).unwrap_or(1));
+        crate::services::patch::set_address(&mut access, &request.fixture, universe, address)
+            .await
+            .map_err(|error| invalid(error.to_string()))?;
+        access.commit().await.map_err(invalid)?;
+        crate::database::local::venue_graph::rig_changed();
+        Ok(json!({ "universe": universe, "address": address, "pinned": true }))
     }
 
     async fn generate_groups(&self) -> Result<Value, HostCallError> {
@@ -955,7 +1059,7 @@ impl VenueHost {
         self.shoot(
             geometry,
             Shoot {
-                view,
+                lens: Lens::View(view),
                 time: 0.0,
                 state: None,
                 size: (width, height),
@@ -998,7 +1102,7 @@ impl VenueHost {
     async fn state_at(
         &self,
         time: f32,
-        edit: Option<&luma_patterns::Score>,
+        edit: Option<&Value>,
     ) -> Result<Option<UniverseState>, HostCallError> {
         let Some(track) = self.lighting.as_ref() else {
             if edit.is_some() {
@@ -1010,7 +1114,10 @@ impl VenueHost {
             return Ok(None);
         };
         let scene = match edit {
-            Some(edit) => track.prepare_score(edit).await?,
+            Some(edit) => {
+                let score = track.named_score(edit.clone()).await?;
+                track.prepare_score(&score).await?
+            }
             None => track.saved_scene().await?,
         };
         let mut arena = Arena::default();
@@ -1085,6 +1192,8 @@ impl HostCallHandler for VenueHost {
                     "venue.open" => self.open().await,
                     "venue.groups" => self.groups().await,
                     "venue.group" => self.group(decode(payload)?).await,
+                    "venue.fixtures" => self.fixtures().await,
+                    "venue.patch" => self.patch(decode(payload)?).await,
                     "venue.generate_groups" => self.generate_groups().await,
                     "venue.laser_zones" => self.laser_zones().await,
                     "venue.laser_zone" => self.laser_zone(decode(payload)?).await,
@@ -1282,6 +1391,15 @@ struct LaserZoneRequest {
     name: String,
     turn: [f64; 2],
     tilt: [f64; 2],
+}
+
+/// One fixture's DMX address, set by hand.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PatchRequest {
+    fixture: String,
+    universe: Option<u16>,
+    address: Option<u16>,
 }
 
 /// Create a named collection, or explicitly replace its fixture membership.
@@ -1497,13 +1615,154 @@ struct DistributeRequest {
 
 /// What one frame is of, beside the geometry itself.
 struct Shoot {
-    view: View,
+    lens: Lens,
     time: f32,
     state: Option<UniverseState>,
     size: (u32, u32),
     /// Draw the piece and nothing else — no floor, no grid. What a draft is
     /// previewed through.
     bare: bool,
+}
+
+/// Where a render is seen from.
+enum Lens {
+    /// A named view, fitted to the room.
+    View(View),
+    /// A camera placed outright.
+    Exact(luma_scene::camera::Camera),
+    /// These fixtures, framed from the named view's side and turned past
+    /// whatever stands in front of them.
+    Focus(View, Vec<stage_render::Marked>),
+}
+
+impl Lens {
+    /// The camera, and for a focus the share of what it frames that it sees.
+    fn camera(
+        &self,
+        scene: &luma_render::scene_desc::Scene,
+        definitions: &std::collections::BTreeMap<String, luma_scene::definition::Definition>,
+        booth: Option<glam::Vec3>,
+        size: (u32, u32),
+    ) -> (luma_scene::camera::Camera, Option<f32>) {
+        match self {
+            Self::View(view) => (
+                stage_render::Aim::View(*view).camera(scene, definitions, booth, size),
+                None,
+            ),
+            Self::Exact(camera) => (*camera, None),
+            Self::Focus(view, marked) => {
+                let from = stage_render::Aim::View(*view).camera(scene, definitions, booth, size);
+                let head = glam::Vec3::splat(luma_scene::Framing::HEAD_RADIUS);
+                let targets: Vec<luma_scene::Aabb> = scene
+                    .fixtures
+                    .iter()
+                    .filter(|f| marked.iter().any(|m| m.fixture == f.id))
+                    .map(|f| {
+                        let at = luma_scene::coords::world_from_data(glam::Vec3::from(f.pos));
+                        luma_scene::Aabb::new(at - head, at + head)
+                    })
+                    .collect();
+                let focus = luma_scene::focus::focus(
+                    &targets,
+                    &scene.obstacles(),
+                    from.position() - from.target,
+                    &stage_render::viewfinder(scene, size),
+                );
+                (focus.camera, Some(focus.visible))
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::View(view) | Self::Focus(view, _) => view.name(),
+            Self::Exact(_) => "camera",
+        }
+    }
+}
+
+/// A render's `highlight` or `focus`: a selection expression, or fixtures and
+/// cells named outright (`"par_1"`, `"bar_2:3"`).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Targets {
+    Expression(String),
+    Members(Vec<String>),
+}
+
+/// Fixtures and cells by id (`"par_1"`, `"bar_2:3"`), one entry per fixture
+/// in the order first named. A whole fixture takes in any of its cells.
+fn marked_members(
+    geometry: &VenueGeometry,
+    members: &[String],
+) -> Result<Vec<stage_render::Marked>, String> {
+    let mut marked: Vec<stage_render::Marked> = Vec::new();
+    for member in members {
+        let (id, cell) = match member.rsplit_once(':') {
+            Some((id, cell)) => match cell.parse::<usize>() {
+                Ok(cell) => (id, Some(cell)),
+                Err(_) => (member.as_str(), None),
+            },
+            None => (member.as_str(), None),
+        };
+        let Some(fixture) = geometry.fixtures.iter().find(|f| f.id == id) else {
+            return Err(format!("no fixture `{id}` in this venue"));
+        };
+        if let Some(cell) = cell {
+            let cells = geometry.cells(fixture);
+            if cell >= cells {
+                return Err(format!(
+                    "`{id}` has {cells} cell{}, numbered from 0; there is no cell {cell}",
+                    if cells == 1 { "" } else { "s" }
+                ));
+            }
+        }
+        let entry = match marked.iter_mut().find(|m| m.fixture == id) {
+            Some(entry) => entry,
+            None => {
+                marked.push(stage_render::Marked {
+                    fixture: id.to_string(),
+                    heads: Some(Vec::new()),
+                });
+                marked.last_mut().expect("just pushed")
+            }
+        };
+        match (cell, &mut entry.heads) {
+            (None, heads) => *heads = None,
+            (Some(cell), Some(heads)) if !heads.contains(&cell) => heads.push(cell),
+            _ => {}
+        }
+    }
+    Ok(marked)
+}
+
+/// A camera placed outright, in facade metres.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraRequest {
+    eye: [f32; 3],
+    target: [f32; 3],
+    fov: Option<f32>,
+}
+
+impl CameraRequest {
+    fn camera(&self) -> Result<luma_scene::camera::Camera, HostCallError> {
+        let fov = self.fov.unwrap_or(stage_render::FOV_Y_DEG);
+        if !(5.0..=120.0).contains(&fov) {
+            return Err(HostCallError::new(
+                "invalid_camera",
+                format!("fov is the vertical field of view, 5 to 120 degrees, not {fov}"),
+            ));
+        }
+        let (eye, target) = (glam::Vec3::from(self.eye), glam::Vec3::from(self.target));
+        if !eye.is_finite() || !target.is_finite() || eye.distance(target) < 0.05 {
+            return Err(HostCallError::new(
+                "invalid_camera",
+                "eye and target must be finite points at least 5 cm apart",
+            ));
+        }
+        Ok(luma_scene::camera::Camera::looking_from(eye, target, fov))
+    }
 }
 
 /// One `place` or `add`, as the wire carries it.
@@ -1759,12 +2018,17 @@ struct RenderRequest {
     t: f64,
     width: u32,
     height: u32,
-    /// A selection expression. Present, its heads are the only thing lit, and
-    /// the score at `t` is not drawn at all. Absent, the score lights the room.
-    highlight: Option<String>,
+    /// A selection expression, or fixtures and cells by id. Present, its
+    /// heads are the only thing lit, and the score at `t` is not drawn at all.
+    /// Absent, the score lights the room.
+    highlight: Option<Targets>,
+    /// A camera placed outright.
+    camera: Option<CameraRequest>,
+    /// Frame these, from `view`'s side.
+    focus: Option<Targets>,
     /// A private candidate score, evaluated by the same compositor as apply.
     /// Omitted for the saved score. Never persisted or sent to the live viewport.
-    edit: Option<luma_patterns::Score>,
+    edit: Option<Value>,
     /// Light this one frame with the house at `house`, whatever the room is.
     ///
     /// A camera setting, not an edit: it is written over the environment the

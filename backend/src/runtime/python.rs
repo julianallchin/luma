@@ -433,6 +433,9 @@ pub fn setup_python_env_background(
         }
         preloading.store(true, std::sync::atomic::Ordering::Relaxed);
         state.send_replace(PythonSetup::Ready);
+        if let Err(error) = crate::agent_execution::headless_env::warm_kernel_cache(&cache_dir) {
+            log::warn!("warming the agent kernel cache failed: {error}");
+        }
         if let Err(error) = preload_model_weights(&cache_dir, &python) {
             log::warn!("model-weights preload failed: {error}");
         }

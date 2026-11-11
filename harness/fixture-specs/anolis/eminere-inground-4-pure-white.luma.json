@@ -1,0 +1,53 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "anolis/eminere-inground-4-pure-white",
+  "name": "Anolis Eminere Inground 4 - Pure White",
+  "manufacturer": "Anolis",
+  "model": "Eminere Inground 4 - Pure White",
+  "category": "architectural",
+  "description": "This is an Anolis Eminere Inground 4 in Pure White, a fixed architectural inground luminaire with no motion. It is a simple long flat bar, probably about 138 by 23 by 19 mm, likely recessed into the ground, with no visible base, yoke, arms or brackets. A small dark box sits at one end, probably a connector or driver housing. The front is a flat dark glass window along the long axis, behind which runs a single row of small round white LED pixels, probably evenly spaced and filling most of the window length. The exact emitter count is uncertain, but the pixel mode provides four independently controllable cells, while the simpler mode offers one dimmer for the whole fixture.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "arch_linear",
+   "dims_src": "mesh",
+   "import": {"from": "depence", "old_id": "f6d4a0ad-700d-4cf7-a8b6-6957347dcc90"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [1.3804, 0.2317, 0.1874]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "bar",
+   "outline": "rect",
+   "w": 1.3804,
+   "len": 0.2317,
+   "d": 0.1874,
+   "off": 0.0,
+   "tilt_y": 0.1158,
+   "features": []
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "zones": [
+    {
+     "region": [0, 0.03, 1, 0.97],
+     "emitter": {"kind": "lens", "rows": 1, "cols": 1, "shape": "circle", "colour": "white"},
+     "cells": {"rows": 1, "cols": 4},
+     "runs": [12, 12, 12, 12],
+     "run_white": [true, true, true, true],
+     "plane": [1.2426, 0.1242],
+     "cell_ids": [0, 1, 2, 3]
+    }
+   ]
+  }
+ ],
+ "cells": {"count": 4, "emitters": 48},
+ "sources": [{"cell_ranges": [[0, 3]]}]
+}

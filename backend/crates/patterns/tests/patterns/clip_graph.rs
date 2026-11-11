@@ -18,7 +18,6 @@ fn clip(graph: ClipGraph) -> Clip {
         start: 32.,
         duration: 8.,
         seed: 7,
-        selection_seed: None,
         selection: Selection::all(),
         z_index: 0,
         blend_mode: BlendMode::Replace,
@@ -86,7 +85,7 @@ fn score_json_example_round_trips() {
     let doc = json!({"clips": {"3f24": {
         "name": "Chase",
         "start": 32.0, "duration": 8.0, "seed": 6348896133488684926u64,
-        "selection": {"expression": "led_bars_vertical"},
+        "selection": {"groups": ["2f6c1d0e-led-bars-vertical"]},
         "z_index": 0, "blend_mode": "replace",
         "graph": {
             "version": 3,

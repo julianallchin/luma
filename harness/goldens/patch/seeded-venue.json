@@ -101,59 +101,59 @@
       "universe": 1
     },
     {
-      "address": 1,
+      "address": 129,
       "fixture": "bar-1",
       "footprint": [
-        1,
-        9
+        129,
+        137
       ],
       "pinned": false,
       "run": "run-upstage",
-      "universe": 2
+      "universe": 1
     },
     {
-      "address": 10,
+      "address": 138,
       "fixture": "bar-0",
       "footprint": [
-        10,
-        18
+        138,
+        146
       ],
       "pinned": false,
       "run": "run-upstage",
-      "universe": 2
+      "universe": 1
     },
     {
-      "address": 19,
+      "address": 147,
       "fixture": "bar-3",
       "footprint": [
-        19,
-        27
+        147,
+        155
       ],
       "pinned": false,
       "run": "run-upstage",
-      "universe": 2
+      "universe": 1
     },
     {
-      "address": 28,
+      "address": 156,
       "fixture": "bar-4",
       "footprint": [
-        28,
-        36
+        156,
+        164
       ],
       "pinned": false,
       "run": "run-upstage",
-      "universe": 2
+      "universe": 1
     },
     {
-      "address": 37,
+      "address": 165,
       "fixture": "bar-5",
       "footprint": [
-        37,
-        45
+        165,
+        173
       ],
       "pinned": false,
       "run": "run-upstage",
-      "universe": 2
+      "universe": 1
     }
   ]
 }

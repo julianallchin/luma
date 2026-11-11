@@ -455,7 +455,8 @@ pub(super) fn window(id: &str) -> Option<u32> {
         .map(|(_, window)| *window)
 }
 
-/// CLI aliases that are not model ids. A saved selection must name a model.
+/// CLI aliases that are not model ids. A saved selection must name a model,
+/// so an alias is never a row; the list resolves the user's own alias.
 const ALIASES: &[&str] = &["default", "opus", "sonnet", "haiku", "fable"];
 
 pub(super) async fn models(
@@ -469,7 +470,17 @@ pub(super) async fn models(
             Vec::new()
         }
     };
-    Ok(catalog(&live))
+    Ok(catalog(&live, configured_model().as_deref()))
+}
+
+/// The `model` the user set in their Claude settings (`/model`, or by hand):
+/// an alias such as `opus`, or a model id. Luma runs the CLI without the
+/// user's settings, so it reads this one itself.
+fn configured_model() -> Option<String> {
+    let path = super::claude_session::config_dir().join("settings.json");
+    let settings: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let model = settings["model"].as_str()?.trim();
+    (!model.is_empty()).then(|| model.to_string())
 }
 
 async fn discover(cwd: &std::path::Path) -> Result<Vec<Value>, AgentError> {
@@ -487,13 +498,15 @@ async fn discover(cwd: &std::path::Path) -> Result<Vec<Value>, AgentError> {
     }
 }
 
-/// The curated rows, then each live model id they miss, with the CLI's
-/// default model first behind a "Default" row.
-fn catalog(live: &[Value]) -> Vec<super::catalog::ModelChoice> {
+/// The curated rows, then each live model id they miss, with the model new
+/// chats start on first: `configured`, the user's own setting, resolved
+/// through the live list, else the model the CLI recommends. There is no
+/// "Default" row: the first row is the default, under its own name.
+fn catalog(live: &[Value], configured: Option<&str>) -> Vec<super::catalog::ModelChoice> {
     let choice = |id: &str, label: &str, efforts: Vec<String>| super::catalog::ModelChoice {
-        id: Some(id.into()),
+        id: id.into(),
         label: label.into(),
-        resolved_model: Some(id.into()),
+        resolved_model: id.into(),
         effort_levels: efforts,
         context_window: window(id),
         price: None,
@@ -504,30 +517,35 @@ fn catalog(live: &[Value]) -> Vec<super::catalog::ModelChoice> {
             choice(id, label, efforts.iter().map(|e| e.to_string()).collect())
         })
         .collect();
-    let mut default = None;
+    let text = |entry: &'_ Value, key: &str| {
+        entry[key]
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    // The model each listed value means today: `opus` → `claude-opus-5-5`.
+    let resolve = |value: &str| {
+        live.iter()
+            .find(|entry| text(entry, "value").as_deref() == Some(value))
+            .and_then(|entry| text(entry, "resolvedModel").or_else(|| text(entry, "value")))
+    };
+    let mut labels = Vec::new();
     for entry in live {
-        let text = |key: &str| {
-            entry[key]
-                .as_str()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-        };
-        let Some(id) = text("resolvedModel").or_else(|| text("value")) else {
+        let Some(id) = text(entry, "resolvedModel").or_else(|| text(entry, "value")) else {
             continue;
         };
-        if ALIASES.contains(&id.strip_suffix("[1m]").unwrap_or(id)) {
+        // `default` names another entry's model under the label "Default".
+        if text(entry, "value").as_deref() == Some("default")
+            || ALIASES.contains(&id.strip_suffix("[1m]").unwrap_or(&id))
+        {
             continue;
         }
-        if text("value") == Some("default") {
-            default = Some(id.to_string());
-        }
-        let label = text("displayName").unwrap_or(id);
+        let label = text(entry, "displayName").unwrap_or_else(|| id.clone());
+        labels.push((id.clone(), label.clone()));
         // A dated id such as `claude-haiku-4-5-20251001` is the curated row
         // under another name.
-        if models
-            .iter()
-            .any(|m| m.id.as_deref() == Some(id) || m.label == label)
-        {
+        if models.iter().any(|m| m.id == id || m.label == label) {
             continue;
         }
         let efforts = entry["supportedEffortLevels"]
@@ -537,31 +555,30 @@ fn catalog(live: &[Value]) -> Vec<super::catalog::ModelChoice> {
             .filter_map(Value::as_str)
             .map(str::to_string)
             .collect();
-        models.push(choice(id, label, efforts));
+        models.push(choice(&id, &label, efforts));
     }
-    let default_label = default.as_deref().and_then(|default| {
-        let index = models
+    let configured = configured.map(|model| model.strip_suffix("[1m]").unwrap_or(model));
+    let default = configured
+        .and_then(|model| {
+            resolve(model).or_else(|| (!ALIASES.contains(&model)).then(|| model.into()))
+        })
+        .into_iter()
+        .chain(resolve("default"));
+    // The first that has a row: a setting naming a model no list carries
+    // falls back to the CLI's own default.
+    let at = default.into_iter().find_map(|id| {
+        let label = labels
             .iter()
-            .position(|m| m.id.as_deref() == Some(default))?;
-        let model = models.remove(index);
-        let label = model.label.clone();
-        models.insert(0, model);
-        Some(label)
+            .find(|(known, _)| *known == id)
+            .map(|(_, l)| l);
+        models
+            .iter()
+            .position(|m| m.id == id || Some(&m.label) == label)
     });
-    models.insert(
-        0,
-        super::catalog::ModelChoice {
-            id: None,
-            label: match default_label {
-                Some(label) => format!("Default · {label}"),
-                None => "Default".into(),
-            },
-            context_window: default.as_deref().and_then(window),
-            resolved_model: default,
-            effort_levels: FULL_EFFORT.iter().map(|e| e.to_string()).collect(),
-            price: None,
-        },
-    );
+    if let Some(at) = at {
+        let model = models.remove(at);
+        models.insert(0, model);
+    }
     models
 }
 
@@ -672,46 +689,75 @@ mod tests {
             .contains("invalid_request"));
     }
 
-    /// Rows are named by model, not by the CLI's taglines. Aliases and dated
-    /// ids of curated models add no rows; a model the list lacks is added.
-    #[test]
-    fn catalog_names_models_and_drops_aliases() {
-        let live = [
-            json!({"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)","description":"Opus 5.5 · Best for everyday, complex tasks"}),
+    /// The CLI's list as 2.1.321 reports it: `default` and the aliases name
+    /// models listed under their own ids too, or curated ones.
+    fn live() -> Vec<Value> {
+        vec![
+            json!({"value":"default","resolvedModel":"claude-sonnet-5-5","displayName":"Default (recommended)","description":"Sonnet 5.5 · Most efficient for simpler tasks"}),
             json!({"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus 5.5","description":"For complex work and everyday tasks"}),
             json!({"value":"sonnet","resolvedModel":"claude-sonnet-5-5","displayName":"Sonnet 5.5","description":"Most efficient for simpler tasks","supportedEffortLevels":["low","high"]}),
             json!({"value":"haiku","resolvedModel":"claude-haiku-4-5-20251001","displayName":"Haiku 4.5"}),
-        ];
-        let models = catalog(&live);
-        let labels: Vec<_> = models.iter().map(|m| m.label.as_str()).collect();
+            json!({"value":"claude-opus-4-6","resolvedModel":"claude-opus-4-6","displayName":"Opus 4.6"}),
+        ]
+    }
+
+    /// Rows are named by model, not by the CLI's taglines. Aliases, the
+    /// `default` entry and dated ids of curated models add no rows; a model
+    /// the curated list lacks is added. Every row names a model.
+    #[test]
+    fn catalog_names_models_and_drops_aliases() {
+        let models = catalog(&live(), None);
+        let mut ids: Vec<_> = models.iter().map(|m| m.id.as_str()).collect();
+        let listed = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), listed, "a model is listed twice");
+        for model in &models {
+            assert!(
+                !ALIASES.contains(&model.id.as_str()),
+                "{} is an alias",
+                model.id
+            );
+            assert!(
+                !model.label.contains("Default"),
+                "{} is a Default row",
+                model.label
+            );
+        }
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));
+        assert!(!models.iter().any(|m| m.id.ends_with("-20251001")));
+        assert_eq!(catalog(&[], None).len(), CURATED.len());
+    }
+
+    /// New chats start on the first row: the user's own setting, through
+    /// what the CLI says its alias means today, else the model the CLI
+    /// recommends. A setting no row carries falls back to the CLI's choice;
+    /// with no list at all the curated order stands.
+    #[test]
+    fn the_first_row_is_the_users_default_else_the_clis() {
+        let first = |configured: Option<&str>| catalog(&live(), configured)[0].id.clone();
+        let recommended = live()[0]["resolvedModel"].as_str().unwrap().to_string();
+        assert_eq!(first(None), recommended);
+        assert_eq!(first(Some("opus")), "claude-opus-5-5");
+        assert_eq!(first(Some("opus[1m]")), "claude-opus-5-5");
+        assert_eq!(first(Some("claude-opus-4-6")), "claude-opus-4-6");
+        // A dated alias folds into the curated row.
+        assert_eq!(first(Some("haiku")), "claude-haiku-4-5");
+        assert_eq!(first(Some("claude-retired-1")), recommended);
+        assert_eq!(first(Some("default")), recommended);
+        assert_eq!(catalog(&[], Some("opus"))[0].id, CURATED[0].0);
+        // Moving the default up drops no row.
         assert_eq!(
-            labels,
-            [
-                "Default · Opus 5.5",
-                "Opus 5.5",
-                "Fable 5.1",
-                "Fable 5",
-                "Opus 4.8",
-                "Opus 4.7",
-                "Sonnet 5.5",
-                "Haiku 4.5",
-            ]
+            catalog(&live(), Some("opus")).len(),
+            catalog(&live(), None).len()
         );
-        assert_eq!(models[0].id, None);
-        assert_eq!(catalog(&[])[0].label, "Default");
     }
 
     /// Every row names its window: curated rows, rows only the CLI lists,
-    /// dated ids, and the Default row through the model it resolves to.
+    /// and dated ids.
     #[test]
     fn every_claude_row_shows_its_window() {
-        let live = [
-            json!({"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)"}),
-            json!({"value":"sonnet","resolvedModel":"claude-sonnet-5-5","displayName":"Sonnet 5.5"}),
-            json!({"value":"haiku","resolvedModel":"claude-haiku-4-5-20251001","displayName":"Haiku 4.5"}),
-            json!({"value":"claude-opus-4-6","resolvedModel":"claude-opus-4-6","displayName":"Opus 4.6"}),
-        ];
-        let models = catalog(&live);
+        let models = catalog(&live(), None);
         for model in &models {
             assert!(
                 model.context_window.is_some(),
@@ -719,20 +765,19 @@ mod tests {
                 model.label
             );
         }
-        let window_of = |label: &str| {
+        let window_of = |id: &str| {
             models
                 .iter()
-                .find(|m| m.label == label)
+                .find(|m| m.id == id)
                 .and_then(|m| m.context_window)
         };
-        assert_eq!(window_of("Default · Opus 5.5"), Some(1_000_000));
-        assert_eq!(window_of("Opus 5.5"), Some(1_000_000));
-        assert_eq!(window_of("Sonnet 5.5"), Some(1_000_000));
-        assert_eq!(window_of("Haiku 4.5"), Some(200_000));
-        assert_eq!(window("claude-haiku-4-5-20251001"), Some(200_000));
-        assert_eq!(window("claude-opus-5-5[1m]"), Some(1_000_000));
+        assert_eq!(window_of("claude-opus-4-6"), window("claude-opus-4-6"));
+        assert_eq!(
+            window("claude-haiku-4-5-20251001"),
+            window("claude-haiku-4-5")
+        );
+        assert_eq!(window("claude-opus-5-5[1m]"), window("claude-opus-5-5"));
         assert_eq!(window("claude-unknown-9"), None);
-        assert_eq!(catalog(&[])[0].context_window, None);
     }
 
     #[tokio::test]

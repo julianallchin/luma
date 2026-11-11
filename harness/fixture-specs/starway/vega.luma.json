@@ -1,0 +1,170 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "starway/vega",
+  "name": "Starway Vega",
+  "manufacturer": "Starway",
+  "model": "Vega",
+  "category": "effect_light",
+  "description": "This is a Starway Vega effect light: one round head on a U-shaped floor yoke, whose side arms carry the head pivot. The cylindrical housing is probably about 0.51 by 0.45 by 0.4 m. The head has a frosted cover over a mesh grille with a black trefoil divider, a small gold disc, and an off-centre lamp. A dense band of LED pixels runs around the full front rim, probably far more than the nine ring zones. The head pans about the vertical axis and tilts on the yoke, both manual aim with probably a full 360-degree range. There are 18 independently controllable cells: nine ring RGB and nine inner RGB.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "moving_head",
+   "dims_src": "mesh",
+   "ref_placeholder": true,
+   "import": {"from": "depence", "old_id": "12cf2cdb-fff7-474e-a697-e0469c213b1d"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.462, 0.493, 0.265]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "yoke2", "legs": 0, "yoke": {"w": 0.44, "y1": 0.3, "d": 0.1045, "shape": "u"}},
+  "joints": {
+   "pan": {"drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [0, 1, 0]},
+   "tilt": {"rest": 90, "drive": "manual", "range": [-180.0, 180.0], "per_head": false, "axis": [1, 0, 0]},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "can",
+   "profile": "cylinder",
+   "ribs": 3,
+   "outline": "round",
+   "w": 0.4053,
+   "len": 0.2,
+   "d": 0.4053,
+   "off": -0.0741,
+   "tilt_y": 0.3015,
+   "lens_d": 0.3814,
+   "features": [],
+   "prof_r": [
+    0.698,
+    0.763,
+    0.829,
+    0.889,
+    0.922,
+    0.956,
+    0.983,
+    0.993,
+    1.0,
+    0.999,
+    0.985,
+    0.971,
+    0.953,
+    0.93,
+    0.907,
+    0.884,
+    0.861,
+    0.838,
+    0.822,
+    0.808,
+    0.794,
+    0.788,
+    0.784,
+    0.779
+   ],
+   "profile_id": "drum_spot"
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [0.38, 0.38],
+    "outline": "circle",
+    "layout": {"kind": "place", "boxes": [[0, 0, 1, 1], [0.14, 0.14, 0.86, 0.86], [0.55, 0.5, 0.75, 0.7]]},
+    "children": [
+     {
+      "layout": {"kind": "rings", "counts": [8], "radii": [0.8]},
+      "child": {
+       "cell": true,
+       "layout": {"kind": "grid", "rows": 1, "cols": 24},
+       "child": {"emitter": {"kind": "led", "colour": "rgb"}}
+      }
+     },
+     {
+      "outline": "circle",
+      "layout": {"kind": "rings", "counts": [8], "radii": [0.4]},
+      "child": {
+       "cell": true,
+       "layout": {"kind": "grid", "rows": 3, "cols": 6},
+       "child": {"emitter": {"kind": "led", "colour": "rgb"}}
+      }
+     },
+     {"cell": true, "emitter": {"kind": "cob", "colour": "amber"}}
+    ]
+   },
+   "zones": [
+    {
+     "region": [0, 0, 1, 0.1],
+     "emitter": {"kind": "lens", "rows": 1, "cols": 1, "shape": "circle", "colour": "white"},
+     "cells": {"rows": 1, "cols": 4},
+     "points": [
+      [0.1658, 0.0687, 0.1545, 0.1545],
+      [0.0687, 0.1658, 0.1545, 0.1545],
+      [-0.0687, 0.1658, 0.1545, 0.1545],
+      [-0.1658, 0.0687, 0.1545, 0.1545]
+     ],
+     "plane": [0.3814, 0.3814],
+     "cell_ids": [3, 4, 5, 6]
+    },
+    {
+     "region": [0.0718, 0.104, 0.9273, 0.4736],
+     "emitter": {"kind": "lens", "rows": 1, "cols": 1, "shape": "circle", "colour": "white", "pitch_mm": 8.0},
+     "cells": {"rows": 1, "cols": 1},
+     "plane": [0.3814, 0.3814],
+     "cell_ids": [0]
+    },
+    {
+     "region": [0.1033, 0.4776, 0.8958, 0.5539],
+     "emitter": {"kind": "lens", "rows": 1, "cols": 1, "shape": "circle", "colour": "white"},
+     "cells": {"rows": 1, "cols": 4},
+     "points": [
+      [0.0922, 0.0382, 0.1175, 0.1175],
+      [0.0381, 0.0923, 0.1175, 0.1175],
+      [-0.0384, 0.0923, 0.1175, 0.1175],
+      [-0.0926, 0.0382, 0.1175, 0.1175]
+     ],
+     "plane": [0.3814, 0.3814],
+     "cell_ids": [3, 4, 5, 6]
+    },
+    {
+     "region": [0.1033, 0.4776, 0.8958, 0.8965],
+     "emitter": {"kind": "lens", "rows": 1, "cols": 1, "shape": "circle", "colour": "white"},
+     "cells": {"rows": 1, "cols": 4},
+     "points": [
+      [0.0381, -0.0925, 0.1175, 0.1175],
+      [0.0922, -0.0384, 0.1175, 0.1175],
+      [-0.0926, -0.0384, 0.1175, 0.1175],
+      [-0.0384, -0.0925, 0.1175, 0.1175]
+     ],
+     "plane": [0.3814, 0.3814],
+     "cell_ids": [1, 2, 7, 8]
+    },
+    {
+     "region": [0, 0.4776, 1, 1],
+     "emitter": {"kind": "lens", "rows": 1, "cols": 1, "shape": "circle", "colour": "white"},
+     "cells": {"rows": 1, "cols": 4},
+     "points": [
+      [0.0687, -0.1658, 0.1545, 0.1545],
+      [0.1658, -0.0687, 0.1545, 0.1545],
+      [-0.1658, -0.0687, 0.1545, 0.1545],
+      [-0.0687, -0.1658, 0.1545, 0.1545]
+     ],
+     "plane": [0.3814, 0.3814],
+     "cell_ids": [1, 2, 7, 8]
+    }
+   ]
+  }
+ ],
+ "cells": {"count": 17, "emitters": 337},
+ "sources": [
+  {"cell_ranges": [[3, 6]]},
+  {"cell_ranges": [[0, 0]]},
+  {"cell_ranges": [[3, 6]]},
+  {"cell_ranges": [[1, 2], [7, 8]]},
+  {"cell_ranges": [[1, 2], [7, 8]]}
+ ]
+}

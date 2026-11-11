@@ -327,15 +327,79 @@ async fn a_stale_projection_clears_without_uploading() {
     );
 }
 
+/// A library that is another account's is cleared before sync connects as
+/// the next one, and the clear reaches nobody. One's own library is kept, and
+/// so is one holding rows nobody owns, which exist nowhere else.
+#[tokio::test]
+async fn another_account_s_library_is_cleared_and_one_s_own_is_kept() {
+    use crate::database::local::auth::arm_write_admission;
+    use crate::database::local::database::evict_other_account;
+
+    let (_directory, pool) = database("evict.db").await;
+    // The pool's one connection carries the upload triggers from here on.
+    drop(writer(&pool).await);
+    let seed = |sql: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::raw_sql(sql).execute(&pool).await.expect("seed");
+            sqlx::raw_sql("DELETE FROM powersync_crud")
+                .execute(&pool)
+                .await
+                .expect("settle the queue");
+        }
+    };
+    let count = |sql: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(sql)
+                .fetch_one(&pool)
+                .await
+                .expect("count")
+        }
+    };
+
+    seed("INSERT INTO venues (id, uid, name) VALUES ('venue-1', 'user-1', 'Room')").await;
+    assert!(!evict_other_account(&pool, "user-1").await.expect("own"));
+    assert_eq!(count("SELECT COUNT(*) FROM venues").await, 1);
+
+    // Someone else signs in on this device.
+    arm_write_admission(&pool, Some("user-2"))
+        .await
+        .expect("switch");
+    assert!(evict_other_account(&pool, "user-2").await.expect("other"));
+    assert_eq!(count("SELECT COUNT(*) FROM venues").await, 0);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM powersync_crud").await,
+        0,
+        "an eviction is not an edit"
+    );
+    assert_eq!(
+        count("SELECT armed FROM auth_write_admission WHERE singleton = 1").await,
+        1
+    );
+
+    // A library from before accounts is the only copy of itself.
+    seed(
+        "INSERT INTO venues (id, uid, name) VALUES ('venue-2', 'user-1', 'Room');
+         INSERT INTO venues (id, uid, name) VALUES ('venue-3', NULL, 'Old room');",
+    )
+    .await;
+    assert!(!evict_other_account(&pool, "user-2").await.expect("unowned"));
+    assert_eq!(count("SELECT COUNT(*) FROM venues").await, 2);
+}
+
 /// The whole lifecycle of one clip, as the upload queue sees it.
 #[tokio::test]
 async fn a_clip_insert_update_and_delete_become_put_patch_and_delete() {
     let (_directory, pool) = database("clip.db").await;
     let mut connection = writer(&pool).await;
+    // An old stamp, so the update's trigger moves it even when both land in
+    // the same millisecond.
     sqlx::query(
         "INSERT INTO clips (id, uid, score_id, graph, start, duration, seed, selection_seed,
-             selection_json, z_index, blend_mode, inputs_json)
-         VALUES ('clip-1', 'user-1', 'score-1', '{}', 0.0, 8.0, '7', NULL, '[]', 0, 'normal', '{}')",
+             selection_json, z_index, blend_mode, inputs_json, updated_at)
+         VALUES ('clip-1', 'user-1', 'score-1', '{}', 0.0, 8.0, '7', NULL, '[]', 0, 'normal', '{}',
+                 '2000-01-01T00:00:00.000Z')",
     )
     .execute(&mut *connection)
     .await

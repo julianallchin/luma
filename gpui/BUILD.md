@@ -25,8 +25,11 @@ workers (beats, stems, chords) in the background.
   download fails, the build continues with a warning, and analysis that needs
   that runtime does not work.
 - **Python 3** for the watcher `gpui/dev.py`.
-- **macOS:** Xcode. The vendored gpui compiles its Metal shaders with
-  `xcrun metal` at build time.
+- **Network on the first build of gpui.** gpui is a git dependency on
+  [lumashow/gpui](https://github.com/lumashow/gpui) (see "gpui" below), which
+  cargo fetches into `~/.cargo/git` once and reuses after that.
+- **macOS:** Xcode. gpui compiles its Metal shaders with `xcrun metal` at
+  build time.
 - **Linux:** the system libraries below.
 
 ## Linux system libraries
@@ -57,6 +60,24 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 Unplug and replug the dongle. Without the rule, the Outputs panel shows the
 dongle with a permission message.
 
+## gpui
+
+Luma builds against its own gpui,
+[lumashow/gpui](https://github.com/lumashow/gpui), pinned by `rev` in the
+`[patch]` block of `gpui/Cargo.toml`. That repository is Zed's history
+filtered to gpui and the crates it builds from (branch `upstream`), with
+Luma's changes as commits on branch `luma`. Its `LUMA.md` lists the changes:
+zero-copy surfaces, HDR output, backdrop blur, wgpu 30 and the rest.
+
+- **To change gpui**, commit to `luma` there, run `cargo test -p gpui_wgpu`
+  and `cargo check -p gpui -p gpui_platform -p gpui_macros` in it, push, and
+  bump the three `rev`s here.
+- **To move to a newer Zed**, filter it and rebase `luma` onto it, as
+  `LUMA.md` describes, then bump the `rev`s.
+- **To work on both at once**, point the three `[patch]` entries at a local
+  checkout (`path = "<checkout>/crates/gpui"` and so on) and put the `rev`s
+  back before you commit.
+
 ## Rebuild on save
 
 From the repository root, run:
@@ -76,6 +97,12 @@ successful build, the watcher stops its app and launches the new executable.
 This is a full restart: playback and editing state are lost. Close other Luma
 instances first; the watcher only manages the process it starts. Ctrl-C stops
 the watcher and its app. The watcher uses Cargo's target-directory setting.
+
+Three switches change what a launched app does, for a one-off run:
+`LUMA_CLOUD=off` keeps the library off the network (no sync), `LUMA_STAGE_GPU=off`
+opens the stage pane without building a GPU device, and `LUMA_MOTION=off` snaps
+every animation to its end. They are read once in `luma_ui::runtime`; a test
+sets the same things on its fixture instead.
 
 ## Build profiles
 
@@ -194,21 +221,26 @@ full zoom-out), `visualizer_capture` (the 3D view's shots and orbit frame
 cost, into `$LUMA_SHOTS/visualizer`), and, against a copy of a real library
 (`LUMA_REAL_CONFIG`), `track_editor_real_budget` and
 `visualizer_real_score_window` (a real score through the renderer, second by
-second). The dialog frame-cost tests in `app_pixel` and `ui_pixel` are still
-`#[ignore]` tests.
+second).
 
 `luma-render` has one binary, `--test render`, plus four that change
 process-wide state and so stay alone: `hdr_dither`, `hdr_presentation`,
 `shared_presentation` and `waveform`. `luma-scene` has one, `--test scene`, with
 the venue-graph goldens (`venue_poses`) and the build-against-real-geometry tests
-(`venue_build`); it needs no GPU. `luma-ui` has one, `--test ui`.
+(`venue_build`); it needs no GPU.
 Set `LUMA_RENDER_CAPTURE_DIR=dir` to save the pictures the `render` tests look
 at, one subdirectory per test file.
-The `luma-render` GPU timing instruments are examples, not tests, because a
-timing on a shared machine is not a gate: `--example stall_probe` (frame latency on a lit, hazed stage),
-`--example timestamp_lie` (pass timestamps against the wall clock; run on an
-idle machine) and `--example resize_probe` (what a per-frame viewport size
-change costs). Run them with `cargo run -p luma-render --release`.
+`luma-render`'s `--example resize_probe` measures what a per-frame viewport size
+change costs: it fails when the median frame of a drag costs over 1.3× a still
+one, and `LUMA_RESIZE_PASSES=1` shows which passes and CPU spans a drag grows.
+Run it with `cargo run -p luma-render --release --example resize_probe`.
+`--example profile_scene` replays a real score moment through the renderer
+alone: `luma-cli profile SCORE OUT.json 1 1 1 snapshot TIMES.json` writes the
+venue and the score's state, and the example reports each pass's GPU time at
+any quality, size, camera and lit-cone count, or with `--paced=120` the
+delivered frame rate when frames are driven as the stage drives them. It does
+not time the UI thread's frame build: read `build_ms` in the app's
+`render-telemetry.log` for that.
 
 To add a test file to a group, add one `mod` line to that group's `main.rs`.
 Members use `use super::support;`. Do not declare a second `mod support;`,
@@ -287,7 +319,7 @@ alongside others, and more often in serial runs, points here; changing
 - `app.frames()` builds scenes but does not rasterize. Only `app.screenshot()`
   reaches the GPU. Wall time around a frame pump does not measure the renderer.
 - On macOS, `LUMA_FILTER_PROFILE=1` prints per-frame GPU times for content
-  filter passes (`vendor/zed/crates/gpui_apple/src/metal_renderer.rs`).
+  filter passes (`crates/gpui_apple/src/metal_renderer.rs` in lumashow/gpui).
 - A route's content is built again on every frame the window draws. A settled
   dialog draws no frames, but a route morph, a scrim fade or a hover fade does.
   `float::menu_row` puts a hover fade on every row.
@@ -306,7 +338,7 @@ Collected from past work in this tree. Each cost someone an afternoon.
 - `cargo test` stops at the first failing test binary. Pass `--no-fail-fast`
   when a run should report every failure, as a golden run should.
 - An integration test build also builds the crate's binaries, so
-  `cargo test -p luma-render` relinks `target/debug/render-goldens`. Copy a binary
+  `cargo test -p luma-render` relinks `target/debug/render-contract-goldens`. Copy a binary
   you are comparing against before running tests.
 - Cargo rebuilds by mtime. A file restored from a backup keeps its old mtime,
   and the build silently keeps the stale artifact. `touch` it.

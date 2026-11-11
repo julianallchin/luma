@@ -17,7 +17,6 @@
 //! plane handles face the camera from every octant.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use glam::{Mat4, Vec3};
 use luma_render::build_frame_with;
@@ -60,6 +59,7 @@ fn scene() -> Scene {
             mode_name: "Default".into(),
             pos: MOVER_POS,
             rot: [0.0; 3],
+            aim: [0.0; 2],
         }],
         pieces: vec![Piece {
             id: "deck".into(),
@@ -238,30 +238,4 @@ fn plane_handles_have_front_faces_in_every_camera_octant() {
             }
         }
     }
-}
-
-#[test]
-#[ignore = "manual GPU capture for selection styling"]
-fn capture_selection_brackets() {
-    let mut scene = scene();
-    scene.fixtures.clear();
-    scene.render.environment = luma_render::scene_desc::Environment::EDITOR;
-    scene.render.sun = Some(luma_render::scene_desc::DirectionalLight::EDITOR);
-    scene.render.haze.enabled = false;
-    scene.pieces[0].pos = [0.0, 0.0, 0.0];
-    scene.pieces[0].rot = [0.0; 3];
-    scene.editor.selected_piece_ids = vec![scene.pieces[0].id.clone()];
-    scene.camera.position = [-3.5, 3.0, 4.5];
-    scene.camera.target = [0.0, 0.5, 0.0];
-    let frame =
-        build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library()).unwrap();
-    let pixels = luma_render::Renderer::new()
-        .unwrap()
-        .render(&frame, 960, 640, 4)
-        .unwrap();
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../harness/shots/gpui/selection-brackets.png");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    image::save_buffer(&path, &pixels, 960, 640, image::ColorType::Rgba8).unwrap();
-    eprintln!("{}", path.display());
 }

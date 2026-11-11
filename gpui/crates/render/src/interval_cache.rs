@@ -6,7 +6,7 @@
 //! `t`-intervals it integrated. This module decides, once per frame and per
 //! shadow slot, whether that stored output is still the answer — every input
 //! to the traversal is either frame-global (camera, opaque depth) or per slot
-//! (shadow projection and map contents, range, field, wash), so validity is
+//! (shadow projection and map contents, range, field, handover), so validity is
 //! one bit per slot — and hands each resident slot a contiguous region of the
 //! header pool sized to its screen rect. No per-pixel keys exist anywhere.
 //!
@@ -34,13 +34,13 @@ pub(crate) struct SlotKey {
     /// Shadow projection and caster identity: the same key that decides
     /// whether the depth map itself is redrawn.
     pub shadow: ShadowCacheKey,
-    /// Raw cone range, field cosine and wash — `beam_span` reads them and the
+    /// Raw cone range, field cosine and handover — `beam_span` reads them and the
     /// shadow key only carries their clamped, derived forms.
     pub range: u32,
     pub cos_field: u32,
     /// Virtual-apex distance: `beam_span` clips the span at the lens plane.
     pub lens_distance: u32,
-    pub wash: u32,
+    pub handover: u32,
     /// Whether the cone scatters at all; a non-scattering cone never traverses
     /// and therefore never writes its region.
     pub scatters: bool,
@@ -392,7 +392,7 @@ mod tests {
             range: 1,
             cos_field: 2,
             lens_distance: 0,
-            wash: 3,
+            handover: 3,
             scatters: true,
             gobo: false,
             rect,

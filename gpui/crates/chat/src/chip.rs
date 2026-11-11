@@ -112,8 +112,8 @@ pub fn label(tool: &ToolPart, awaits_setup: bool) -> SharedString {
 /// The phrasing lives in this one function rather than being assembled at the
 /// element, so the painted chip and the automation tree cannot drift.
 ///
-/// `awaits_setup` is a `python` call waiting for the host's Python setup
-/// ([`crate::transcript::RowCtx::awaits_setup`]).
+/// `awaits_setup` is a `python` call waiting for Python: the host's setup, or
+/// its kernel starting ([`crate::transcript::RowCtx::awaits_setup`]).
 pub fn label_parts(tool: &ToolPart, awaits_setup: bool) -> Label {
     let running = matches!(
         tool.state,
@@ -146,11 +146,11 @@ pub fn label_parts(tool: &ToolPart, awaits_setup: bool) -> Label {
             tense.to_string()
         });
         let detail = detail(tool).unwrap_or_else(|| "analysis".into());
-        // On a first launch setup takes minutes, and the model's verb would
-        // claim work that has not begun.
+        // On a first launch setup takes minutes, and a cold kernel seconds to
+        // minutes; the model's verb would claim work that has not begun.
         if running && awaits_setup {
             return Label {
-                verb: "Waiting for Python setup".into(),
+                verb: "Starting Python".into(),
                 detail: Some(format!(" · {detail}")),
                 failed,
                 running,
@@ -542,6 +542,74 @@ fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window, cx: &mut gpui::App) -> An
         .into_any_element()
 }
 
+/// The header a compact turn's work folds behind: a chip-height row with the
+/// turn's state and a chevron, whose click opens or closes the work.
+///
+/// Shaped like a tool chip — the same height, hover and chevron — because it
+/// is the same kind of control: a summary line that opens what it summarises.
+pub fn work_header(
+    label: &str,
+    open: bool,
+    message: &luma_lib::agent::AgentChatMessage,
+    ctx: &RowCtx,
+    cx: &mut gpui::App,
+) -> AnyElement {
+    let theme = ctx.theme;
+    let chat = ctx.chat.clone();
+    let id = SharedString::from(message.id.clone());
+    let row_ix = ctx.ix;
+    let phase = ctx
+        .live
+        .then(|| luma_ui::motion::pulse_delta(&SHIMMER, ctx.chat.entity_id(), cx));
+    let parts = Label {
+        verb: label.to_string(),
+        detail: None,
+        failed: false,
+        running: ctx.live,
+    };
+    div()
+        .id(SharedString::from(format!("chat-work-{id}")))
+        .h(px(theme::CHIP_HEIGHT))
+        .flex()
+        .flex_none()
+        .flex_row()
+        .items_center()
+        .gap(px(theme::SPACE_SM))
+        .rounded(px(luma_ui::radius::CONTROL))
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::wash(0.04)))
+        .on_click(move |_, _, cx| {
+            chat.update(cx, |this, cx| this.toggle_work(id.clone(), row_ix, cx));
+        })
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(13.0))
+                .text_color(theme.text_muted)
+                .child(two_tone(&parts, phase, theme)),
+        )
+        .child(
+            div()
+                .size(px(theme::CHIP_CHEVRON))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(if open {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .size(px(theme::CHIP_CHEVRON - 2.0))
+                    .text_color(theme.text_faint),
+                ),
+        )
+        .agent_node(NodeRole::Chip, label.to_string())
+        .into_any_element()
+}
+
 /// The red dot beside a failed call's label.
 const FAILED_DOT: f32 = 6.0;
 
@@ -860,9 +928,8 @@ mod tests {
 
     /// The chip is titled by the model's own verb, in the tense of the call's
     /// state, followed by its purpose.
-    /// A cell waiting for the host's Python setup says so instead of claiming
-    /// the model's verb, keeps its purpose, and stops saying so once it
-    /// settles.
+    /// A cell waiting for Python to start says so instead of claiming the
+    /// model's verb, keeps its purpose, and stops saying so once it settles.
     #[test]
     fn a_python_chip_waiting_for_setup_says_so() {
         let mut tool = part(
@@ -876,7 +943,7 @@ mod tests {
             })),
         );
         let waiting = label(&tool, true);
-        assert!(waiting.contains("Python setup"), "{waiting}");
+        assert!(waiting.contains("Starting Python"), "{waiting}");
         assert!(waiting.contains("section boundaries"), "{waiting}");
         assert!(!waiting.contains("Finding"), "{waiting}");
         assert!(label_parts(&tool, true).running);

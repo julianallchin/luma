@@ -62,7 +62,15 @@ test("the list, the share route and the join route", () => {
 test("onboarding offers the way to join", {
   fixture: { sql: ["DELETE FROM venue_nodes WHERE venue_id = 'venue-main'", "DELETE FROM venues WHERE id = 'venue-main'"] },
 }, () => {
-  until("onboarding", (s) => s.find({ role: "text", label: "Create your first venue" }) !== undefined
+  until("onboarding", (s) => s.find({ role: "text", label: "Light it up" }) !== undefined
     && s.find({ role: "button", label: "Join a venue" }) !== undefined);
-  keepCard("venue-invites/onboarding");
+  settle();
+  image.keep(app.screenshot(), "venue-invites/onboarding");
+
+  // Its join dialog opens over the page, the code filling in as it is typed.
+  nav.step("Join", "button", "Join a venue");
+  const focused = (s) => s.find((n) => n.role === "input" && n.focused === true);
+  app.type(focused(until("the code field", (s) => focused(s) !== undefined)), "k7m4q");
+  settle();
+  image.keep(app.screenshot(), "venue-invites/onboarding-join");
 });

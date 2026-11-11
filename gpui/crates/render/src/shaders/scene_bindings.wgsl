@@ -50,8 +50,19 @@ struct Instance {
     base_color: vec4<f32>,
     // rgb: emissive radiance, a: roughness.
     emissive: vec4<f32>,
-    // x: unused, y: normal-map scale, z: occlusion strength.
+    // x: ground, y: normal-map scale, z: occlusion strength, w: an LED
+    // panel's LED shape (0 none, 1 rect, 2 circle, 3 hex) + 4 if staggered.
     flags: vec4<f32>,
+    // An LED panel's LED size as a share of its pitch (xy), LEDs per row,
+    // and gap roughness.
+    led: vec4<f32>,
+    // An LED panel's gap colour (linear) and metalness.
+    gap: vec4<f32>,
+    // A lamp's lit face: its beam's axis (world, unit); w is 1 when the
+    // instance is one.
+    beam_axis: vec4<f32>,
+    // The cosines of that beam's half angle (x) and of its field's (y).
+    beam: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -90,7 +101,7 @@ struct FixtureLightRest {
     color: vec3<f32>,
     intensity: f32,
     cos_field: f32,
-    wash: f32,
+    handover: f32,
     gobo: f32,
     gobo_rotation: f32,
     // Shadow-map layer for this cone, or negative when it has none: maps are
@@ -106,8 +117,9 @@ struct FixtureLightRest {
     // Virtual apex to lens plane, metres; zero for a point source. The core's
     // `position` is the lens centre (`fixture_light.wgsl::lens_cos_angle`).
     lens_distance: f32,
+    // Where this cone's cells start in `panel_data`, or zero (`panel.wgsl`).
+    panel: f32,
     // Tail padding to the 80-byte stride; a beam-waist profile would take it.
-    lens_reserved0: f32,
     lens_reserved1: f32,
     lens_reserved2: f32,
 };
@@ -142,6 +154,8 @@ struct FixtureShadowMatrix {
 @group(3) @binding(7) var fixture_depth_sampler: sampler;
 
 @group(3) @binding(12) var fixture_shadow_map_extra: texture_depth_2d_array;
+// The cells behind the cones that a face of cells casts (`panel.rs`).
+@group(3) @binding(20) var<storage, read> panel_data: array<vec4<f32>>;
 // The far-field fog prefix (`haze_integrate.wgsl`): cumulative camera
 // transmittance in `.a` per fog column and quadratic radial slice. Read by
 // `surface_transmittance` when `globals.surface_fog.y` selects the grid.

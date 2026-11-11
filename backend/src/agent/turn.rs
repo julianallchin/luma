@@ -59,6 +59,18 @@ pub(super) async fn run(
     events: mpsc::UnboundedSender<TurnEvent>,
     steer: mpsc::UnboundedReceiver<UserPrompt>,
 ) {
+    // A turn is somebody's: with nobody signed in there is no thread to run.
+    let principal = match service.principal().await {
+        Ok(principal) => principal,
+        Err(error) => {
+            let _ = events.send(TurnEvent::TurnEnded {
+                outcome: TurnOutcome::Failed {
+                    message: error.to_string(),
+                },
+            });
+            return;
+        }
+    };
     let mut turn = Turn {
         service,
         thread_id,
@@ -67,7 +79,7 @@ pub(super) async fn run(
         unsent: VecDeque::new(),
         transcript: Transcript::default(),
         head: None,
-        principal: None,
+        principal,
         spend: AgentThreadUsage::default(),
         native_session: None,
         claim: None,
@@ -108,7 +120,8 @@ struct Turn {
     /// The durable transcript tip this turn has observed. Every append is a
     /// compare-and-swap against it.
     head: Option<String>,
-    principal: Option<String>,
+    /// The signed-in account the thread belongs to.
+    principal: String,
     /// This thread's running cost, seeded from what is already recorded and
     /// written back at every row boundary. Cumulative rather than per-turn
     /// because the ledger holds one row per thread — see
@@ -198,7 +211,7 @@ impl Turn {
     /// Write the thread's open row, if a step left one, to its synced row.
     async fn close_open(&self) -> Result<(), String> {
         let pool = &self.service.services().db().0;
-        let principal = self.principal.as_deref();
+        let principal = self.principal.as_str();
         let Some(open) = db::open_message(pool, &self.thread_id, principal).await? else {
             return Ok(());
         };
@@ -220,20 +233,19 @@ impl Turn {
     /// `None` resumes the thread's unfinished turn instead of asking anew.
     async fn drive(&mut self, prompt: Option<UserPrompt>) -> Result<(), AgentError> {
         let pool = self.service.services().db().0.clone();
-        self.principal = self.service.principal().await?;
         let lease = engine::state::RunLease::acquire(
             self.service.services().storage().path(),
             &self.thread_id,
-            self.principal.as_deref(),
+            Some(&self.principal),
         )?;
 
-        let mut detail = db::get_thread(&pool, &self.thread_id, self.principal.as_deref())
+        let mut detail = db::get_thread(&pool, &self.thread_id, &self.principal)
             .await
             .map_err(AgentError::Storage)?;
         self.claim = engine::claim::Claim::acquire(
             &self.service.services,
             &self.thread_id,
-            self.principal.as_deref(),
+            Some(&self.principal),
         )
         .await?;
         self.spend = db::thread_usage(&pool, &self.thread_id)
@@ -251,10 +263,9 @@ impl Turn {
             Some(prompt) => self.append_user(prompt).await?,
             None => self.prepare_resume(&mut resume_row).await?,
         };
-        detail.thread =
-            super::context::execution_thread(&pool, &self.thread_id, self.principal.as_deref())
-                .await
-                .map_err(AgentError::Invalid)?;
+        detail.thread = super::context::execution_thread(&pool, &self.thread_id, &self.principal)
+            .await
+            .map_err(AgentError::Invalid)?;
         let authored = matches!(
             detail.thread.route().map_err(AgentError::Invalid)?,
             ThreadRoute::Track { .. }
@@ -362,7 +373,7 @@ impl Turn {
             &pool,
             &self.thread_id,
             setup.execution.model(),
-            self.principal.as_deref(),
+            &self.principal,
         )
         .await
         .map_err(AgentError::Storage)?;
@@ -370,11 +381,12 @@ impl Turn {
         let mut resuming = prompt.is_none();
         loop {
             self.spend.turns += 1;
+            let opened = std::time::Instant::now();
             let (stop_reason, usage, assistant_id) = self
                 .assistant_row(&setup, &turn_message_id, resume_row.take(), resuming)
                 .await?;
             resuming = false;
-            self.close_row(&setup, &assistant_id, stop_reason, usage)
+            self.close_row(&setup, &assistant_id, stop_reason, usage, opened.elapsed())
                 .await?;
             if let Some(session) = self.native_session.take() {
                 setup.resume = Some(session);
@@ -446,12 +458,12 @@ impl Turn {
             },
         };
         if !closed {
-            return db::save_open_message(pool, &self.thread_id, &open, self.principal.as_deref())
+            return db::save_open_message(pool, &self.thread_id, &open, &self.principal)
                 .await
                 .map_err(AgentError::Storage);
         }
         // A resumed row is already the head, so the head is this row either way.
-        if db::close_message(pool, &self.thread_id, open, self.principal.as_deref())
+        if db::close_message(pool, &self.thread_id, open, &self.principal)
             .await
             .map_err(AgentError::Storage)?
         {
@@ -757,11 +769,13 @@ impl Turn {
         assistant_id: &str,
         stop_reason: StopReason,
         usage: Usage,
+        worked: std::time::Duration,
     ) -> Result<(), AgentError> {
         let ended = TurnEvent::MessageEnded {
             id: assistant_id.to_string(),
             stop_reason,
             usage,
+            worked_ms: u64::try_from(worked.as_millis()).unwrap_or(u64::MAX),
         };
         // Folded before the commit, sent after it: the host hears the row
         // closed once it is.
@@ -803,7 +817,7 @@ impl Turn {
                     parts: message.parts_json(),
                 }],
             },
-            self.principal.as_deref(),
+            &self.principal,
         )
         .await
         .map_err(AgentError::Storage)?;
@@ -856,16 +870,20 @@ impl Turn {
             settings.insert(key, model.clone());
         }
         if engine != Engine::Api {
-            let model = self
-                .service
-                .model_name
-                .as_ref()
-                .or(thread.model.as_ref())
-                .cloned();
+            let mut selection = engine::catalog::Selection::from_thread(thread)?;
+            if let Some(model) = &self.service.model_name {
+                selection.model = Some(model.clone());
+            }
+            // A thread that names no model runs the one its picker shows
+            // first, never whatever the CLI falls back to.
+            if selection.model.is_none() {
+                let models = self.service.models(selection.service).await?;
+                selection = selection.resolve(&models);
+            }
             return Ok(Execution::External {
                 engine,
-                model,
-                effort: thread.effort.clone(),
+                model: selection.model,
+                effort: selection.effort,
             });
         }
         let (client, model, reasoning) = if let Some(client) = &self.service.client {
@@ -994,7 +1012,7 @@ impl Turn {
                                 &self.service.services().db().0,
                                 &self.thread_id,
                                 &model,
-                                self.principal.as_deref(),
+                                &self.principal,
                             ))
                             .await
                         {
@@ -1194,7 +1212,7 @@ pub(super) async fn record_stop(
         match engine::state::RunLease::acquire(
             service.services().storage().path(),
             thread_id,
-            principal.as_deref(),
+            Some(&principal),
         ) {
             Ok(lease) => break lease,
             Err(AgentError::Invalid(_)) if tries < 250 => {
@@ -1204,12 +1222,12 @@ pub(super) async fn record_stop(
             Err(error) => return Err(error),
         }
     };
-    let detail = db::get_thread(&pool, thread_id, principal.as_deref())
+    let detail = db::get_thread(&pool, thread_id, &principal)
         .await
         .map_err(AgentError::Storage)?;
     let mut transcript = Transcript::from_rows(&detail.messages).map_err(AgentError::Invalid)?;
     // The stopped turn's row in progress, if it had one, is the last row.
-    let open = db::open_message(&pool, thread_id, principal.as_deref())
+    let open = db::open_message(&pool, thread_id, &principal)
         .await
         .map_err(AgentError::Storage)?;
     let parent = match &open {
@@ -1258,7 +1276,7 @@ pub(super) async fn record_stop(
             parts: last.parts_json(),
         },
     };
-    if !db::close_message(&pool, thread_id, closed, principal.as_deref())
+    if !db::close_message(&pool, thread_id, closed, &principal)
         .await
         .map_err(AgentError::Storage)?
     {

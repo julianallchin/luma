@@ -2,7 +2,7 @@
 //!
 //! The catalogue is frozen data. It describes what each golden frame contains,
 //! and this module is its deserialiser. Edit the JSON directly when a scene
-//! must change, then recapture the goldens with `render-goldens`.
+//! must change, then recapture the goldens with `render-contract-goldens`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -253,7 +253,7 @@ pub struct RenderSettings {
     pub debug_view: DebugView,
     /// The camera: exposure, tone curve and glare. Every constructor starts at
     /// [`Look::NEUTRAL`], the picture the tracked images were captured with;
-    /// the live stage sets its own.
+    /// the live stage, and an agent's stills of it, set the stage's own.
     pub look: Look,
     /// Whether fixture cones contribute punctual light to opaque surfaces.
     pub fixture_surface_lighting: bool,
@@ -375,6 +375,13 @@ impl Quality {
     pub fn pixel_budget(self) -> Option<f64> {
         crate::quality::QualityBudget::of(self).pixel_budget
     }
+
+    /// Frames a second a live viewport holds at this level, rendering fewer
+    /// pixels when it has to.
+    #[must_use]
+    pub fn frame_rate(self) -> f32 {
+        crate::quality::QualityBudget::of(self).frame_rate
+    }
 }
 
 /// Runtime-selectable renderer diagnostic output.
@@ -430,7 +437,7 @@ pub struct Look {
     pub tone: ToneCurve,
     /// How bright the scene is taken to be.
     pub exposure: Exposure,
-    /// Bloom, star streaks and lens glow around hot sources.
+    /// Bloom and star streaks around hot sources.
     pub glare: Glare,
     /// What a video camera adds: sensor noise and a hand on the camera.
     /// Absent in a look stored before it existed, which means off.
@@ -452,15 +459,16 @@ impl Look {
         exposure: Exposure {
             auto: false,
             ev: 0.0,
-            min_ev: Exposure::STAGE.min_ev,
-            max_ev: Exposure::STAGE.max_ev,
+            held: 0.0,
         },
         glare: Glare::OFF,
         footage: Footage::OFF,
     };
 
-    /// The live stage's default: metered exposure, a punchier curve and a
-    /// strong glare, so a light at full reads as blinding.
+    /// The live stage's default: an exposure that
+    /// adapts as an eye or a camera does, over the photometric range in
+    /// [`crate::photometry::ADAPT_EV`], a punchier curve and a strong glare,
+    /// so a light at full reads as blinding.
     pub const STAGE: Self = Self {
         tone: ToneCurve::AgxPunchy,
         exposure: Exposure::STAGE,
@@ -514,35 +522,53 @@ impl ToneCurve {
     }
 }
 
-/// Exposure in stops. With `auto` the renderer meters each frame and `ev` is
-/// the compensation added to the metered value; without it `ev` is the
-/// exposure itself (0 = the fixed exposure the transport was tuned at).
+/// Exposure in stops, where 0 is the photometric exposure for a room lit to
+/// [`crate::photometry::METER_LUX`]. With `auto` the renderer meters each
+/// frame and adapts as an eye does (`post.rs`), within
+/// [`crate::photometry::ADAPT_EV`]; without it the exposure stays at `held`.
+/// `ev` is added to either. A look stored with metering clamps of its own
+/// still loads; the clamps are the renderer's now, in real units, and those
+/// keys are ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Exposure {
     /// Meter the frame and adapt to it over time.
     pub auto: bool,
-    /// Compensation (auto) or exposure (manual), in stops.
+    /// Compensation, in stops, on the metered exposure or the held one.
     pub ev: f32,
-    /// Lowest metered exposure, in stops. A frame full of blinders cannot
-    /// push the rest of the stage below this.
-    pub min_ev: f32,
-    /// Highest metered exposure, in stops. A dark room with a few beams
-    /// cannot lift the room above this.
-    pub max_ev: f32,
+    /// The exposure that stands while nothing is metered: the one the meter
+    /// had reached when it was switched off. A look stored before there was
+    /// one holds 0, the photometric exposure.
+    #[serde(default)]
+    pub held: f32,
 }
 
 impl Exposure {
-    /// Metered, no compensation, two and a half stops down and one up. One
-    /// up is what keeps a dim cue dim: a dark room meters at this clamp.
+    /// Metered, no compensation.
     pub const STAGE: Self = Self {
         auto: true,
         ev: 0.0,
-        min_ev: -2.5,
-        max_ev: 1.0,
+        held: 0.0,
     };
     /// The range the exposure control offers, in stops.
     pub const RANGE: std::ops::RangeInclusive<f32> = -4.0..=4.0;
+
+    /// The exposure a frame is drawn at while nothing is metered, in stops.
+    #[must_use]
+    pub fn fixed(self) -> f32 {
+        self.held + self.ev
+    }
+
+    /// Stop metering and stay where the meter is: `metered` is the exposure
+    /// the picture has now, compensation included.
+    #[must_use]
+    pub fn holding(self, metered: f32) -> Self {
+        Self {
+            auto: false,
+            held: metered - self.ev,
+            ..self
+        }
+    }
 }
 
 /// The footage look: the picture a video camera in the room would record.
@@ -603,7 +629,7 @@ impl Default for Footage {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Glare {
-    /// Overall strength; 0 turns the glare and lens glow off.
+    /// Overall strength; 0 turns the glare off.
     pub strength: f32,
     /// Exposed scene light above which a pixel glares, as a multiple of
     /// diffuse white.
@@ -1046,6 +1072,12 @@ pub struct Fixture {
     pub pos: [f32; 3],
     /// Euler XYZ rotation.
     pub rot: [f32; 3],
+    /// The placed fixture's own aim off its mount, `[pan, tilt]` radians.
+    /// `rot` already carries it; the renderer reads it only to put a
+    /// hand-set tilt on the bracket's joint, so the bracket stays on the
+    /// clamp and the head leans in it.
+    #[serde(default)]
+    pub aim: [f32; 2],
 }
 
 /// Where a piece's geometry comes from.
@@ -1119,7 +1151,7 @@ pub struct Piece {
     pub geometry: Geometry,
     /// The venue's own vocabulary for what this is: `truss`, `stand`, `floor`,
     /// `guardrail`, `speaker`, `cdj`, `mixer`. Read only by
-    /// [`Piece::is_rig_bearing`]; the renderer draws every piece the same way.
+    /// [`Piece::is_floor`]; the renderer draws every piece the same way.
     /// Absent in the golden catalogue, which predates it.
     #[serde(default)]
     pub kind: String,
@@ -1132,17 +1164,6 @@ pub struct Piece {
 }
 
 impl Piece {
-    /// Whether this piece is part of the *rig* — something fixtures hang on —
-    /// rather than part of the room around it.
-    ///
-    /// This selects the room bounds used for house lighting. Camera framing
-    /// includes every authored piece, so decks and speakers stay visible too.
-    /// An unknown kind — including the empty one the goldens carry — is room.
-    #[must_use]
-    pub fn is_rig_bearing(&self) -> bool {
-        matches!(self.kind.as_str(), "truss" | "stand")
-    }
-
     /// Whether this piece is floor the rig stands on — a deck — rather than
     /// something on it. The stage camera pivots on the rig before a floor.
     #[must_use]
@@ -1312,14 +1333,27 @@ impl Scene {
         )
     }
 
+    /// What can stand between a camera and a light, in world space: every
+    /// piece but the floor, as its framing box.
+    #[must_use]
+    pub fn obstacles(&self) -> Vec<luma_scene::Aabb> {
+        self.pieces
+            .iter()
+            .filter(|piece| !piece.is_floor())
+            .map(piece_box)
+            .collect()
+    }
+
     /// The room a house rig hangs over, in world space.
     ///
-    /// Every head and every rig-bearing piece, and nothing else: unlike
-    /// [`Self::framing`] this does not follow the beams out, because where the
-    /// light *goes* is not where the room is. A venue with nothing in it
-    /// returns [`luma_scene::Aabb::EMPTY`]; [`crate::house::lamps`] turns that
-    /// into a minimum room rather than refusing, since an empty venue is
-    /// exactly the one an operator is about to start building in.
+    /// Every head and every piece — truss, decks, speakers, barriers — and
+    /// nothing else: the room is everything the venue has put in it, so the
+    /// house lights all of it. Unlike [`Self::framing`] this does not follow
+    /// the beams out, because where the light *goes* is not where the room
+    /// is. A venue with nothing in it returns [`luma_scene::Aabb::EMPTY`];
+    /// [`crate::house::lamps`] turns that into a minimum room rather than
+    /// refusing, since an empty venue is exactly the one an operator is about
+    /// to start building in.
     #[must_use]
     pub fn room_bounds(&self) -> luma_scene::Aabb {
         let mut bounds = luma_scene::Aabb::from_points(
@@ -1327,7 +1361,7 @@ impl Scene {
                 .iter()
                 .map(|f| luma_scene::coords::world_from_data(glam::Vec3::from(f.pos))),
         );
-        for piece in self.pieces.iter().filter(|p| p.is_rig_bearing()) {
+        for piece in &self.pieces {
             bounds.union(&piece_box(piece));
         }
         bounds
@@ -1379,6 +1413,23 @@ fn piece_box(piece: &Piece) -> luma_scene::Aabb {
 mod tests {
     use super::*;
 
+    /// Switching the meter off leaves the picture where the meter had it,
+    /// and the compensation still moves it; a look stored before an exposure
+    /// could be held is the photometric exposure plus its number, as it was.
+    #[test]
+    fn a_held_exposure_stays_where_the_meter_was() {
+        let metered = Exposure {
+            ev: 0.5,
+            ..Exposure::STAGE
+        };
+        let held = metered.holding(2.5);
+        assert!(!held.auto);
+        assert_eq!(held.fixed(), 2.5);
+        assert_eq!(held.ev, metered.ev);
+        let older = r#"{"tone":"agx","exposure":{"auto":false,"ev":1.5},"glare":{"strength":0.0,"threshold":2.0,"star":0.3}}"#;
+        assert_eq!(Look::stored(older).exposure.fixed(), 1.5);
+    }
+
     /// A stored look round-trips, and one that no longer parses falls back to
     /// the stage default rather than to a black or blinding stage.
     #[test]
@@ -1428,6 +1479,7 @@ mod tests {
         BTreeMap::from([(
             "Luma/Mover.qxf".to_string(),
             Definition {
+                built: None,
                 kind: "Moving Head".into(),
                 modes: Vec::new(),
                 physical: None,
@@ -1456,6 +1508,7 @@ mod tests {
                     mode_name: "Default".into(),
                     pos: [i as f32 * 0.8 - 1.2, 0.0, 3.0],
                     rot: [0.0; 3],
+                    aim: [0.0; 2],
                 })
                 .collect(),
             pieces: vec![

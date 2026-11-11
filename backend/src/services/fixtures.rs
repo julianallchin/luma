@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::fixtures::parser::{self, FixtureIndex};
-use crate::models::fixtures::FixtureEntry;
+use crate::models::fixtures::{FixtureEntry, LASER_PROJECTOR_PATH};
 use crate::services::group_derivation;
 
 /// In-memory fixture-definition index. `None` until [`initialize_fixtures`]
@@ -31,10 +31,50 @@ impl FixtureState {
 
 /// Initialize the fixture library (file-system side)
 pub async fn initialize_fixtures(root: &Path, state: &FixtureState) -> Result<usize, String> {
-    let index = parser::build_index(root).map_err(|e| e.to_string())?;
+    let index = catalogue(root)?;
     let count = index.entries.len();
     *state.0.lock().unwrap() = Some(index);
     Ok(count)
+}
+
+/// Every fixture a venue can be given: the Luma fixture library's, and the
+/// one built-in the library does not carry, the ILDA laser projector
+/// ([`LASER_PROJECTOR_PATH`]).
+///
+/// The QLC+ files under `root` are not offered once there is a library
+/// beside them. They stay where they are: venues patched with one keep
+/// loading it. A tree with no library beside it is searched as QLC+ alone.
+///
+/// # Errors
+/// Fails only if `root` cannot be walked or the library's index is unreadable.
+pub fn catalogue(root: &Path) -> Result<FixtureIndex, String> {
+    let qlc = parser::build_index(root).map_err(|e| e.to_string())?;
+    let Some(library_root) = crate::resources::fixture_library_root(Some(root)) else {
+        return Ok(qlc);
+    };
+    let index = crate::fixtures::library::index(&library_root)?;
+    let mut entries: Vec<FixtureEntry> = index
+        .fixtures
+        .iter()
+        .map(|entry| FixtureEntry {
+            manufacturer: entry.manufacturer.clone(),
+            model: entry.model.clone(),
+            path: crate::fixtures::library::fixture_path(&entry.id),
+            library: Some(entry.clone()),
+        })
+        .collect();
+    entries.extend(
+        qlc.entries
+            .into_iter()
+            .filter(|entry| entry.path == LASER_PROJECTOR_PATH),
+    );
+    entries.sort_by(|a, b| {
+        a.manufacturer
+            .to_lowercase()
+            .cmp(&b.manufacturer.to_lowercase())
+            .then(a.model.to_lowercase().cmp(&b.model.to_lowercase()))
+    });
+    Ok(FixtureIndex { entries })
 }
 
 /// Search for fixtures in the library
@@ -82,6 +122,9 @@ fn matches(entry: &FixtureEntry, query: &str) -> bool {
 /// buried inside one, and the maker's name beats the model's — searching for a
 /// manufacturer is the commonest thing anybody types.
 ///
+/// Among entries as near, a library fixture comes before a QLC+ file: it is
+/// the one Luma can draw and drive in full.
+///
 /// A stable sort, so entries that score alike keep the index's own order.
 #[must_use]
 pub fn best_first<'a>(entries: &'a [FixtureEntry], query: &str) -> Vec<&'a FixtureEntry> {
@@ -90,7 +133,7 @@ pub fn best_first<'a>(entries: &'a [FixtureEntry], query: &str) -> Vec<&'a Fixtu
         .filter(|entry| matches(entry, query))
         .collect();
     if query.split_whitespace().next().is_some() {
-        found.sort_by_key(|entry| distance(entry, query));
+        found.sort_by_key(|entry| (distance(entry, query), entry.library.is_none()));
     }
     found
 }
@@ -139,6 +182,18 @@ pub struct LibraryMode {
     /// What the derivation will file this mode under: `wash`, `spot`, `beam`,
     /// `strobe`, `blinder`, `pixel`, `fx`, `other`.
     pub role: String,
+    /// How many cells it has: what `"<fixture>:<cell>"` counts, from 0.
+    pub cells: usize,
+    /// The emitter colours its channels drive (`red`, `warm_white`, `uv`,
+    /// ...), in channel order. Empty for a mode whose colour comes from a
+    /// lamp, flags or a wheel, and for a QLC+ file.
+    pub colours: Vec<String>,
+    /// Which cells make which colours: each distinct set of emitter colours
+    /// (`"red+green+blue"`, `"white"`) and the cells, from 0, that have
+    /// exactly it. Empty for a QLC+ file.
+    pub cell_colours: std::collections::BTreeMap<String, Vec<usize>>,
+    /// Whether Luma can light it in this mode.
+    pub supported: bool,
 }
 
 /// A library fixture resolved far enough to be named in a `distribute` call.
@@ -150,7 +205,8 @@ pub struct LibraryMode {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryFixture {
-    /// Relative to the fixtures root — the `fixture` argument of `distribute`.
+    /// The `fixture` argument of `distribute`: a QLC+ file relative to the
+    /// fixtures root, or `lib:<id>` for a library fixture.
     pub path: String,
     pub manufacturer: String,
     pub model: String,
@@ -162,12 +218,16 @@ pub struct LibraryFixture {
     /// one. Absent on the many QLC+ files that do not.
     pub beam_deg: Option<(f32, f32)>,
     pub modes: Vec<LibraryMode>,
+    /// How well a library fixture has been checked (geometry, and how each
+    /// mode was settled). Absent on a QLC+ file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<crate::fixtures::library::Quality>,
 }
 
 /// The fixtures an agent can name, `query` matched by [`matches`].
 ///
-/// Reads the same index the patch page searches — [`parser::build_index`] is a
-/// directory walk, not a parse — and then parses only the page it returns, so
+/// Reads the same index the patch page searches — [`catalogue`] is a
+/// directory walk and one index file, not a parse — and then parses only the page it returns, so
 /// naming a fixture costs one file read per row rather than one per library.
 /// A definition that will not parse is dropped rather than failing the call:
 /// the answer to "what can I use" must not be an error because of a file
@@ -176,7 +236,7 @@ pub struct LibraryFixture {
 /// # Errors
 /// Fails only if the fixtures root cannot be walked.
 pub fn library(root: &Path, query: &str, limit: usize) -> Result<Vec<LibraryFixture>, String> {
-    let index = parser::build_index(root).map_err(|e| e.to_string())?;
+    let index = catalogue(root)?;
     Ok(best_first(&index.entries, query)
         .into_iter()
         .filter_map(|entry| resolve_entry(root, entry))
@@ -184,9 +244,102 @@ pub fn library(root: &Path, query: &str, limit: usize) -> Result<Vec<LibraryFixt
         .collect())
 }
 
+/// The emitter colours `mode`'s channels drive, each once, in channel order.
+fn emitter_colours(
+    definition: &crate::models::fixtures::FixtureDefinition,
+    mode: &crate::models::fixtures::Mode,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for channel in &mode.channels {
+        let Some(lowered) = definition
+            .channels
+            .iter()
+            .find(|c| c.name == channel.name)
+            .and_then(|c| c.lowered.as_deref())
+        else {
+            continue;
+        };
+        if let Some(colour) = luma_fixture::EmitterColour::of(lowered.param.attr) {
+            let name = snake(&format!("{colour:?}"));
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// For each cell of `mode`, the emitter colours its channels drive there and
+/// its dies can make (or the firmware emulates), grouped by identical sets.
+fn cell_colours(
+    definition: &crate::models::fixtures::FixtureDefinition,
+    mode: &crate::models::fixtures::Mode,
+) -> std::collections::BTreeMap<String, Vec<usize>> {
+    use luma_fixture::{CellEmitters, EmitterColour};
+    let mut out = std::collections::BTreeMap::new();
+    let Some(library) = definition.library.as_ref() else {
+        return out;
+    };
+    let built = &library.built;
+    let params: Vec<&luma_fixture::control::Param> = mode
+        .channels
+        .iter()
+        .filter_map(|channel| {
+            definition
+                .channels
+                .iter()
+                .find(|c| c.name == channel.name)
+                .and_then(|c| c.lowered.as_deref())
+                .filter(|lowered| lowered.rank == 0)
+                .map(|lowered| &*lowered.param)
+        })
+        .collect();
+    for cell in 0..built.cells.len() {
+        let dies = match built.cell_emitters(cell) {
+            CellEmitters::Known(set) => Some(set),
+            _ => None,
+        };
+        let mut colours: Vec<String> = Vec::new();
+        for param in &params {
+            let covers = param.cell.is_none_or(|span| {
+                let [a, z] = span.span();
+                (a as usize..=z as usize).contains(&cell)
+            });
+            let Some(colour) = EmitterColour::of(param.attr).filter(|_| covers) else {
+                continue;
+            };
+            if !(param.emulated || dies.is_none_or(|d| d.lit_by(colour))) {
+                continue;
+            }
+            let name = snake(&format!("{colour:?}"));
+            if !colours.contains(&name) {
+                colours.push(name);
+            }
+        }
+        if !colours.is_empty() {
+            out.entry(colours.join("+"))
+                .or_insert_with(Vec::new)
+                .push(cell);
+        }
+    }
+    out
+}
+
+/// `WarmWhite` as `warm_white`.
+fn snake(camel: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in camel.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
 /// One library entry with its definition read, or `None` if it will not parse.
 fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
-    let definition = parser::parse_definition(&root.join(&entry.path)).ok()?;
+    let definition = crate::fixtures::definition(root, &entry.path).ok()?;
     let modes: Vec<LibraryMode> = definition
         .modes
         .iter()
@@ -197,6 +350,10 @@ fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
             role: crate::models::groups::FixtureRole::of(&definition, mode)
                 .as_str()
                 .to_string(),
+            cells: mode.heads.len().max(1),
+            colours: emitter_colours(&definition, mode),
+            cell_colours: cell_colours(&definition, mode),
+            supported: definition.supports_mode(&mode.name),
         })
         .collect();
     let lens = definition
@@ -213,5 +370,6 @@ fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
             .and_then(|lens| Some((lens.degrees_min?, lens.degrees_max?)))
             .filter(|(min, max)| *max > 0.0 && max >= min),
         modes,
+        quality: entry.library.as_ref().map(|l| l.quality.clone()),
     })
 }

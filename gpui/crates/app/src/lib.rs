@@ -85,7 +85,7 @@ pub use library::{
     TrackSource,
 };
 #[cfg(feature = "agent")]
-pub use library::{SourceAdapterFixture, SourceSearchFixtureResponse};
+pub use library::{SignInFixture, SourceAdapterFixture, SourceSearchFixtureResponse};
 pub use luma_lib::models::tracks::{TrackImportPhase, TrackImportProgress, TrackImportResult};
 pub use visualizer::warm_renderer;
 
@@ -160,6 +160,9 @@ pub struct Luma {
     /// Live's deck panel width as last dragged on this device; `None` is the
     /// default — see [`shell::DeckWidth`].
     pub(crate) deck_width: shell::DeckWidth,
+    /// Whether the signed-in account has been through the camera
+    /// walkthrough — see [`visualizer::tour`].
+    pub(crate) camera_tour: session_store::Stored<bool>,
     /// This machine's rebound shortcuts — see [`keymap::Overrides`].
     pub(crate) shortcuts: session_store::Stored<keymap::Overrides>,
     /// The title bar's venue menu while it is open or leaving — see
@@ -228,6 +231,10 @@ pub struct Luma {
     /// What the one sign-out gesture is doing — see [`settings::AccountAction`].
     /// Who is signed in is not here: `Library` is the cache of that.
     pub(crate) account_action: settings::AccountAction,
+    /// A venue this account just joined, whose rows are still downloading —
+    /// see [`Luma::await_joined_venue`].
+    pub(crate) arriving_venue: Option<String>,
+    pub(crate) dimmer_write: settings::DimmerWrite,
     /// Every tab's chat runs its turns here, so a turn outlives the tab being
     /// in front. Dropping it at quit cancels every turn.
     pub(crate) running: Entity<RunningTurns>,
@@ -281,7 +288,7 @@ pub struct Luma {
     pub(crate) quit_guarded: bool,
     /// Session items changed but not yet written, by key: what a quit must
     /// write before the debounce would have — see [`session_store`].
-    pub(crate) unsaved_session: std::collections::BTreeMap<&'static str, String>,
+    pub(crate) unsaved_session: std::collections::BTreeMap<String, String>,
 }
 
 impl Luma {
@@ -290,9 +297,7 @@ impl Luma {
     /// something, which is what keeps "how did I get here" answerable from
     /// the click history alone.
     pub fn new(library: Library, cx: &mut Context<Self>) -> Self {
-        let running = cx.new(|_| RunningTurns::default());
-        let running_changed = cx.observe(&running, |_, _, cx| cx.notify());
-        let running_events = cx.subscribe(&running, Self::running_event);
+        let (running, heard) = Self::running_turns(cx);
         let mut app = Self {
             library,
             track_import: None,
@@ -311,6 +316,7 @@ impl Luma {
             saved_venues: saved_venues::SavedVenues::default(),
             saved_cameras: saved_cameras::empty(),
             deck_width: session_store::Stored::new(shell::DECK_WIDTH_KEY),
+            camera_tour: session_store::Stored::new(visualizer::tour::KEY).per_account(),
             shortcuts: session_store::Stored::new(keymap::OVERRIDES_KEY),
             venue_menu: luma_ui::dialog::Popup::default(),
             score_switcher: luma_ui::dialog::Popup::default(),
@@ -334,8 +340,10 @@ impl Luma {
             update: update::AutoUpdate::new(),
             overlay: luma_ui::dialog::Popup::default(),
             account_action: settings::AccountAction::default(),
+            arriving_venue: None,
+            dimmer_write: settings::DimmerWrite::default(),
             running,
-            _running: [running_changed, running_events],
+            _running: heard,
             chat_history_generation: 0,
             focus: cx.focus_handle(),
             dialog_focus: cx.focus_handle(),
@@ -376,6 +384,16 @@ impl Luma {
         app.watch_replica(cx);
         app.watch_updates(cx);
         app
+    }
+
+    /// An empty registry of running turns, and the app's ear on it.
+    pub(crate) fn running_turns(
+        cx: &mut Context<Self>,
+    ) -> (Entity<RunningTurns>, [gpui::Subscription; 2]) {
+        let running = cx.new(|_| RunningTurns::default());
+        let changed = cx.observe(&running, |_, _, cx| cx.notify());
+        let events = cx.subscribe(&running, Self::running_event);
+        (running, [changed, events])
     }
 
     /// Raise the gate the moment the backend learns the stored session is
@@ -471,7 +489,7 @@ impl Render for Luma {
         }
         // A window with no venue *is* the venue picker: keep the overlay up
         // while no venue is open and nothing else is up.
-        if self.songs.is_none() && self.overlay.get().is_none() {
+        if self.songs.is_none() && self.overlay.get().is_none() && self.arriving_venue.is_none() {
             self.show_venues(cx);
         }
         self.sync_venue_modes(cx);

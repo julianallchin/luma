@@ -1,11 +1,12 @@
-//! The camera look: exposure, lens glow and glare (`post.rs`).
+//! The camera look: exposure and glare (`post.rs`).
 //!
 //! ```sh
 //! cargo test -p luma-render --test render post_look:: -- --test-threads=1
 //! ```
 //!
-//! One light aimed at the camera over a dark stage. Each test renders the
-//! same frame under two looks and compares the pictures.
+//! One light aimed at the camera over a dark stage, or the sun over open
+//! ground. Each test renders the same frame under two looks and compares the
+//! pictures.
 
 use std::collections::BTreeMap;
 
@@ -73,7 +74,6 @@ fn hazy_frame(intensity: f32, aim: f32, haze: f32, look: Look) -> Frame {
         color: Vec3::new(0.2, 0.5, 1.0),
         intensity,
         cos_field: 0.96,
-        wash: 0.0,
         gobo: 0,
         gobo_rotation: 0.0,
         haze_gain: 1.0,
@@ -96,8 +96,8 @@ fn capture_numbered(pixels: &[u8]) {
     crate::common::capture(&format!("{n:02}"), pixels, WIDTH, HEIGHT);
 }
 
-/// Where the lens is on screen: the brightest pixel of a frame with it in.
-fn lens_pixel(pixels: &[u8]) -> (u32, u32) {
+/// Where the source is on screen: the brightest pixel of the frame.
+fn brightest(pixels: &[u8]) -> (u32, u32) {
     let (mut best, mut at) = (0u32, 0usize);
     for (i, px) in pixels.chunks_exact(4).enumerate() {
         let sum = u32::from(px[0]) + u32::from(px[1]) + u32::from(px[2]);
@@ -144,48 +144,8 @@ fn manual(glare: Glare) -> Look {
     }
 }
 
-/// A beam aimed into the camera shows its lens white-hot, and its glare
-/// spreads over the dark around it; off the axis the lens is barely there.
-#[test]
-fn a_lens_in_its_beam_glares() {
-    let mut renderer = Renderer::new().unwrap();
-    // No haze: the lens and its glare are all there is to see.
-    let glaring = render(
-        &mut renderer,
-        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE)),
-    );
-    let plain = render(
-        &mut renderer,
-        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::OFF)),
-    );
-    let lens = lens_pixel(&glaring);
-    assert!(
-        luma(&glaring, lens.0, lens.1) > 245.0,
-        "the lens on its beam's axis is white: {}",
-        luma(&glaring, lens.0, lens.1)
-    );
-    // Two degrees out.
-    let halo = ring(&glaring, lens, 6.0);
-    let without = ring(&plain, lens, 6.0);
-    assert!(
-        halo > without + 5.0,
-        "glare lights the dark around the lens: {halo} against {without} without it"
-    );
-
-    // Turned away, the same lens is a fraction of that.
-    let away = render(
-        &mut renderer,
-        &hazy_frame(0.5, 0.0, 0.0, manual(Glare::STAGE)),
-    );
-    let away_halo = ring(&away, lens, 6.0);
-    assert!(
-        away_halo < halo * 0.5,
-        "the glow falls off out of the beam: {away_halo} against {halo} on axis"
-    );
-}
-
-/// The veil is a long power-law tail: from one lens it still lights the dark
-/// a quarter of the frame away, and it falls smoothly all the way out, with no
+/// The veil is a long power-law tail: from the sun it still lights the
+/// frame well away from it, and it falls smoothly all the way out, with no
 /// bright ring where a kernel or a fade might end.
 #[test]
 fn the_veil_reaches_far_without_a_ring() {
@@ -194,42 +154,40 @@ fn the_veil_reaches_far_without_a_ring() {
         style: GlareStyle::Bloom,
         ..Glare::STAGE
     };
-    let glaring = render(&mut renderer, &hazy_frame(0.5, 1.0, 0.0, manual(bloom)));
-    let plain = render(
-        &mut renderer,
-        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::OFF)),
-    );
-    let lens = lens_pixel(&glaring);
-    let far = ring(&glaring, lens, 30.0);
+    let glaring = render(&mut renderer, &sun_frame(0.0, manual(bloom)));
+    let plain = render(&mut renderer, &sun_frame(0.0, manual(Glare::OFF)));
+    let sun = brightest(&glaring);
+    let far = ring(&glaring, sun, 30.0);
     assert!(
-        far > ring(&plain, lens, 30.0) + 1.0,
+        far > ring(&plain, sun, 30.0) + 1.0,
         "the veil reaches 30 px out: {far}"
     );
-    let profile: Vec<f32> = (3..60).map(|r| ring(&glaring, lens, r as f32)).collect();
+    // From outside the sun's clipped core, where both pictures are white and
+    // their difference says nothing about the veil.
+    let profile: Vec<f32> = (6..60)
+        .map(|r| ring(&glaring, sun, r as f32) - ring(&plain, sun, r as f32))
+        .collect();
     for (i, pair) in profile.windows(2).enumerate() {
         assert!(
             pair[1] <= pair[0] + 0.5,
             "the veil rises at {} px: {profile:?}",
-            i + 4
+            i + 7
         );
     }
 }
 
-/// Medium quality convolves on a coarser grid; the glare around a lens is much
-/// the same.
+/// Medium quality convolves on a coarser grid; the glare around the sun is
+/// much the same.
 #[test]
 fn medium_quality_glares_alike() {
     let mut renderer = Renderer::new().unwrap();
-    let high = render(
-        &mut renderer,
-        &hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE)),
-    );
-    let mut frame = hazy_frame(0.5, 1.0, 0.0, manual(Glare::STAGE));
+    let high = render(&mut renderer, &sun_frame(0.0, manual(Glare::STAGE)));
+    let mut frame = sun_frame(0.0, manual(Glare::STAGE));
     frame.quality = Quality::Medium;
     let low = render(&mut renderer, &frame);
-    let lens = lens_pixel(&high);
+    let sun = brightest(&high);
     for radius in [4.0, 8.0, 16.0] {
-        let (h, l) = (ring(&high, lens, radius), ring(&low, lens, radius));
+        let (h, l) = (ring(&high, sun, radius), ring(&low, sun, radius));
         assert!(
             (h - l).abs() < 0.3 * h.max(l) + 2.0,
             "at {radius} px: high {h}, low {l}"
@@ -250,9 +208,13 @@ fn the_post_chain_at_rest_is_the_composite_picture() {
             1.0,
             0.3,
             Look {
-                exposure: Exposure {
-                    min_ev: -3.0,
-                    ..Look::NEUTRAL.exposure
+                // A camera with no grain and a still hand: the chain's own
+                // picture of the same light.
+                footage: luma_render::scene_desc::Footage {
+                    enabled: true,
+                    noise: 0.0,
+                    handheld: 0.0,
+                    bass: 0.0,
                 },
                 ..Look::NEUTRAL
             },
@@ -271,37 +233,55 @@ fn the_post_chain_at_rest_is_the_composite_picture() {
     );
 }
 
-/// A lit room follows the light: four times the light meters about two stops
-/// down. A dark room with one thin beam is exposed for what is lit and held
-/// at the top clamp rather than lifted until the room is grey.
+/// A lit room follows the light most of the way: four times the light meters
+/// down by less than its two stops, and what is left shows, so the brighter
+/// room is the brighter picture. A dark room with one dim beam is exposed
+/// for what is lit and opens no further for a dimmer one, rather than being
+/// lifted until the room is grey.
 #[test]
 fn auto_exposure_meters_the_lit_part_of_the_frame() {
     let mut renderer = Renderer::new().unwrap();
     let auto = Look {
         glare: Glare::OFF,
+        exposure: Exposure {
+            auto: true,
+            ..Exposure::STAGE
+        },
         ..Look::STAGE
     };
-    let mut metered = |intensity: f32, haze: f32, look: Look| {
-        let _ = render(&mut renderer, &hazy_frame(intensity, 0.4, haze, look));
-        renderer.metered_exposure().unwrap()[0]
+    // The exposure a frame meters, and how bright its picture is.
+    let mut shot = |intensity: f32, haze: f32, look: Look| {
+        let pixels = render(&mut renderer, &hazy_frame(intensity, 0.4, haze, look));
+        let light: f32 = (0..HEIGHT)
+            .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+            .map(|(x, y)| luma(&pixels, x, y))
+            .sum();
+        (renderer.metered_exposure().unwrap()[0], light)
     };
-    let dim = metered(1.0, 0.3, auto);
-    let bright = metered(4.0, 0.3, auto);
+    let (dim, dim_picture) = shot(1.0, 0.3, auto);
+    let (bright, bright_picture) = shot(4.0, 0.3, auto);
     assert!(
-        (1.5..=2.5).contains(&(dim - bright)),
-        "four times the light meters about two stops down: {dim} then {bright}"
+        (1.0..2.0).contains(&(dim - bright)),
+        "four times the light meters most of two stops down: {dim} then {bright}"
     );
+    assert!(
+        bright_picture > 1.1 * dim_picture,
+        "the brighter room is the brighter picture: {bright_picture} against {dim_picture}"
+    );
+    let mut metered = |intensity: f32, haze: f32, look: Look| shot(intensity, haze, look).0;
 
-    let dark_room = metered(1.0, 0.05, auto);
+    // A dim cue: the beam at a quarter, in light haze. It is past what the
+    // exposure opens for, so a dimmer one meters the same.
+    let dark_room = metered(0.25, 0.05, auto);
     assert_eq!(
         dark_room,
-        Exposure::STAGE.max_ev,
+        metered(0.125, 0.05, auto),
         "a dark room stops at the clamp"
     );
 
     // Compensation is added after the clamp, so it still moves a dark room.
     let lifted = metered(
-        1.0,
+        0.25,
         0.05,
         Look {
             exposure: Exposure {
@@ -311,7 +291,7 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
             ..auto
         },
     );
-    assert_eq!(lifted, Exposure::STAGE.max_ev + 1.0);
+    assert_eq!(lifted, dark_room + 1.0);
 
     // Manual exposure is the number itself.
     let half_stop = Look {
@@ -333,6 +313,10 @@ fn live_exposure_adapts_rather_than_jumps() {
     let mut renderer = Renderer::new().unwrap();
     let auto = Look {
         glare: Glare::OFF,
+        exposure: Exposure {
+            auto: true,
+            ..Exposure::STAGE
+        },
         ..Look::STAGE
     };
     // A standalone frame snaps.
@@ -343,12 +327,72 @@ fn live_exposure_adapts_rather_than_jumps() {
         .unwrap();
     let [current, target] = renderer.metered_exposure().unwrap();
     assert!(
-        target < dim - 1.5,
+        target < dim - 1.0,
         "the bright frame meters lower: {target} against {dim}"
     );
     assert!(
-        current > target + 1.0 && current <= dim,
+        current > (dim + target) / 2.0 && current <= dim,
         "one live frame later the exposure is still on its way: {current}, from {dim} to {target}"
+    );
+}
+
+/// A light that arrives in an eye used to the dark shuts its pupil and, for
+/// a while, no more: the exposure closes by the pupil's stops where the meter
+/// asks for far more, and goes on closing slowly. The dark opens it again
+/// all the way.
+#[test]
+fn a_sudden_light_closes_the_exposure_only_as_far_as_a_pupil() {
+    let pupil = luma_render::photometry::PUPIL_STOPS;
+    let auto = Look {
+        glare: Glare::OFF,
+        exposure: Exposure::STAGE,
+        ..Look::STAGE
+    };
+    let dark = |time: f32| Frame {
+        time,
+        ..hazy_frame(0.25, 0.4, 0.05, auto)
+    };
+    // The same beam a thousand times brighter, down the camera's throat.
+    let blinding = |time: f32| Frame {
+        time,
+        ..hazy_frame(4000.0, 1.0, 0.3, auto)
+    };
+    let mut still = Renderer::new().unwrap();
+    let _ = render(&mut still, &blinding(0.0));
+    let [asked, _] = still.metered_exposure().unwrap();
+
+    let mut renderer = Renderer::new().unwrap();
+    let _ = render(&mut renderer, &dark(0.0));
+    let [used_to, _] = renderer.metered_exposure().unwrap();
+    assert!(
+        asked < used_to - pupil - 2.0,
+        "the light asks for much more than a pupil closes: {asked} from {used_to}"
+    );
+    // Ten frames a second, the longest step one adaptation takes.
+    let mut live = |frame: &dyn Fn(f32) -> Frame, seconds: std::ops::Range<u32>| {
+        for tick in seconds.start * 10..seconds.end * 10 {
+            let _ = renderer
+                .render_next(&frame((tick + 1) as f32 / 10.0), WIDTH, HEIGHT, 1)
+                .unwrap();
+        }
+        renderer.metered_exposure().unwrap()[0]
+    };
+    let at_once = live(&blinding, 0..5);
+    let closed = used_to - at_once;
+    assert!(
+        closed > pupil - 0.1 && closed < pupil + 0.25 * (used_to - asked - pupil),
+        "after five seconds the pupil has closed and little else: {closed} of {} stops",
+        used_to - asked
+    );
+    let later = live(&blinding, 5..15);
+    assert!(
+        later < at_once && later > asked,
+        "it goes on closing, slowly: {at_once} then {later}, toward {asked}"
+    );
+    let reopened = live(&dark, 15..25);
+    assert!(
+        (reopened - used_to).abs() < 0.1,
+        "the dark opens it all the way: {reopened}, as before the light {used_to}"
     );
 }
 

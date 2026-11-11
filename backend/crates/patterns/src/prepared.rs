@@ -150,9 +150,6 @@ impl PreparedGraph {
     pub fn feature_requests(&self) -> &[crate::FeatureRequest] {
         &self.requests
     }
-    pub fn output_types(&self) -> &BTreeMap<String, crate::Output> {
-        &self.output_types
-    }
     pub fn with_features(
         mut self,
         features: std::sync::Arc<dyn crate::FeatureSource>,
@@ -255,9 +252,6 @@ impl PreparedGraph {
         }
         steps.reverse();
         steps
-    }
-    pub fn cell_count(&self) -> usize {
-        self.cells.len()
     }
     pub fn evaluate(&self, beat: f64) -> Result<BTreeMap<String, Value>> {
         self.evaluate_batch(&[beat])?
@@ -481,7 +475,7 @@ impl PreparedGraph {
                     .map(|(name, binding)| {
                         Ok((
                             name.clone(),
-                            self.bind(library, graph, binding, &inputs, &mut nodes)?,
+                            self.bind(library, graph, binding, &mut nodes)?,
                         ))
                     })
                     .collect()
@@ -493,12 +487,10 @@ impl PreparedGraph {
         library: &Library,
         graph: &Graph,
         binding: &Binding,
-        inputs: &BTreeMap<String, Source>,
         nodes: &mut BTreeMap<String, BTreeMap<String, Source>>,
     ) -> Result<Source> {
         match binding {
             Binding::Value { value } => Ok(Source::Constant(EvaluatedValue::literal(value)?)),
-            Binding::Input { input } => Ok(inputs[input].clone()),
             Binding::Connection { node, output } => {
                 if !nodes.contains_key(node) {
                     let instance = &graph.nodes[node];
@@ -506,10 +498,7 @@ impl PreparedGraph {
                         .inputs
                         .iter()
                         .map(|(name, binding)| {
-                            Ok((
-                                name.clone(),
-                                self.bind(library, graph, binding, inputs, nodes)?,
-                            ))
+                            Ok((name.clone(), self.bind(library, graph, binding, nodes)?))
                         })
                         .collect::<Result<_>>()?;
                     nodes.insert(

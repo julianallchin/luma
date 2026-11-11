@@ -16,6 +16,8 @@ struct StageSubject {
     lit: Option<Lit>,
     audition: Option<crate::track_editor::Audition>,
     bass: Option<Bass>,
+    /// The page under the stage is the Rig page.
+    rigging: bool,
 }
 
 /// The score a stage is lit by.
@@ -86,6 +88,7 @@ impl Luma {
             lit,
             audition,
             bass,
+            rigging: matches!(self.workspace.active_body(), Some(Body::Patch(_))),
         })
     }
 
@@ -106,6 +109,7 @@ impl Luma {
             lit: subject,
             audition,
             bass,
+            rigging,
         }) = self.stage_subject()
         else {
             // Dropping the state is what un-mounts the viewport, and
@@ -144,7 +148,12 @@ impl Luma {
             state.audition = audition;
             state.bass = bass;
             state.exporting = exporting;
+            if state.rigging != rigging {
+                state.set_rigging(rigging);
+                cx.notify();
+            }
         }
+        self.sync_camera_tour(cx);
     }
 
     /// Give the stage's room back to the editor under it, or take it again.

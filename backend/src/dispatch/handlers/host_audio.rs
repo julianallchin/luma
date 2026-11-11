@@ -34,7 +34,7 @@ pub async fn host_load_track(
         .map_err(|error| CommandError::Internal(error.to_string()))?;
     let pool = &services.db.0;
     let mut access = VisibleTrackAccess::<Read>::read(pool, &track_id).await?;
-    let admitted_principal = access.principal().map(str::to_owned);
+    let admitted_principal = access.principal().to_owned();
     let info = crate::database::local::tracks::get_track_path_and_hash_for_connection(
         access.connection(),
         &track_id,
@@ -49,7 +49,7 @@ pub async fn host_load_track(
     commit_segment(
         services,
         &track_id,
-        admitted_principal.as_deref(),
+        &admitted_principal,
         session,
         audio.to_vec(),
         0.0,
@@ -136,7 +136,7 @@ fn decode(file_path: &str, track_hash: &str) -> Result<std::sync::Arc<Vec<f32>>,
 async fn commit_segment(
     services: &AppServices,
     track_id: &str,
-    admitted_principal: Option<&str>,
+    admitted_principal: &str,
     session: u64,
     samples: Vec<f32>,
     segment_start: f32,

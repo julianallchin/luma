@@ -4,10 +4,10 @@
 //! default, or a JSON array of strictly increasing times from TIMES_JSON.
 use luma_lib::{
     eval::{Arena, Scope},
-    stage_render::{primitive_state, VenueGeometry},
+    stage_render::VenueGeometry,
     storage::StorageRoot,
 };
-use luma_render::{assets::Library, build_frame_with, Renderer};
+use luma_render::{assets::Library, build_frame_with, Moment, Renderer};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::{path::PathBuf, time::Instant};
 
@@ -75,6 +75,7 @@ pub async fn run(args: super::Args) -> Result<(), String> {
     .await?;
     let geometry = VenueGeometry::load(&pool, &fixtures, &venue_id).await?;
     let (mut scene, definitions) = geometry.scene();
+    let lights = geometry.lights();
     scene.render.haze.resolution = luma_render::LIVE_HAZE_RESOLUTION;
     scene.render.haze.steps = 8;
     scene.render.haze.density = 0.24;
@@ -107,11 +108,12 @@ pub async fn run(args: super::Args) -> Result<(), String> {
             // Record precisely the head keys requested by the production frame
             // builder, including backend single-head fallback resolution.
             let pinned = std::cell::RefCell::new(std::collections::BTreeMap::new());
+            let frame_lights = lights.frame(Some(&state), Moment::at(f64::from(time)).slice);
             build_frame_with(
                 &scene,
                 &definitions,
                 &|id, head| {
-                    let value = primitive_state(Some(&state), id, head);
+                    let value = frame_lights.primitive(id, head);
                     if let Some(value) = value {
                         pinned.borrow_mut().insert(format!("{id}:{head}"), value);
                     }
@@ -147,10 +149,11 @@ pub async fn run(args: super::Args) -> Result<(), String> {
             .ok_or("missing score frame")?;
         let eval_ms = start.elapsed().as_secs_f64() * 1000.0;
         let start = Instant::now();
+        let frame_lights = lights.frame(Some(&state), Moment::at(f64::from(time)).slice);
         let mut frame = build_frame_with(
             &scene,
             &definitions,
-            &|id, head| primitive_state(Some(&state), id, head),
+            &|id, head| frame_lights.primitive(id, head),
             time,
             &mut library,
         )

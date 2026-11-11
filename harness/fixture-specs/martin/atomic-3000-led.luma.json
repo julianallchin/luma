@@ -1,0 +1,480 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "martin/atomic-3000-led",
+  "name": "Martin Atomic 3000 LED",
+  "manufacturer": "Martin",
+  "model": "Atomic 3000 LED",
+  "category": "strobe_or_blinder",
+  "description": "Martin Atomic 3000 LED (manual P/N 35000290 rev C): rectangular 424 x 234 mm black housing (442 x 245 x 245 mm incl. bracket, 7.8 kg), face pointing forward on two front feet, folding mounting bracket pivoting on two tilt adjustment wheels at the sides (manual tilt, no pan). Behind the front glass a dimpled (hammered) reflector fills the aperture with a horizontal 'Beam' strip of white LEDs in a clear tube just above centre. The 'Aura' is a separate RGB LED array pointing into the reflector, so the whole reflector glows in colour. Extended mode (14 ch) = 2 controllable cells: Beam (white intensity/strobe) and Aura (RGB + dimmer). OLD QUICK-PASS TEXT: This is probably a Martin Atomic 3000 LED, a single-body strobe sold as one unit. The rectangular housing measures roughly 42 by 16 by 25 cm and sits on small rubber feet along its base. A side yoke bracket with a pivot knob on the right end carries the body, which tilts on that yoke. Pan swings the whole head about the vertical axis. Both axes are manual, with no DMX control. The front is a black bezel around a honeycomb grille over one horizontal linear flash tube, set slightly above centre and seen through the grille rather than behind a lens. The extended mode lists two intensity channels, probably dimmer and strobe acting on that single tube, so the two cells are unconfirmed and not separate emitters.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "strobe",
+   "dims_src": "mesh",
+   "ref_placeholder": true,
+   "import": {"from": "depence", "old_id": "8e0bffb3-dc0d-446c-8656-0ca261cf93e9"},
+   "sources": [
+    {
+     "sha": "71ece5db1cf843e52096177bb4ab7faddf8aacfdc8618d0333a1a4d602f71e5a",
+     "kind": "manual",
+     "verdict": "not_sure"
+    },
+    {
+     "sha": "af1cec81c366579b8560bac0bc31369beeac9f90766b8d878c856a7940716d0d",
+     "kind": "manual",
+     "verdict": "verified"
+    }
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.442, 0.245, 0.245]},
+ "optics": {"type": "strobe", "cct_k": {"v": 5600, "src": "control:onyx", "conf": "medium"}},
+ "materials": {},
+ "rig": {
+  "mount": {
+   "type": "yoke2",
+   "legs": 0,
+   "base": null,
+   "yoke": {
+    "w": 0.428,
+    "y1": 0.13,
+    "d": 0.06,
+    "gap": 0.003,
+    "hull": false,
+    "arm": {"profile": "straight", "t": [0.008, 0.008], "d": [0.06, 0.06], "round_top": 1.0}
+   }
+  },
+  "joints": {
+   "pan": null,
+   "tilt": {"drive": "manual", "range": [-90, 90], "per_head": false, "axis": [1, 0, 0], "rest": 90},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "box",
+   "outline": "rect",
+   "w": 0.424,
+   "len": 0.16,
+   "d": 0.245,
+   "off": 0.05,
+   "tilt_y": 0.13,
+   "lens_d": 0.371,
+   "shell": {
+    "sections": [
+     {"t": 0, "w": 0.82, "d": 0.78, "r": 0.15},
+     {"t": 0.55, "w": 0.9, "d": 0.85, "r": 0.15},
+     {"t": 0.62, "w": 1.0, "d": 1.0, "r": 0.0},
+     {"t": 1, "w": 1.0, "d": 1.0, "r": 0.0}
+    ],
+    "ring": {"rec": 0.012, "wall": 0.026}
+   },
+   "features": ["foot"]
+  },
+  "parts": [
+   {
+    "name": "tilt_knob_L",
+    "attach": "yoke",
+    "shape": "cyl",
+    "r": 0.03,
+    "len": 0.03,
+    "pos": [-0.226, 0.13, 0.0],
+    "rot": [0, 90, 0],
+    "mat": "body2"
+   },
+   {
+    "name": "tilt_knob_R",
+    "attach": "yoke",
+    "shape": "cyl",
+    "r": 0.03,
+    "len": 0.03,
+    "pos": [0.226, 0.13, 0.0],
+    "rot": [0, 90, 0],
+    "mat": "body2"
+   },
+   {
+    "name": "bracket_plate",
+    "attach": "base",
+    "shape": "box",
+    "size": [0.4, 0.008, 0.13],
+    "pos": [0, 0.07, -0.12],
+    "rot": [-40, 0, 0],
+    "mat": "body"
+   },
+   {
+    "name": "symbol",
+    "attach": "head",
+    "shape": "cyl",
+    "r": 0.013,
+    "len": 0.004,
+    "pos": [0, 0.104, 0.081],
+    "mat": "lens"
+   }
+  ]
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [0.372, 0.19],
+    "layout": {"kind": "place", "boxes": [[0, 0, 1, 1], [0.0, 0.36, 1.0, 0.5]]},
+    "children": [
+     {"cell": true, "cell_id": 1, "diffuser": true, "emitter": {"kind": "led", "colour": "rgb"}},
+     {"cell": true, "cell_id": 0, "emitter": {"kind": "tube", "colour": "white"}}
+    ]
+   }
+  }
+ ],
+ "cells": {"count": 2, "emitters": 2},
+ "control": {
+  "native_cct_k": 5600,
+  "modes": [
+   {
+    "name": "3ch",
+    "options": {"channels": "3"},
+    "footprint": 3,
+    "channels": [
+     {"attr": "dimmer", "cell": 0},
+     {"attr": "shutter", "cell": 0},
+     {
+      "attr": "shutter/fx",
+      "ranges": [{"dmx": [0, 255], "state": "strobe", "phys": [0.29, 16.7], "unit": "Hz"}],
+      "cell": 0
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx"],
+     "conflict": {"gdtf": "slot 1: shutter/fx (want shutter)", "qlc": "slot 1: fx/speed (want shutter)"},
+     "doc": "af1cec81c366",
+     "page": 6,
+     "note": "manual verified",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   },
+   {
+    "name": "4ch",
+    "options": {"channels": "4"},
+    "footprint": 4,
+    "channels": [
+     {"attr": "dimmer", "cell": 0},
+     {"attr": "shutter", "cell": 0},
+     {
+      "attr": "shutter/fx",
+      "ranges": [{"dmx": [0, 255], "state": "strobe", "phys": [0.29, 16.7], "unit": "Hz"}],
+      "n": 1,
+      "cell": 0
+     },
+     {"attr": "shutter/fx", "ranges": "t1", "n": 2, "cell": 0}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx"],
+     "conflict": {
+      "depence": "slot 3: shutter+ (want shutter/fx)",
+      "gdtf": "slot 1: shutter/fx (want shutter)",
+      "qlc": "slot 1: fx/speed (want shutter)"
+     },
+     "doc": "af1cec81c366",
+     "page": 6,
+     "note": "manual verified",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   },
+   {
+    "name": "5ch",
+    "options": {"channels": "5"},
+    "footprint": 5,
+    "channels": [
+     {"attr": "dimmer", "cell": 0},
+     {"attr": "shutter", "cell": 0},
+     {"attr": "shutter/fx", "ranges": [{"dmx": [0, 255], "state": "strobe"}], "n": 1, "cell": 0},
+     {"attr": "shutter/fx", "n": 2, "cell": 0},
+     {"attr": "shutter", "rank": 1, "cell": 0}
+    ],
+    "prov": {
+     "status": "single",
+     "agree": ["depence"],
+     "ranges": {"agree": ["depence"], "note": "tables taken from depence"}
+    }
+   },
+   {
+    "name": "14ch",
+    "options": {"channels": "14"},
+    "footprint": 14,
+    "channels": [
+     {"attr": "dimmer", "n": 1, "cell": 0},
+     {"attr": "shutter", "cell": 0},
+     {
+      "attr": "shutter/fx",
+      "ranges": [{"dmx": [0, 255], "state": "strobe", "phys": [0.29, 16.7], "unit": "Hz"}],
+      "n": 1,
+      "cell": 0
+     },
+     {"attr": "shutter/fx", "ranges": "t1", "n": 2, "cell": 0},
+     {"attr": "control", "ranges": "t2", "cell": 0},
+     {"attr": "fx/macro", "ranges": "t3", "n": 1, "cell": 0},
+     {"attr": "fx/speed", "cell": 0},
+     {"attr": "fx/macro", "ranges": "t4", "n": 2, "cell": 0},
+     {"attr": "shutter/fx", "ranges": "t5", "n": 3, "cell": 1},
+     {"attr": "dimmer", "n": 2, "cell": 1},
+     {"attr": "colour/red", "cell": 1},
+     {"attr": "colour/green", "cell": 1},
+     {"attr": "colour/blue", "cell": 1},
+     {"attr": "colour/macro", "ranges": "t6", "cell": 1}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx"],
+     "conflict": {
+      "depence": "slot 0: dimmer@0 (want dimmer)",
+      "gdtf": "slot 0: dimmer@0 (want dimmer)",
+      "qlc": "slot 1: fx/speed (want shutter)"
+     },
+     "doc": "af1cec81c366",
+     "page": 6,
+     "note": "manual verified; manual overrides gdtf ch1-8 drive the white LED strobe tube (cell 0); ch9-14 are the RGB Aura backlight (cell 1): aura shutter, dimmer, red, green, blue, colour presets (manual pp27-29).",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   }
+  ],
+  "prov": {
+   "native_cct_k": {"agree": ["onyx"]},
+   "manual": {"doc": "af1cec81c366", "page": 6},
+   "cells": {
+    "agree": ["manual"],
+    "doc": "af1cec81c366",
+    "page": 28,
+    "note": "cell 0 = white strobe tube, cell 1 = RGB Aura backlight (geometry cell_id)."
+   }
+  },
+  "tables": {
+   "t1": [
+    {"dmx": [0, 5]},
+    {"dmx": [6, 42]},
+    {"dmx": [43, 85]},
+    {"dmx": [86, 128]},
+    {"dmx": [129, 171]},
+    {"dmx": [172, 214]},
+    {"dmx": [215, 255]}
+   ],
+   "t2": [
+    {"dmx": [0, 9]},
+    {"dmx": [10, 14], "state": "reset"},
+    {"dmx": [15, 22]},
+    {"dmx": [23, 23]},
+    {"dmx": [24, 24]},
+    {"dmx": [25, 25]},
+    {"dmx": [26, 26]},
+    {"dmx": [27, 35]},
+    {"dmx": [36, 36]},
+    {"dmx": [37, 37]},
+    {"dmx": [38, 51]},
+    {"dmx": [52, 52]},
+    {"dmx": [53, 53]},
+    {"dmx": [54, 54]},
+    {"dmx": [55, 55]},
+    {"dmx": [56, 56]},
+    {"dmx": [57, 57]},
+    {"dmx": [58, 58]},
+    {"dmx": [59, 59]},
+    {"dmx": [60, 60]},
+    {"dmx": [61, 255]}
+   ],
+   "t3": [
+    {"dmx": [0, 0], "state": "macro"},
+    {"dmx": [1, 1], "state": "macro"},
+    {"dmx": [2, 2], "state": "macro"},
+    {"dmx": [3, 3], "state": "macro"},
+    {"dmx": [4, 5], "state": "macro"},
+    {"dmx": [6, 6], "state": "macro"},
+    {"dmx": [7, 7], "state": "macro"},
+    {"dmx": [8, 10], "state": "macro"},
+    {"dmx": [11, 11], "state": "macro"},
+    {"dmx": [12, 12], "state": "macro"},
+    {"dmx": [13, 13], "state": "macro"},
+    {"dmx": [14, 19], "state": "macro"},
+    {"dmx": [20, 20], "state": "macro"},
+    {"dmx": [21, 50], "state": "macro"},
+    {"dmx": [51, 51], "state": "macro"},
+    {"dmx": [52, 53], "state": "macro"},
+    {"dmx": [54, 54], "state": "macro"},
+    {"dmx": [55, 55], "state": "macro"},
+    {"dmx": [56, 56], "state": "macro"},
+    {"dmx": [57, 57], "state": "macro"},
+    {"dmx": [58, 58], "state": "macro"},
+    {"dmx": [59, 60], "state": "macro"},
+    {"dmx": [61, 61], "state": "macro"},
+    {"dmx": [62, 62], "state": "macro"},
+    {"dmx": [63, 63], "state": "macro"},
+    {"dmx": [64, 65], "state": "macro"},
+    {"dmx": [66, 66], "state": "macro"},
+    {"dmx": [67, 67], "state": "macro"},
+    {"dmx": [68, 68], "state": "macro"},
+    {"dmx": [69, 70], "state": "macro"},
+    {"dmx": [71, 71], "state": "macro"},
+    {"dmx": [72, 72], "state": "macro"},
+    {"dmx": [73, 73], "state": "macro"},
+    {"dmx": [74, 75], "state": "macro"},
+    {"dmx": [76, 76], "state": "macro"},
+    {"dmx": [77, 77], "state": "macro"},
+    {"dmx": [78, 78], "state": "macro"},
+    {"dmx": [79, 80], "state": "macro"},
+    {"dmx": [81, 81], "state": "macro"},
+    {"dmx": [82, 83], "state": "macro"},
+    {"dmx": [84, 84], "state": "macro"},
+    {"dmx": [85, 85], "state": "macro"},
+    {"dmx": [86, 95], "state": "macro"},
+    {"dmx": [96, 96], "state": "macro"},
+    {"dmx": [97, 97], "state": "macro"},
+    {"dmx": [98, 98], "state": "macro"},
+    {"dmx": [99, 99], "state": "macro"},
+    {"dmx": [100, 100], "state": "macro"},
+    {"dmx": [101, 101], "state": "macro"},
+    {"dmx": [102, 102], "state": "macro"},
+    {"dmx": [103, 103], "state": "macro"},
+    {"dmx": [104, 104], "state": "macro"},
+    {"dmx": [105, 105], "state": "macro"},
+    {"dmx": [106, 107], "state": "macro"},
+    {"dmx": [108, 108], "state": "macro"},
+    {"dmx": [109, 109], "state": "macro"},
+    {"dmx": [110, 111], "state": "macro"},
+    {"dmx": [112, 112], "state": "macro"},
+    {"dmx": [113, 113], "state": "macro"},
+    {"dmx": [114, 115], "state": "macro"},
+    {"dmx": [116, 116], "state": "macro"},
+    {"dmx": [117, 117], "state": "macro"},
+    {"dmx": [118, 118], "state": "macro"},
+    {"dmx": [119, 119], "state": "macro"},
+    {"dmx": [120, 120], "state": "macro"},
+    {"dmx": [121, 121], "state": "macro"},
+    {"dmx": [122, 123], "state": "macro"},
+    {"dmx": [124, 124], "state": "macro"},
+    {"dmx": [125, 125], "state": "macro"},
+    {"dmx": [126, 126], "state": "macro"},
+    {"dmx": [127, 129], "state": "macro"},
+    {"dmx": [130, 130], "state": "macro"},
+    {"dmx": [131, 131], "state": "macro"},
+    {"dmx": [132, 132], "state": "macro"},
+    {"dmx": [133, 133], "state": "macro"},
+    {"dmx": [134, 134], "state": "macro"},
+    {"dmx": [135, 135], "state": "macro"},
+    {"dmx": [136, 136], "state": "macro"},
+    {"dmx": [137, 137], "state": "macro"},
+    {"dmx": [138, 138], "state": "macro"},
+    {"dmx": [139, 143], "state": "macro"},
+    {"dmx": [144, 144], "state": "macro"},
+    {"dmx": [145, 145], "state": "macro"},
+    {"dmx": [146, 151], "state": "macro"},
+    {"dmx": [152, 152], "state": "macro"},
+    {"dmx": [153, 153], "state": "macro"},
+    {"dmx": [154, 154], "state": "macro"},
+    {"dmx": [155, 155], "state": "macro"},
+    {"dmx": [156, 156], "state": "macro"},
+    {"dmx": [157, 157], "state": "macro"},
+    {"dmx": [158, 160], "state": "macro"},
+    {"dmx": [161, 161], "state": "macro"},
+    {"dmx": [162, 162], "state": "macro"},
+    {"dmx": [163, 163], "state": "macro"},
+    {"dmx": [164, 164], "state": "macro"},
+    {"dmx": [165, 165], "state": "macro"},
+    {"dmx": [166, 166], "state": "macro"},
+    {"dmx": [167, 255], "state": "macro"}
+   ],
+   "t4": [
+    {"dmx": [0, 0], "state": "macro"},
+    {"dmx": [1, 1], "state": "macro"},
+    {"dmx": [2, 2], "state": "macro"},
+    {"dmx": [3, 3], "state": "macro"},
+    {"dmx": [4, 4], "state": "macro"},
+    {"dmx": [5, 5], "state": "macro"},
+    {"dmx": [6, 6], "state": "macro"},
+    {"dmx": [7, 7], "state": "macro"},
+    {"dmx": [8, 8], "state": "macro"},
+    {"dmx": [9, 9], "state": "macro"},
+    {"dmx": [10, 10], "state": "macro"},
+    {"dmx": [11, 11], "state": "macro"},
+    {"dmx": [12, 12], "state": "macro"},
+    {"dmx": [13, 13], "state": "macro"},
+    {"dmx": [14, 14], "state": "macro"},
+    {"dmx": [15, 15], "state": "macro"},
+    {"dmx": [16, 16], "state": "macro"},
+    {"dmx": [17, 17], "state": "macro"},
+    {"dmx": [18, 18], "state": "macro"},
+    {"dmx": [19, 19], "state": "macro"},
+    {"dmx": [20, 20], "state": "macro"},
+    {"dmx": [21, 21], "state": "macro"},
+    {"dmx": [22, 22], "state": "macro"},
+    {"dmx": [23, 23], "state": "macro"},
+    {"dmx": [24, 24], "state": "macro"},
+    {"dmx": [25, 25], "state": "macro"},
+    {"dmx": [26, 26], "state": "macro"},
+    {"dmx": [27, 27], "state": "macro"},
+    {"dmx": [28, 28], "state": "macro"},
+    {"dmx": [29, 29], "state": "macro"},
+    {"dmx": [30, 30], "state": "macro"},
+    {"dmx": [31, 31], "state": "macro"},
+    {"dmx": [32, 32], "state": "macro"},
+    {"dmx": [33, 33], "state": "macro"},
+    {"dmx": [34, 34], "state": "macro"},
+    {"dmx": [35, 35], "state": "macro"},
+    {"dmx": [36, 36], "state": "macro"},
+    {"dmx": [37, 100], "state": "macro"},
+    {"dmx": [101, 120], "state": "macro"},
+    {"dmx": [121, 140], "state": "macro"},
+    {"dmx": [141, 255], "state": "macro"}
+   ],
+   "t5": [
+    {"dmx": [0, 19], "state": "closed"},
+    {"dmx": [20, 49], "state": "open"},
+    {"dmx": [50, 200], "phys": [0.29, 16.7], "state": "strobe", "unit": "Hz"},
+    {"dmx": [201, 210], "state": "open"},
+    {"dmx": [211, 255], "state": "random"}
+   ],
+   "t6": [
+    {"dmx": [0, 10], "state": "off"},
+    {"dmx": [11, 15], "rgb": "#ffb4a5", "state": "macro"},
+    {"dmx": [16, 20], "rgb": "#ff92a3", "state": "macro"},
+    {"dmx": [21, 25], "rgb": "#ff3787", "state": "macro"},
+    {"dmx": [26, 30], "rgb": "#ff64c8", "state": "macro"},
+    {"dmx": [31, 35], "rgb": "#cd6ed7", "state": "macro"},
+    {"dmx": [36, 40], "rgb": "#be8cf0", "state": "macro"},
+    {"dmx": [41, 45], "rgb": "#5000aa", "state": "macro"},
+    {"dmx": [46, 50], "rgb": "#0000b4", "state": "macro"},
+    {"dmx": [51, 55], "rgb": "#005fbe", "state": "macro"},
+    {"dmx": [56, 60], "rgb": "#3c8cd2", "state": "macro"},
+    {"dmx": [61, 65], "rgb": "#00a0dc", "state": "macro"},
+    {"dmx": [66, 70], "rgb": "#91bef5", "state": "macro"},
+    {"dmx": [71, 75], "rgb": "#7dd2f5", "state": "macro"},
+    {"dmx": [76, 80], "rgb": "#c3e1fa", "state": "macro"},
+    {"dmx": [81, 85], "rgb": "#d7f0ff", "state": "macro"},
+    {"dmx": [86, 90], "rgb": "#b4faf5", "state": "macro"},
+    {"dmx": [91, 95], "rgb": "#61e8e3", "state": "macro"},
+    {"dmx": [96, 100], "rgb": "#00e1eb", "state": "macro"},
+    {"dmx": [101, 105], "rgb": "#00c8b9", "state": "macro"},
+    {"dmx": [106, 110], "rgb": "#00dc78", "state": "macro"},
+    {"dmx": [111, 115], "rgb": "#4bc300", "state": "macro"},
+    {"dmx": [116, 120], "rgb": "#5adc5a", "state": "macro"},
+    {"dmx": [121, 125], "rgb": "#78fa6e", "state": "macro"},
+    {"dmx": [126, 130], "rgb": "#aaff00", "state": "macro"},
+    {"dmx": [131, 135], "rgb": "#dcff64", "state": "macro"},
+    {"dmx": [136, 140], "rgb": "#f5ff00", "state": "macro"},
+    {"dmx": [141, 145], "rgb": "#ffdc00", "state": "macro"},
+    {"dmx": [146, 150], "rgb": "#ffbe00", "state": "macro"},
+    {"dmx": [151, 155], "rgb": "#ffa000", "state": "macro"},
+    {"dmx": [156, 160], "rgb": "#ff8c32", "state": "macro"},
+    {"dmx": [161, 165], "rgb": "#ff7600", "state": "macro"},
+    {"dmx": [166, 170], "rgb": "#ff5f00", "state": "macro"},
+    {"dmx": [171, 175], "rgb": "#ff3200", "state": "macro"},
+    {"dmx": [176, 180], "rgb": "#ff00ff", "state": "macro"},
+    {"dmx": [181, 185], "rgb": "#8c00d2", "state": "macro"},
+    {"dmx": [186, 190], "rgb": "#ffffff", "state": "macro"},
+    {"dmx": [191, 214], "state": "cw"},
+    {"dmx": [215, 219], "state": "stop"},
+    {"dmx": [244, 247]},
+    {"dmx": [248, 251]},
+    {"dmx": [252, 255]}
+   ]
+  }
+ }
+}

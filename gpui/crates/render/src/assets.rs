@@ -27,6 +27,8 @@ pub struct Library {
     environments: HashMap<String, HdrImage>,
     procedural: HashMap<String, MeshData>,
     floors: HashMap<(String, bool), crate::floor::Maps>,
+    footprints: HashMap<[u32; 2], crate::panel::Footprint>,
+    fixtures: HashMap<String, Option<std::sync::Arc<luma_fixture::Built>>>,
 }
 
 impl Library {
@@ -39,7 +41,53 @@ impl Library {
             environments: HashMap::new(),
             procedural: HashMap::new(),
             floors: HashMap::new(),
+            footprints: HashMap::new(),
+            fixtures: HashMap::new(),
         }
+    }
+
+    /// The footprint of a beam with these edges
+    /// ([`crate::panel::Footprint::of`]), worked out once. A rig's faces
+    /// share a handful of beams, and the table behind one is thousands of
+    /// samples of the profile: a venue of sixty bars spent 3 ms of every
+    /// frame's build on theirs.
+    pub(crate) fn footprint(&mut self, cos_beam: f32, cos_field: f32) -> crate::panel::Footprint {
+        self.footprints
+            .entry([cos_beam.to_bits(), cos_field.to_bits()])
+            .or_insert_with(|| crate::panel::Footprint::of(cos_beam, cos_field))
+            .clone()
+    }
+
+    /// A fixture of the library that ships beside the meshes
+    /// (`fixture-library/<version>/fixtures/<id>.json`, the newest version),
+    /// built once: the room's own lamps hang one. `None`, said once, where
+    /// there is no library or it has no such fixture.
+    pub(crate) fn fixture(&mut self, id: &str) -> Option<std::sync::Arc<luma_fixture::Built>> {
+        if let Some(known) = self.fixtures.get(id) {
+            return known.clone();
+        }
+        let built = (|| {
+            let versions = self.root.parent()?.join("fixture-library");
+            let newest = std::fs::read_dir(versions)
+                .ok()?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .max()?;
+            let spec = newest.join("fixtures").join(format!("{id}.json"));
+            let text = std::fs::read_to_string(&spec)
+                .inspect_err(|error| eprintln!("{}: {error}", spec.display()))
+                .ok()?;
+            let fixture = luma_fixture::Fixture::from_json(&text)
+                .inspect_err(|error| eprintln!("{}: {error}", spec.display()))
+                .ok()?;
+            luma_fixture::build(&fixture)
+                .inspect_err(|error| eprintln!("{}: {error}", spec.display()))
+                .ok()
+                .map(std::sync::Arc::new)
+        })();
+        self.fixtures.insert(id.to_owned(), built.clone());
+        built
     }
 
     /// Generated geometry under a key that already names every parameter

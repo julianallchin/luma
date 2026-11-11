@@ -13,7 +13,7 @@ use std::time::Duration;
 use futures_util::{FutureExt, StreamExt};
 use luma_sync::powersync::{sdk::SyncOptions, Connections, Database, HttpClient};
 use sqlx::SqlitePool;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 
 use crate::database::local::venue_graph;
 use crate::events::{Event, Events};
@@ -40,6 +40,7 @@ struct Observed {
     uploading: bool,
     downloading: bool,
     last_synced_at: Option<String>,
+    caught_up: bool,
     /// The last transport error, logged once when it changes. It is not part
     /// of the status: a connection that keeps failing reads as offline, and
     /// its text is for the log, not for the status bar.
@@ -50,6 +51,8 @@ struct Observed {
 pub struct Service {
     database: Arc<Database>,
     observed: Arc<Mutex<Observed>>,
+    /// Wakes [`sessions`] ahead of its poll — see [`Self::session_changed`].
+    session: Arc<Notify>,
     shutdown: watch::Sender<bool>,
 }
 
@@ -92,12 +95,14 @@ impl Service {
         let service = Self {
             database: Arc::clone(&database),
             observed: Arc::default(),
+            session: Arc::default(),
             shutdown: shutdown.clone(),
         };
         tokio::spawn(sessions(
             Arc::clone(&database),
             state_pool,
             events.clone(),
+            Arc::clone(&service.session),
             shutdown.subscribe(),
         ));
         tokio::spawn(statuses(
@@ -107,6 +112,13 @@ impl Service {
         ));
         tokio::spawn(replicas(database, events, shutdown.subscribe()));
         Ok(service)
+    }
+
+    /// This process just signed someone in: connect now, not at the next
+    /// poll. The poll stays for what this process cannot see — the CLI
+    /// signing in against the same library.
+    pub fn session_changed(&self) {
+        self.session.notify_one();
     }
 
     /// The app database pool. Writers acquired from it carry the upload
@@ -136,6 +148,7 @@ impl Service {
             uploading: observed.uploading,
             downloading: observed.downloading,
             last_synced_at: observed.last_synced_at.clone(),
+            caught_up: observed.caught_up,
             pending_uploads: usize::try_from(pending).unwrap_or(0),
             refused,
             media: None,
@@ -184,6 +197,7 @@ async fn sessions(
     database: Arc<Database>,
     state_pool: SqlitePool,
     events: Events,
+    session: Arc<Notify>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut current: Option<String> = None;
@@ -199,6 +213,25 @@ async fn sessions(
         if signed_in != current {
             database.sync.disconnect().await;
             current = signed_in;
+            if let Some(principal) = &current {
+                // The library on disk may be the last account's — see
+                // `evict_other_account` on why that cannot be synced over.
+                match crate::database::local::database::evict_other_account(
+                    &database.sql,
+                    principal,
+                )
+                .await
+                {
+                    Ok(true) => events.emit(Event::ReplicaChanged {
+                        tables: schema::SYNCED_TABLES
+                            .iter()
+                            .map(|table| table.name.to_string())
+                            .collect(),
+                    }),
+                    Ok(false) => {}
+                    Err(error) => log::error!("[sync] {error}"),
+                }
+            }
             if current.is_some() {
                 match Connector::new(
                     database.sync.clone(),
@@ -217,6 +250,7 @@ async fn sessions(
         announce_revocation(&state_pool, &events, &mut revoked).await;
         tokio::select! {
             _ = shutdown.changed() => break,
+            () = session.notified() => {}
             () = tokio::time::sleep(SESSION_POLL) => {}
         }
         if *shutdown.borrow() {
@@ -273,6 +307,11 @@ async fn statuses(
             observed.connected = status.is_connected();
             observed.downloading = status.is_downloading();
             observed.uploading = status.is_uploading();
+            // The SDK keeps "has synced" per stream, and clears it with the
+            // data; no stream at all is a database nothing has reached yet.
+            let mut streams = status.streams().peekable();
+            observed.caught_up =
+                streams.peek().is_some() && streams.all(|stream| stream.subscription.has_synced());
             // The SDK retries forever and reports the failure on every tick.
             // Remembering the last one logs it once per change; it is cleared
             // when a direction actually succeeds.

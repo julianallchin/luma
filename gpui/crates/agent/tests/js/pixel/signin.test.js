@@ -1,6 +1,6 @@
 // The sign-in screen against a real renderer. What the pixels are read for
-// is that it is a *state* and not a dialog: one centred column on the app's
-// own ground, with no card, band or box drawn around it.
+// is that it is a *state* and not a dialog: one centred column on the page
+// the shell stands on, with no card, band or box drawn around it.
 //
 // Reached by signing out from the venue menu: the fixture launches signed
 // in, and the gate is where a sign-out lands. Only the Email route is driven:
@@ -8,7 +8,7 @@
 
 fixture({ window: [900, 650] });
 
-test("the sign-in screen is one centred column on bare ground", () => {
+test("the sign-in screen is one centred column on the bare page", () => {
   nav.venue("Test Venue");
   nav.venueMenu();
   nav.step("the sign-out row", "row", "Sign out");
@@ -32,11 +32,13 @@ test("the sign-in screen is one centred column on bare ground", () => {
   // The column clears the window's own controls.
   expect(title.y).toBeGreaterThan(corner.y + corner.height);
 
-  // No card: the ground beside the column is unbroken all the way across,
-  // above the title and in the gap between the field and the capsule.
+  // No card: the page beside the column is unbroken from one edge of it to
+  // the other, above the title and in the gap between the field and the
+  // capsule. The page sits inside the window's trim, as the shell's does.
   const gapBelow = field.y + field.height;
+  const inset = 24;
   for (const y of [title.y - 10, (gapBelow + primary.y) / 2]) {
-    const row = image.stats(shot, { x: 0, y, width: 900, height: 1 });
+    const row = image.stats(shot, { x: inset, y, width: 900 - 2 * inset, height: 1 });
     assert(row.max - row.min < 1, `something is drawing a box across y = ${y}: ${JSON.stringify(row)}`);
   }
 });

@@ -55,6 +55,23 @@ pub(crate) struct Build {
     pub(crate) committing: bool,
     /// A scrubbed parameter: what the control shows while its writes catch up.
     pub(super) param_scrub: Option<ParamScrub>,
+    /// Which of pan and tilt each fixture drives itself, by fixture id.
+    pub(super) moves: HashMap<String, [bool; 2]>,
+}
+
+/// Which of pan and tilt each of a rig's fixtures has a channel for.
+fn moves(rig: &Rig) -> HashMap<String, [bool; 2]> {
+    rig.fixtures
+        .iter()
+        .filter_map(|fixture| {
+            let definition = rig.definitions.get(&fixture.fixture_path)?;
+            let mode = definition
+                .modes
+                .iter()
+                .find(|mode| mode.name == fixture.mode_name)?;
+            Some((fixture.id.clone(), definition.moves(mode)))
+        })
+        .collect()
 }
 
 /// One control being scrubbed. A scrub fires on every pointer move, faster
@@ -106,6 +123,7 @@ impl Build {
             redo: Vec::new(),
             committing: false,
             param_scrub: None,
+            moves: moves(rig),
         })
     }
 
@@ -124,6 +142,7 @@ impl Build {
         self.solved = rig.venue.clone();
         self.rows = rig.rows.clone();
         self.patch = rig.fixtures.clone();
+        self.moves = moves(rig);
         if self
             .selected
             .as_ref()
@@ -303,7 +322,7 @@ impl Build {
     }
 
     /// Every fixture in the same distribution as `node` — the fixtures of one
-    /// model chained on the same host face — ordered along the face.
+    /// model chained along one line of the same host face — ordered along it.
     ///
     /// Derived, never stored: the graph keeps stations, and "the row" is a
     /// reading of them, so there is no row id to go stale when a fixture is
@@ -321,6 +340,10 @@ impl Build {
         let Some(path) = path_of(node) else {
             return Vec::new();
         };
+        let across = self
+            .graph
+            .node(node)
+            .map_or(0.0, |node| node.params.get("v", 0.0));
         let mut out: Vec<(f64, String)> = self
             .graph
             .nodes()
@@ -330,6 +353,9 @@ impl Build {
                     joint.parent == edge.parent && joint.their_socket == edge.their_socket
                 })
             })
+            // One line across the face: lights at another depth of a floor
+            // are beside the row, not in it.
+            .filter(|sibling| (sibling.params.get("v", 0.0) - across).abs() < ROW_LINE_M)
             .filter(|sibling| path_of(&sibling.id).as_deref() == Some(path.as_str()))
             .map(|sibling| (sibling.params.get("u", 0.0), sibling.id.clone()))
             .collect();
@@ -500,6 +526,22 @@ impl Build {
                         .unwrap_or(f64::from(luma_scene::catalog::DEFAULT_HINGE_ANGLE_DEG))
                 })
             }),
+            // A fixture's aim off its mount normal: radians in the graph,
+            // degrees on this sheet, like `yaw`.
+            // An axis the fixture drives itself is the show's to aim, not
+            // the rigger's: a moving head has no hand-set tilt. One that was
+            // given a lean anyway keeps the control that takes it off.
+            aim: if self.graph.node(node).map(|n| n.kind)
+                == Some(luma_scene::venue::NodeKind::Fixture)
+            {
+                let moves = self.moves.get(node).copied().unwrap_or_default();
+                [0, 1].map(|axis| {
+                    Some(param(luma_scene::venue::ANGLE_PARAMS[axis]).to_degrees())
+                        .filter(|degrees| !moves[axis] || *degrees != 0.0)
+                })
+            } else {
+                [None; 2]
+            },
             roll_step: self
                 .graph
                 .edge(node)
@@ -525,11 +567,13 @@ impl Build {
     /// Surface placements translate in U/V and rotate only about the host
     /// normal. Only free rig pieces offer lift; mounted pieces stay seated.
     pub(crate) fn gizmo_space(&self, node: &str) -> Option<luma_scene::gizmo::GizmoSpace> {
-        if self.graph.node(node)?.kind == luma_scene::venue::NodeKind::Fixture {
-            return None;
-        }
+        let fixture = self.graph.node(node)?.kind == luma_scene::venue::NodeKind::Fixture;
         let freedom = self.freedom_of(node);
-        if !matches!(freedom, Freedom::Free | Freedom::Slide) {
+        // A light on a face belongs to its row, which the row's own controls
+        // lay out; one standing on the venue's floor is where it was put.
+        if !matches!(freedom, Freedom::Free | Freedom::Slide)
+            || (fixture && freedom != Freedom::Free)
+        {
             return None;
         }
         let edge = self.graph.edge(node)?;
@@ -620,6 +664,10 @@ impl Build {
     }
 }
 
+/// How far apart across a face two lights may sit and still be one row, in
+/// metres. The same line `luma_lib`'s `redistribute` re-lays.
+const ROW_LINE_M: f64 = luma_lib::services::distribute::ROW_LINE_M;
+
 /// What a placed node may be moved by.
 ///
 /// Surface placements get a constrained UVZ gizmo. Other joints expose only
@@ -704,6 +752,10 @@ pub(crate) struct SelectedView {
     pub(crate) span: Option<f64>,
     /// A hinge's deflection, in degrees — its own "what it is" row.
     pub(crate) angle: Option<f64>,
+    /// A fixture's `[pan, tilt]` aim off the surface it is mounted on, in
+    /// degrees: `[0, 0]` shines straight out of that surface. `None` for an
+    /// axis the fixture moves by itself, and for anything that is not one.
+    pub(crate) aim: [Option<f64>; 2],
     /// The turn this joint's roll lands on, in degrees — `Steps(90)` for a
     /// corner on a bolt circle, `Steps(5)` for a rail at its post, a fine
     /// default for a free clamp. What the rotate buttons step by and the yaw
@@ -751,6 +803,7 @@ pub(super) mod tests {
             distribution_layout: luma_scene::distribute::Layout::Even,
             committing: false,
             param_scrub: None,
+            moves: HashMap::new(),
             patch: Vec::new(),
         }
     }
@@ -797,6 +850,63 @@ pub(super) mod tests {
         let table = build.gizmo_space("table").unwrap();
         assert_eq!(table.translation, [true, true, false]);
         assert_eq!(table.rotation, [false, false, true]);
+    }
+
+    /// A venue with a truss on its floor, a light under the truss, and two
+    /// lights of the same model on the floor at different depths.
+    fn lit_venue() -> Build {
+        let mut graph = VenueGraph::new(Node {
+            id: "venue".into(),
+            kind: NodeKind::Venue,
+            catalog_ref: None,
+            label: None,
+            params: Params::default(),
+        });
+        graph.insert_placed(
+            piece("truss", 0.0),
+            edge("venue", "end_a", luma_scene::venue::FLOOR_SOCKET, 0.0),
+        );
+        let clamp = luma_scene::catalog::fixture_clamp(0.0).name;
+        let light = |id: &str, v: f64| {
+            let mut params = params(1.0);
+            params.set("v", v);
+            Node {
+                id: id.into(),
+                kind: NodeKind::Fixture,
+                catalog_ref: Some("Luma/Mover.qxf".into()),
+                label: None,
+                params,
+            }
+        };
+        graph.insert_placed(light("hung", 0.0), edge("truss", &clamp, "face_-y", 0.0));
+        for (id, v) in [("near", -2.0), ("far", 3.0)] {
+            graph.insert_placed(
+                light(id, v),
+                edge("venue", &clamp, luma_scene::venue::FLOOR_SOCKET, 0.0),
+            );
+        }
+        build_of(graph)
+    }
+
+    #[test]
+    fn a_light_on_the_floor_moves_freely_and_one_on_a_truss_stays_in_its_row() {
+        let mut build = lit_venue();
+        build.room = Room::new(
+            &build.graph,
+            &build.sockets,
+            HashMap::from([("venue".into(), glam::DMat4::IDENTITY)]),
+        );
+        let space = build.gizmo_space("near").expect("a floor light is movable");
+        assert_eq!(space.translation, [true, true, false]);
+        assert!(build.gizmo_space("hung").is_none());
+    }
+
+    #[test]
+    fn lights_at_different_depths_of_a_floor_are_not_one_row() {
+        let build = lit_venue();
+        let path_of = |_: &str| Some("Luma/Mover.qxf".to_string());
+        assert_eq!(build.distribution_of("near", &path_of), ["near"]);
+        assert_eq!(build.distribution_of("far", &path_of), ["far"]);
     }
 
     fn params(u: f64) -> Params {

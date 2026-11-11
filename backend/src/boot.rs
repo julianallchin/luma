@@ -24,11 +24,13 @@ pub enum Identity {
     Fixture(String),
     /// The session the app stored on this machine. A session that no longer
     /// proves anyone refuses the boot: a process without a sign-in screen
-    /// cannot repair it, and must not guess.
+    /// cannot repair it, and must not guess. With no session at all the
+    /// library opens signed out, and its commands refuse until the app signs
+    /// someone in.
     Stored,
-    /// The stored session, or the guest namespace when it proves nobody. The
-    /// app, which can show sign-in over a working library.
-    StoredOrGuest,
+    /// The stored session, or signed out when it proves nobody. The app,
+    /// whose sign-in screen is the way out of that.
+    StoredOrSignedOut,
 }
 
 /// What a host asks of [`open`].
@@ -52,9 +54,10 @@ pub struct Boot {
 /// An opened library.
 pub struct Booted {
     pub services: AppServices,
-    /// Whom write admission was armed for; `None` is the guest namespace.
+    /// Whom the library was opened for; `None` is nobody signed in.
     pub principal: Option<String>,
-    /// Why a stored session proved nobody, under [`Identity::StoredOrGuest`].
+    /// Why a stored session proved nobody, under
+    /// [`Identity::StoredOrSignedOut`].
     pub lapsed: Option<String>,
 }
 
@@ -115,12 +118,12 @@ pub async fn open(boot: Boot) -> Result<Booted, String> {
             auth::bootstrap_headless_admission(&db.0, &state_db.0).await?,
             None,
         ),
-        // Guest rows carry no `uid` and the admission triggers admit them
-        // unconditionally, so the guest namespace is a working library.
-        // Arming it explicitly covers the state the bootstrap leaves closed:
-        // a committed sign-out still waiting for a renderer to consume its
-        // journal, which the next sign-in's identity switch consumes.
-        Identity::StoredOrGuest => {
+        // Signed out is an armed admission with nobody in it: the state a
+        // sign-in starts from. Arming it explicitly covers the state the
+        // bootstrap leaves closed: a committed sign-out still waiting for a
+        // renderer to consume its journal, which the next sign-in's identity
+        // switch consumes.
+        Identity::StoredOrSignedOut => {
             match auth::bootstrap_headless_admission(&db.0, &state_db.0).await {
                 Ok(Some(principal)) => (Some(principal), None),
                 Ok(None) => {

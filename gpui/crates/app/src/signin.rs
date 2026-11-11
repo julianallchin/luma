@@ -8,11 +8,12 @@
 //! # There is no card
 //!
 //! A dialog is a thing *over* something. This screen is over nothing, so it
-//! wears no surface: the app's own ground edge to edge, the window's controls
-//! in the corner, and one centred column — mark, title, and the capsules of
-//! [`luma_ui::pill`]. A card here would draw a box around a room that is
-//! already empty, and the box, not the question, would be what the eye lands
-//! on.
+//! wears no surface of its own: the same page inside the same trim the shell
+//! stands on, the window's controls in the corner, and one centred column —
+//! mark, title, and the capsules of [`luma_ui::pill`]. The frame is the
+//! window's, so it does not change shape when someone is admitted; a card
+//! here would draw a box around a room that is already empty, and the box,
+//! not the question, would be what the eye lands on.
 //!
 //! Because the column is the whole screen, the two routes are a *swap* rather
 //! than a morph: nothing encloses the content, so there is no outline for a
@@ -22,10 +23,10 @@
 //!
 //! Nothing in Luma opens without a principal: every row a person makes is
 //! owned, and the cloud — sync, shared venues — is what the app is for. So
-//! this screen has no way past it: no guest capsule, and Escape only steps
-//! back a route. The guest namespace still exists in the database, as the
-//! admission the host arms between a sign-out and the next sign-in, but it
-//! is an interval, not a place a person can work in.
+//! this screen has no way past it, and Escape only steps back a route.
+//! Signed out is the admission the host arms between a sign-out and the next
+//! sign-in: an interval in which the library's commands refuse, not a place
+//! a person can work in.
 //!
 //! A stored session that still proves a principal never sees this screen;
 //! one that no longer does is asked online whether it can be made to (see
@@ -47,7 +48,8 @@ use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::{ladder, mark, pill, Enabled};
 
-use crate::{chrome, keymap, Luma};
+use crate::workspace::{self, Modes};
+use crate::{background_work, chrome, keymap, sync_status, Luma};
 
 /// What Supabase mails. Anything longer is a paste of something else.
 const CODE_LENGTH: usize = 6;
@@ -168,7 +170,10 @@ impl SignIn {
         !self.busy
             && match self.route {
                 Route::Email => self.email.trim().contains('@'),
-                Route::Code => self.code.trim().len() == CODE_LENGTH,
+                Route::Code => {
+                    let code = self.code.trim();
+                    code.len() == CODE_LENGTH && code.bytes().all(|b| b.is_ascii_digit())
+                }
             }
     }
 }
@@ -179,11 +184,18 @@ impl SignIn {
 // a submit is a `Library` call and a screen transition, and `Luma` owns both.
 
 impl Luma {
-    /// Show the sign-in screen. Whatever the shell was showing stays in state
-    /// and comes back untouched when the screen leaves — except any dialog,
-    /// which goes now rather than animating out later over a shell the user
-    /// has not looked at since, and the settings page, whose Account section
-    /// is the one route here besides the venue menu.
+    /// Show the sign-in screen, in place of the shell, and let go of
+    /// everything the shell holds: whoever signs in next starts from an empty
+    /// one, so nothing of one account's is on screen, within reach, or still
+    /// running under another. The same account coming back is restored the
+    /// way a launch is, from what this device saved.
+    ///
+    /// Every route here: a launch with nobody signed in ([`Luma::new`]); a
+    /// launch whose stored session could not be renewed
+    /// ([`Luma::refresh_session`] on a refusal, and "Sign in again" when the
+    /// network would not say); a session revoked while the app runs
+    /// ([`Luma::watch_session`]); and a sign-out, from Settings' Account
+    /// section or the venue menu. Only the last two arrive holding anything.
     ///
     /// `expired` is why: a session this machine held stopped proving anyone,
     /// as opposed to a sign-out or a first launch.
@@ -191,6 +203,25 @@ impl Luma {
         if self.sign_in.is_some() {
             return;
         }
+        // Every body in every venue, through its own exit rites; then the
+        // venues' parked modes, and the venue itself.
+        self.close_bodies_where(|_| false, cx);
+        self.workspace = Modes::default();
+        self.venues = workspace::Venues::default();
+        self.songs = None;
+        self.arriving_venue = None;
+        self.visualizer = None;
+        self.agent_stale.clear();
+        // A turn belongs to its thread, not to the body that showed it, so
+        // closing the bodies stopped none. Dropping the registry does.
+        let (running, heard) = Self::running_turns(cx);
+        self.running = running;
+        self._running = heard;
+        self.stop_source_preview(cx);
+        self.track_import = None;
+        // The status bar's two reports are read again within a second.
+        self.sync_status = sync_status::SyncState::default();
+        self.background = background_work::BackgroundState::default();
         // The gate is the whole window: nothing the shell was floating gets
         // to play its exit over a shell that is no longer rendered.
         self.overlay = luma_ui::dialog::Popup::default();
@@ -250,6 +281,14 @@ impl Luma {
             state.code = code;
             state.error = None;
         });
+        // A whole code needs no Enter: `can_submit` is the test.
+        if self
+            .sign_in
+            .as_ref()
+            .is_some_and(|state| state.route == Route::Code)
+        {
+            self.sign_in_submit(cx);
+        }
     }
 
     /// The screen's keyboard, in the same navigator shape as the dialogs':
@@ -368,7 +407,7 @@ impl Luma {
                             .is_some_and(|state| state.generation == generation);
                         if current {
                             this.sign_in = None;
-                            this.restore_venue(cx);
+                            this.restore_venue_once_synced(cx);
                             cx.notify();
                         }
                     }
@@ -498,7 +537,6 @@ pub(crate) fn splash(window: &Window, label: &'static str, cx: &mut Context<Luma
             .flex()
             .items_center()
             .justify_center()
-            .pb(px(luma_ui::dialog::TITLEBAR_CLEARANCE))
             .child(
                 mark::lit(SPLASH_MARK_WIDTH)
                     .text_color(white().opacity(alpha))
@@ -508,22 +546,23 @@ pub(crate) fn splash(window: &Window, label: &'static str, cx: &mut Context<Luma
     .into_any_element()
 }
 
-/// The app's ground with `body` on it, between the window's own chrome.
+/// The window's frame with `body` on its page: the shell's own trim, title
+/// band and page plate, and the room its status bar takes, so the window is
+/// the same shape before anyone is signed in as after.
 ///
-/// Not a scrim: nothing is behind these screens. A screen with no regions
-/// has no region head band either, so this carries one — see
-/// [`crate::chrome`] — and the window controls go last, so nothing can cover
-/// the only things that move and close the window.
+/// Not a scrim: nothing is behind these screens. The window controls go
+/// last, so nothing can cover the only things that move and close the window.
 fn ground(window: &Window, body: impl IntoElement) -> Div {
     div()
         .size_full()
         .flex()
         .flex_col()
-        .bg(ladder::background())
+        .bg(luma_ui::glass::window_trim())
         .font_family(luma_ui::fonts::FAMILY)
         .text_color(ladder::foreground())
         .child(chrome::band(chrome::corner_lit(window), false))
-        .child(body)
+        .child(crate::shell::page_plate(body))
+        .child(div().flex_none().h(px(crate::shell::STATUS_BAR_HEIGHT)))
         .children(chrome::window_controls(window))
 }
 
@@ -537,10 +576,6 @@ fn column(state: &SignIn, app: &Entity<Luma>, window: &Window) -> Div {
         .items_center()
         .justify_center()
         .gap(px(pill::HEAD_GAP))
-        // The band takes its height off the top of the flex, so the column
-        // pays the same at the bottom: centred on the *window*, not on what
-        // the chrome left over.
-        .pb(px(luma_ui::dialog::TITLEBAR_CLEARANCE))
         .child(head(state))
         .child(stack(state, app, window))
 }
@@ -610,8 +645,9 @@ fn stack(state: &SignIn, app: &Entity<Luma>, window: &Window) -> Div {
         })
 }
 
-/// The route's one field, inside its capsule: the address on the first step,
-/// the code on the second.
+/// The route's one field: the address inside its capsule on the first step,
+/// the code typed into its places on the second — see
+/// [`luma_ui::code_entry`].
 fn field(state: &SignIn, window: &Window) -> Div {
     let (entity, focus, value, placeholder) = match state.route {
         Route::Email => (
@@ -630,20 +666,38 @@ fn field(state: &SignIn, window: &Window) -> Div {
     // The semantic label is the VALUE once there is one: a driver asking what
     // this field says wants what it says, not what it would say if empty.
     let label = if value.is_empty() { placeholder } else { value };
+    let control = match state.route {
+        Route::Email => pill::field().child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(luma_ui::text_input::TEXT_SIZE))
+                .child(entity.clone()),
+        ),
+        Route::Code => {
+            let typed: Vec<(char, bool)> = value
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .take(CODE_LENGTH)
+                .map(|c| (c, !c.is_ascii_digit()))
+                .collect();
+            luma_ui::code_entry::places(
+                &typed,
+                CODE_LENGTH,
+                None,
+                Some((entity, focus)),
+                !state.busy,
+                window,
+            )
+        }
+    };
     div()
         .flex()
         .flex_col()
         .items_center()
         .gap(px(TIGHT_GAP))
         .child(
-            pill::field()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(luma_ui::text_input::TEXT_SIZE))
-                        .child(entity.clone()),
-                )
+            control
                 .agent_node(Role::Input, label.to_string())
                 .agent_focused(focus.is_focused(window)),
         )

@@ -17,7 +17,6 @@ fn shared_fog_visibility_updates_after_a_caster_moves() -> anyhow::Result<()> {
     let mut light = frame.fixture_cones[0];
     light.position = Vec3::new(0.0, 0.0, 8.0);
     light.range = 24.0;
-    light.wash = 0.9;
     light.cos_field = 0.6;
     light.cos_beam = 0.85;
     light.intensity = 1.0;
@@ -76,7 +75,6 @@ fn shared_washes_preserve_colour_energy_and_reset_on_cues() -> anyhow::Result<()
     frame.haze_steps = 8;
     frame.fixture_surface_lighting = false;
     for (i, light) in frame.fixture_cones.iter_mut().enumerate() {
-        light.wash = 0.8;
         light.cos_field = 0.6;
         light.cos_beam = 0.85;
         light.color = if i % 3 == 0 {
@@ -457,7 +455,6 @@ fn haze_state_survives_frame_transitions() -> anyhow::Result<()> {
     frame.haze_density = 0.6;
     frame.haze_resolution = 1.0;
     frame.haze_steps = 8;
-    frame.fixture_cones[0].wash = 1.0;
     frame.draws.push(Draw {
         mesh: 0,
         model: Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
@@ -556,7 +553,6 @@ fn fog_block_stats_follow_frames_and_resizes() -> anyhow::Result<()> {
     frame.geometry_shadows = true;
     frame.haze_density = 0.6;
     for light in &mut frame.fixture_cones {
-        light.wash = 1.0;
         light.range = 15.0;
         light.cos_field = 0.0;
         light.cos_beam = 0.1;
@@ -583,7 +579,15 @@ fn fog_block_stats_follow_frames_and_resizes() -> anyhow::Result<()> {
     assert_eq!(renderer.fog_block_stats()?.unwrap().counts, first.counts);
     // The lighting shader trusts these source eligibility filters. A cue
     // must clear candidates that become ineligible, then restore them.
-    frame.fixture_cones[0].wash = crate::fog_grid::BROAD_WASH - 0.01;
+    // A beam too sharp for the grid, a gobo, and a light the haze ignores.
+    let soft = (
+        frame.fixture_cones[0].cos_beam,
+        frame.fixture_cones[0].cos_field,
+    );
+    (
+        frame.fixture_cones[0].cos_beam,
+        frame.fixture_cones[0].cos_field,
+    ) = (0.99995, 0.9998);
     frame.fixture_cones[1].gobo = 1;
     frame.fixture_cones[2].haze_gain = 0.0;
     renderer.render_next(&frame, 127, 97, crate::LIVE_SUBFRAMES)?;
@@ -593,7 +597,10 @@ fn fog_block_stats_follow_frames_and_resizes() -> anyhow::Result<()> {
         .counts
         .iter()
         .all(|counts| *counts == [0, 0]));
-    frame.fixture_cones[0].wash = 1.0;
+    (
+        frame.fixture_cones[0].cos_beam,
+        frame.fixture_cones[0].cos_field,
+    ) = soft;
     frame.fixture_cones[1].gobo = 0;
     frame.fixture_cones[2].haze_gain = 1.0;
     renderer.render_next(&frame, 127, 97, crate::LIVE_SUBFRAMES)?;

@@ -46,6 +46,7 @@
 pub mod chip;
 pub mod composer;
 mod model_picker;
+pub use model_picker::ModelPicker;
 pub mod python_cell;
 pub mod running;
 mod send_motion;
@@ -390,6 +391,14 @@ pub struct AgentChat {
     /// are separate because a pin can be held while the spring is parked (a
     /// settled transcript resting at the bottom schedules no frames at all).
     pinned: bool,
+    /// Wheel input headed for the top of a scrollable list broke the pin as it
+    /// arrived ([`Self::on_wheel`]); the deferred decision in
+    /// [`Self::watch_scrolling`] must not re-engage it.
+    input_escaped: bool,
+    /// The list took the wheel event in flight: its handler runs first, so a
+    /// wheel an overlay above the list let bubble (and the list never saw)
+    /// cannot break the pin.
+    list_took_input: bool,
     spring: transcript::StickSpring,
     send_motion: send_motion::SendMotion,
     composer_bounds: Rc<Cell<gpui::Bounds<gpui::Pixels>>>,
@@ -413,8 +422,12 @@ pub struct AgentChat {
     /// re-enter a borrow that is already live.
     pub(crate) composer: Composer,
     selection: Option<Selection>,
-    model_picker: model_picker::Picker,
+    model_picker: Entity<model_picker::ModelPicker>,
     selection_saving: bool,
+    /// A choice made while the last was still saving, saved after it.
+    queued_selection: Option<Selection>,
+    /// How many times the panel has rendered, for `Chat renders = N`.
+    renders: u32,
     /// The context gauge's click-open card: open, playing its exit, or closed.
     usage: MenuVisibility,
     /// Live delegation state, newest child last, one entry per subagent this
@@ -455,10 +468,18 @@ pub struct AgentChat {
     /// Keyed by the call rather than by row index so a chip keeps its state
     /// while rows arrive above it.
     expanded: HashSet<SharedString>,
+    /// Compact turns the reader has opened, by message id.
+    open_work: HashSet<SharedString>,
+    /// Whether finished turns fold their work behind a header, as of the last
+    /// frame; a change re-splits the rows. See [`set_compact_turns`].
+    compact: bool,
     /// Python calls, read once each — see [`python_cell`]. Lives on the panel
     /// rather than on a turn because a call is named by its id, and a `RefCell`
     /// because a row reads its call while the panel is mid-render.
     cells: RefCell<python_cell::Cells>,
+    /// Markdown rows the list laid out since the last frame's trim; see
+    /// [`transcript::Viewed`].
+    viewed: transcript::Viewed,
     /// The one fold in flight: which call was clicked, when, and which row it
     /// is in so the tween can remeasure it. At most one — a fold is started by
     /// a click, and a click lands on one chip.
@@ -502,6 +523,11 @@ impl AgentChat {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.subscribe(&running, |this, _, event, cx| this.on_running(event, cx));
+        let model_picker = model_picker::ModelPicker::new(agent.clone(), cx);
+        // The picker is a view of its own, so it hears of what it shows of
+        // the panel — the selection, whether a change is taken — from here.
+        cx.observe_self(|chat: &mut Self, cx| chat.sync_model_picker(cx))
+            .detach();
         let chat = Self {
             agent,
             subject,
@@ -516,6 +542,8 @@ impl AgentChat {
             // A fresh thread opens at the bottom, which is where a conversation
             // is read from.
             pinned: true,
+            input_escaped: false,
+            list_took_input: false,
             spring: transcript::StickSpring::default(),
             send_motion: send_motion::SendMotion::default(),
             composer_bounds: Rc::default(),
@@ -527,8 +555,10 @@ impl AgentChat {
             pin_footer: 0.0,
             composer: Composer::new(cx),
             selection: None,
-            model_picker: model_picker::Picker::new(cx),
+            model_picker,
             selection_saving: false,
+            queued_selection: None,
+            renders: 0,
             usage: MenuVisibility::Closed,
             subagents: Vec::new(),
             read_only: false,
@@ -539,7 +569,10 @@ impl AgentChat {
             trailer_row: None,
             error: None,
             expanded: HashSet::new(),
+            open_work: HashSet::new(),
+            compact: false,
             cells: RefCell::default(),
+            viewed: transcript::Viewed::default(),
             fold: None,
             fold_hold: None,
             fold_px: Cell::new(0.0),
@@ -609,125 +642,27 @@ impl AgentChat {
         cx.notify();
     }
 
-    fn toggle_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_streaming() || self.selection_saving {
-            return;
-        }
-        self.model_picker.open = !self.model_picker.open;
-        if self.model_picker.open {
-            self.model_picker.models_open = false;
-            self.model_picker.clear_search(cx);
-            window.focus(&self.model_picker.focus, cx);
-            if let Some(selection) = &self.selection {
-                self.browse_models(selection.service, cx);
-            }
-        } else {
-            window.focus(&self.composer.focus_handle(cx), cx);
-        }
-        cx.notify();
-    }
-
-    fn commit_effort(&mut self, cx: &mut Context<Self>) {
-        self.model_picker.dragging = false;
-        let Some(fraction) = self.model_picker.preview else {
-            return;
+    /// Tell the picker what it shows of the panel, when that has changed.
+    fn sync_model_picker(&mut self, cx: &mut Context<Self>) {
+        let seen = model_picker::Seen {
+            selection: self.selection.clone(),
+            streaming: self.is_streaming(),
+            saving: self.selection_saving,
         };
-        let Some(mut selection) = self.selection.clone() else {
-            return;
-        };
-        let levels = self.model_picker.efforts(&selection);
-        selection.effort = levels[model_picker::effort_index(fraction, levels.len())].clone();
-        self.select_model(selection, cx);
-        cx.notify();
-    }
-
-    fn step_effort(&mut self, key: &str, cx: &mut Context<Self>) {
-        if self.model_picker.models_open || self.is_streaming() {
-            return;
-        }
-        let Some(selection) = &self.selection else {
-            return;
-        };
-        let levels = self.model_picker.efforts(selection);
-        if levels.len() < 2 {
-            return;
-        }
-        let index = levels
-            .iter()
-            .position(|effort| effort == &selection.effort)
-            .unwrap_or(0);
-        let index = self
-            .model_picker
-            .preview
-            .map(|fraction| model_picker::effort_index(fraction, levels.len()))
-            .unwrap_or(index);
-        let next = match key {
-            "home" => 0,
-            "end" => levels.len() - 1,
-            "left" => index.saturating_sub(1),
-            _ => (index + 1).min(levels.len() - 1),
-        };
-        self.model_picker.preview = Some(next as f32 / (levels.len() - 1) as f32);
-        self.commit_effort(cx);
-    }
-
-    /// Show `service`'s models, reading them if needed. A gateway's list is
-    /// read again every time — the picker calls this each time it opens — and
-    /// the rows already held, or saved on disk, show while it is on the wire,
-    /// so the list is never blank while it refreshes. A CLI's list is read
-    /// once per session: asking means starting the CLI.
-    fn browse_models(&mut self, service: Service, cx: &mut Context<Self>) {
-        self.model_picker.show(service, cx);
-        let held = matches!(self.model_picker.catalogs.get(&service), Some(Ok(_)));
-        if (held && !service.lists_models()) || !self.model_picker.loading.insert(service) {
-            cx.notify();
-            return;
-        }
-        if !held {
-            // A previous error, cleared so the retry reads as loading.
-            self.model_picker.catalogs.remove(&service);
-        }
-        let saved = (!held).then(|| self.agent.cached_models(service));
-        let pending = self.agent.models(service);
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            // Applied before the fresh read, so the fresh read always wins.
-            let saved = match saved {
-                Some(saved) => saved.await,
-                None => None,
-            };
-            this.update(cx, |this, cx| {
-                this.model_picker.looked_up.insert(service);
-                if let Some(models) = saved {
-                    if !matches!(this.model_picker.catalogs.get(&service), Some(Ok(_))) {
-                        this.model_picker.receive(service, Ok(models), cx);
-                    }
-                }
+        if self.model_picker.read(cx).seen != seen {
+            self.model_picker.update(cx, |picker, cx| {
+                picker.seen = seen;
                 cx.notify();
-            })
-            .ok();
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                this.model_picker.loading.remove(&service);
-                this.model_picker.receive(service, result, cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+            });
+        }
     }
 
-    /// Pick the model under the list's keyboard cursor.
-    fn choose_current_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(selection), Some(model)) = (self.selection.as_ref(), self.model_picker.current())
-        else {
-            return;
-        };
-        let chosen = model.selection(self.model_picker.service, selection);
-        self.select_model(chosen, cx);
-        self.model_picker.models_open = false;
-        window.focus(&self.model_picker.focus, cx);
-        cx.notify();
+    /// The model picker, its own view so that scrolling or typing in it
+    /// redraws only it. The shell mounts it beside the panel; the panel draws
+    /// only its chip.
+    #[must_use]
+    pub fn model_picker(&self) -> &Entity<model_picker::ModelPicker> {
+        &self.model_picker
     }
 
     fn select_model(&mut self, selection: Selection, cx: &mut Context<Self>) {
@@ -735,7 +670,7 @@ impl AgentChat {
             return;
         }
         if self.selection_saving {
-            self.model_picker.queued = Some(selection);
+            self.queued_selection = Some(selection);
             return;
         }
         let Some(thread) = self.thread_id().map(str::to_owned) else {
@@ -752,15 +687,18 @@ impl AgentChat {
                     return;
                 }
                 this.selection_saving = false;
-                let queued = this.model_picker.queued.take();
+                let queued = this.queued_selection.take();
                 if queued.is_none() {
-                    this.model_picker.preview = None;
+                    this.model_picker
+                        .update(cx, |picker, cx| picker.settle_effort(cx));
                 }
                 match result {
                     Ok(thread) => {
                         this.selection = Selection::from_thread(&thread).ok();
                         if let Some(selection) = &this.selection {
-                            this.browse_models(selection.service, cx);
+                            let service = selection.service;
+                            this.model_picker
+                                .update(cx, |picker, cx| picker.browse(service, cx));
                         }
                     }
                     Err(error) => this.error = Some(error),
@@ -797,11 +735,9 @@ impl AgentChat {
         self.reads += 1;
         self.conversation = Conversation::Loading(self.reads);
         self.selection = None;
-        self.model_picker.open = false;
-        self.model_picker.preview = None;
-        self.model_picker.dragging = false;
+        self.model_picker.update(cx, |picker, cx| picker.close(cx));
         self.selection_saving = false;
-        self.model_picker.queued = None;
+        self.queued_selection = None;
         self.error = None;
         self.seat(Transcript::default(), cx);
         self.reads
@@ -827,7 +763,7 @@ impl AgentChat {
         self.subagents.clear();
         self.turn = None;
         self.live = None;
-        self.rows = transcript::rows_for(&self.transcript, &self.entries, None);
+        self.rows = self.rows_for(None);
         self.list = ListState::new(
             self.rows.len() + 1,
             ListAlignment::Top,
@@ -848,6 +784,31 @@ impl AgentChat {
         self.distance = 0.0;
     }
 
+    /// The rows the transcript renders as, under the current layout.
+    fn rows_for(&self, live: Option<usize>) -> Vec<transcript::RowKey> {
+        let compact = transcript::Compact {
+            on: self.compact,
+            open: &self.open_work,
+        };
+        transcript::rows_for(&self.transcript, &self.entries, live, compact)
+    }
+
+    /// Open or close one compact turn's work.
+    ///
+    /// The header's top is held where the reader clicked it, as for a chip's
+    /// fold: the rows that appear or vanish are below it.
+    pub fn toggle_work(&mut self, message_id: SharedString, row: usize, cx: &mut Context<Self>) {
+        if !self.open_work.remove(&message_id) {
+            self.open_work.insert(message_id);
+        }
+        self.fold_hold = self
+            .list
+            .bounds_for_item(row)
+            .map(|bounds| (row, f32::from(bounds.top())));
+        self.reconcile_rows();
+        cx.notify();
+    }
+
     /// Rebuild the row list and tell the list exactly what moved.
     ///
     /// The remeasure-vs-splice choice is the whole reason this is one function
@@ -858,7 +819,7 @@ impl AgentChat {
     /// identity stays — that is a visible jump at the end of every turn.
     /// `remeasure_items` keeps the old heights as hints and holds the anchor.
     fn reconcile_rows(&mut self) {
-        let next = transcript::rows_for(&self.transcript, &self.entries, self.live);
+        let next = self.rows_for(self.live);
         let pending = self.send_motion.pending.len();
         let changed = transcript::diff_rows(&self.rows, &next);
         if changed.is_none() && pending == self.send_motion.rendered_pending {
@@ -1026,28 +987,49 @@ impl AgentChat {
         let list = self.list.clone();
         let chat = cx.weak_entity();
         list.set_scroll_handler(move |_, _, cx| {
-            // The list holds its own `RefCell` borrow while dispatching, so
-            // reading the state back synchronously panics. Defer to after it
+            // Synchronously: only the chat's own flag is touched, not the
+            // list, whose `RefCell` borrow is still held here.
+            chat.update(cx, |this, _| this.list_took_input = true).ok();
+            // Reading the list back is another matter: defer that to after it
             // has let go.
             let chat = chat.clone();
             cx.defer(move |cx| {
                 chat.update(cx, |this, cx| {
+                    this.list_took_input = false;
+                    let escaped = std::mem::take(&mut this.input_escaped);
                     // A deliberate reader scroll ends the send flight.
                     this.send_motion.flight = None;
                     let distance = this.distance_from_bottom();
                     let previous = std::mem::replace(&mut this.distance, distance);
-                    if this.pinned && transcript::should_unpin(distance, previous) {
-                        this.pinned = false;
+                    let pinned =
+                        transcript::pin_after_scroll(this.pinned, escaped, distance, previous);
+                    if this.pinned && !pinned {
                         this.spring.reset();
                         this.spring_tick = None;
-                    } else if !this.pinned && transcript::should_restick(distance, previous) {
-                        this.pinned = true;
                     }
+                    this.pinned = pinned;
                     cx.notify();
                 })
                 .ok();
             });
         });
+    }
+
+    /// Wheel input headed for the top breaks the pin as it arrives, however
+    /// little it moved, as use-stick-to-bottom's wheel handler does. The
+    /// distance test in [`Self::watch_scrolling`] cannot see that alone: a
+    /// small notch up while the spring chases a growing tail is pulled back
+    /// down by the spring before the deferred check measures it. Bubbles after
+    /// the list, which has applied the input by now, or never saw it.
+    fn on_wheel(&mut self, event: &gpui::ScrollWheelEvent) {
+        let can_scroll = self.list.max_offset_for_scrollbar().y > px(0.0);
+        self.input_escaped = std::mem::take(&mut self.list_took_input)
+            && transcript::wheel_breaks_pin(event.delta, can_scroll);
+        if self.input_escaped {
+            self.pinned = false;
+            self.spring.reset();
+            self.spring_tick = None;
+        }
     }
 
     /// One spring frame: observe the target, step, apply the delta, and park
@@ -1245,7 +1227,9 @@ impl AgentChat {
                     }
 
                     if let Some(selection) = &self.selection {
-                        self.browse_models(selection.service, cx);
+                        let service = selection.service;
+                        self.model_picker
+                            .update(cx, |picker, cx| picker.browse(service, cx));
                     }
                 }
                 Err(error) => self.error = Some(error),
@@ -1297,11 +1281,8 @@ impl AgentChat {
 
     /// Dismiss the model picker first; otherwise stop a running turn.
     pub fn escape(&mut self, cx: &mut Context<Self>) {
-        if self.model_picker.open {
-            self.model_picker.open = false;
-            self.model_picker.preview = None;
-            self.model_picker.dragging = false;
-            cx.notify();
+        if self.model_picker.read(cx).open {
+            self.model_picker.update(cx, |picker, cx| picker.close(cx));
             return;
         }
         if self.is_streaming() {
@@ -1502,9 +1483,7 @@ impl AgentChat {
         if self.selection_saving {
             return;
         }
-        self.model_picker.open = false;
-        self.model_picker.preview = None;
-        self.model_picker.dragging = false;
+        self.model_picker.update(cx, |picker, cx| picker.close(cx));
         let prompt = self.composer.prompt(cx);
         if prompt.is_empty() {
             return;
@@ -1732,6 +1711,7 @@ impl gpui::EventEmitter<ChatEvent> for AgentChat {}
 
 impl Render for AgentChat {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.renders += 1;
         div()
             .size_full()
             .track_focus(&self.focus)
@@ -1752,11 +1732,38 @@ impl Render for AgentChat {
                 }
             })
             .child(self.body(window, cx))
+            .child(luma_ui::node::render_count("Chat", self.renders))
+    }
+}
+
+/// The `compact_turns` setting, shared by every chat panel in the app. Unset
+/// reads as on, the setting's default.
+struct CompactTurns(bool);
+
+impl gpui::Global for CompactTurns {}
+
+/// Whether finished turns fold their work behind one header.
+#[must_use]
+pub fn compact_turns(cx: &App) -> bool {
+    cx.try_global::<CompactTurns>().is_none_or(|flag| flag.0)
+}
+
+/// Adopt the setting. Panels re-split their rows on their next frame.
+pub fn set_compact_turns(on: bool, cx: &mut App) {
+    if compact_turns(cx) != on {
+        cx.set_global(CompactTurns(on));
+        cx.refresh_windows();
     }
 }
 
 impl AgentChat {
     fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        transcript::trim_caches(&self.entries, &self.viewed);
+        let compact = compact_turns(cx);
+        if compact != self.compact {
+            self.compact = compact;
+            self.reconcile_rows();
+        }
         if self.usage.tick_close(luma_ui::motion::reduced_motion(cx)) {
             window.request_animation_frame();
         }
@@ -1766,11 +1773,10 @@ impl AgentChat {
         // the plate is painted in one expression, and a live `&self` inside it
         // would collide with that borrow.
         let picker = self.selection.as_ref().map(|selection| {
-            self.model_picker.render(
+            model_picker::chip(
+                &self.model_picker,
                 selection,
                 self.is_streaming() || self.selection_saving,
-                &cx.entity(),
-                window,
                 cx,
             )
         });
@@ -1783,7 +1789,7 @@ impl AgentChat {
                 && self
                     .selection
                     .as_ref()
-                    .is_none_or(|selection| self.model_picker.label_settled(selection)));
+                    .is_none_or(|selection| self.model_picker.read(cx).label_settled(selection)));
         let resumable = self.resumable();
         let this = cx.entity();
         let gauge = self
@@ -1930,15 +1936,13 @@ impl AgentChat {
                                     .min_w_0()
                                     .flex()
                                     .flex_col()
-                                    .child(
-                                        div()
-                                            .opacity(if flying { 0.0 } else { 1.0 })
-                                            .child(transcript::user_bubble(
-                                                &prompt.text,
-                                                &prompt.id,
-                                                &state.theme,
-                                            )),
-                                    )
+                                    .child(div().opacity(if flying { 0.0 } else { 1.0 }).child(
+                                        transcript::user_bubble(
+                                            &prompt.text,
+                                            &prompt.id,
+                                            &state.theme,
+                                        ),
+                                    ))
                                     .children(trailer),
                             )
                             .agent_node(NodeRole::Text, prompt.text.clone())
@@ -1991,7 +1995,9 @@ impl AgentChat {
                             .is_some_and(|flight| flight.id.as_ref() == message.id),
                         trailer: (last_item == Some(ix)).then_some(trailer).flatten(),
                         expanded: &state.expanded,
+                        open_work: &state.open_work,
                         cells: &state.cells,
+                        viewed: &state.viewed,
                         agent: &state.agent,
                         fold: fold.as_ref().map(|(call, progress)| (call, *progress)),
                         fold_px: &state.fold_px,
@@ -2043,6 +2049,7 @@ impl AgentChat {
                     .relative()
                     .flex_1()
                     .min_h_0()
+                    .on_scroll_wheel(cx.listener(|this, event, _, _| this.on_wheel(event)))
                     .on_mouse_down(
                         gpui::MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -2062,7 +2069,9 @@ impl AgentChat {
                     // optional: the registry is a thread-local that every
                     // painted text element pushes into, and nothing else
                     // empties it.
-                    .child(luma_md::render::selection_frame_reset())
+                    .child(luma_md::render::selection_frame_reset_for(
+                        cx.entity_id().as_u64(),
+                    ))
                     // Only over a conversation that has *landed* empty. A read
                     // in flight has an empty transcript too, and the opening
                     // painted over that is a conversation with history being
@@ -2087,7 +2096,7 @@ impl AgentChat {
                             });
                             el.pt(px(header))
                                 .pb(px(footer))
-                                .child(opening(&Opening::CHAT, &this, &theme))
+                                .child(opening(Opening::of(self.subject.as_ref()), &this, &theme))
                                 .children(opening_trailer)
                         },
                     )
@@ -2380,37 +2389,49 @@ fn jump_to_bottom(chat: &Entity<AgentChat>, footer: f32, theme: &Theme) -> impl 
         ))
 }
 
-/// What an agent is for, in the words of the thing it is looking at, and the
-/// questions worth asking it.
+/// What a conversation that has not started offers: a question, and things
+/// worth asking of what the conversation is about.
 ///
 /// The copy deliberately does not restate the composer's placeholder: an empty
 /// state that paraphrases the field below it is a stub with two voices.
 struct Opening {
-    headline: &'static str,
-    blurb: &'static str,
     prompts: &'static [&'static str],
 }
 
 impl Opening {
-    const CHAT: Self = Self {
-        headline: OPENING_HEADLINE,
-        blurb: "Build the room, shape the show, or explore the music.",
+    /// Over a score: its song is what there is to ask about.
+    const SCORE: Self = Self {
         prompts: &[
-            "What is open right now?",
-            "Describe this room",
-            "Help me shape the lighting",
+            "Light this whole song",
+            "Make the drop hit harder",
+            "What is on the timeline?",
         ],
     };
+    /// Over a venue: its room and its rig.
+    const VENUE: Self = Self {
+        prompts: &[
+            "Describe this room",
+            "Group these fixtures for me",
+            "What can you do here?",
+        ],
+    };
+
+    fn of(subject: Option<&ThreadScope>) -> &'static Self {
+        match subject.map(|scope| scope.subject_kind) {
+            Some(luma_lib::agent::SubjectKind::Track) => &Self::SCORE,
+            Some(luma_lib::agent::SubjectKind::Venue) | None => &Self::VENUE,
+        }
+    }
 }
 
 /// What a conversation that has not started asks the reader. Public because
 /// it is what a test asserting the empty state never flashes over a loading
 /// thread looks for, and a test spelling the copy itself would pass while the
 /// shipped words said something else.
-pub const OPENING_HEADLINE: &str = "Where do you want to start?";
+pub const OPENING_HEADLINE: &str = "What should it look like?";
 
-/// A conversation that has not started: a mark, a headline, what the agent can
-/// do, and the prompts that fill the composer.
+/// A conversation that has not started: a headline over the prompts that fill
+/// the composer.
 ///
 /// `chat` is the panel the prompts send into.
 fn opening(opening: &Opening, chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
@@ -2430,35 +2451,11 @@ fn opening(opening: &Opening, chat: &Entity<AgentChat>, theme: &Theme) -> impl I
                 .gap(px(theme::SPACE_MD))
                 .child(
                     div()
-                        .size(px(theme::HERO_GLYPH))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_full()
-                        .bg(theme::card_bg())
-                        .border_1()
-                        .border_color(theme.border)
-                        .child(
-                            Icon::new(IconName::Bot)
-                                .size(px(18.0))
-                                .text_color(theme.text_muted),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(px(15.0))
+                        .text_size(px(20.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(theme.text)
-                        .child(SharedString::from(opening.headline))
-                        .agent_node(NodeRole::Text, opening.headline),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .line_height(px(18.0))
-                        .text_center()
-                        .text_color(theme.text_faint)
-                        .child(SharedString::from(opening.blurb))
-                        .agent_node(NodeRole::Text, opening.blurb),
+                        .child(SharedString::from(OPENING_HEADLINE))
+                        .agent_node(NodeRole::Text, OPENING_HEADLINE),
                 )
                 .child(
                     div()

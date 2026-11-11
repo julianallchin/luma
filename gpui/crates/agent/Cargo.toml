@@ -106,12 +106,3 @@ required-features = ["pixel", "app"]
 [[example]]
 name = "visualizer_real_score_window"
 required-features = ["pixel", "app"]
-
-# The fixture crates (`luma`, `sqlx`, …) come in through `app`, which every
-# suite that seeds a library already needs.
-[dev-dependencies]
-luma-chat = { path = "../chat" }
-# The pixel suite projects world points through the camera the app reports, so
-# it needs the same camera and the same gizmo scale the renderer uses.
-luma-scene = { path = "../scene" }
-glam = "0.30"

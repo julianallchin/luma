@@ -26,7 +26,7 @@ pub async fn run_python_cell(
     code: String,
     scope: PythonScopeInput,
 ) -> Result<PythonCellResult, CommandError> {
-    let current_user_id = services.admitted_principal().await?;
+    let current_user_id = services.require_session().await?;
     Ok(run_python_cell_inner(
         &services.db.0,
         &services.storage,
@@ -37,9 +37,10 @@ pub async fn run_python_cell(
         code,
         scope,
         Some(turn_message_id),
-        current_user_id,
+        &current_user_id,
         None,
         None,
+        &|_| {},
     )
     .await?)
 }
@@ -50,8 +51,8 @@ pub async fn cancel_python_cell(
     services: &AppServices,
     thread_id: String,
 ) -> Result<bool, CommandError> {
-    let current_user_id = services.admitted_principal().await?;
-    threads_db::get_thread_row(&services.db.0, &thread_id, current_user_id.as_deref())
+    let current_user_id = services.require_session().await?;
+    threads_db::get_thread_row(&services.db.0, &thread_id, &current_user_id)
         .await
         .map_err(|error| {
             CommandError::NotFound(format!(

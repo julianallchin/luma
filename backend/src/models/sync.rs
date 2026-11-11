@@ -18,6 +18,11 @@ pub struct SyncStatus {
     pub downloading: bool,
     /// When both directions last went quiet while connected, RFC 3339.
     pub last_synced_at: Option<String>,
+    /// Every sync stream has delivered a whole checkpoint to this database
+    /// since it was last cleared: what is here is what the account has. False
+    /// from a sign-in until its first download lands, which is when an empty
+    /// table means "not here yet" rather than "none".
+    pub caught_up: bool,
     /// Rows waiting in the upload queue.
     pub pending_uploads: usize,
     /// Local changes the server refused that nobody has dismissed yet,

@@ -82,9 +82,9 @@ pub struct Clip {
     pub preset: Option<String>,
     #[serde(default)]
     pub seed: u64,
-    /// The clip's selection expression, when not the whole venue.
+    /// The ids of the groups the clip selects, when not the whole venue.
     #[serde(default)]
-    pub selection: Option<String>,
+    pub groups: Option<Vec<String>>,
     /// A clip graph (`{"version": 3, "nodes": {...}}`) to play in place of
     /// the preset's.
     #[serde(default)]
@@ -101,7 +101,7 @@ impl Clip {
             z_index: 0,
             preset: None,
             seed: 0,
-            selection: None,
+            groups: None,
             graph: None,
         }
     }
@@ -184,6 +184,10 @@ pub struct Fixture {
     album_art: Option<usize>,
     extra_scores: usize,
     seeded_threads: bool,
+    /// Leave the camera walkthrough owed to the signed-in account, as it is
+    /// to one that has never opened a score. Unset, the account has been
+    /// through it and a score opens with no card over the stage.
+    camera_tour: bool,
     graph_score: Option<Value>,
     /// Clips another writer adds while the editor's first score save is in
     /// flight, announced as a download — see
@@ -195,6 +199,11 @@ pub struct Fixture {
     /// admission refuses them; `$PRINCIPAL` in a statement is replaced by it,
     /// and `$LIBRARY` by the library directory, for a row that names a file.
     sql: Vec<String>,
+    /// The accounts the sign-in screen admits, as address → principal, in
+    /// place of Supabase — see [`session::accounts`]. The library opens
+    /// signed in as [`session::PRINCIPAL`] either way; a second account's
+    /// rows are `sql`, under its own principal.
+    accounts: HashMap<String, String>,
     /// Files written into the library directory after the rows, by path
     /// relative to it: a fixture definition with a second mode over the rig's
     /// (`fixtures/Luma/Mover.qxf`), say.
@@ -372,9 +381,11 @@ impl Default for Fixture {
             album_art: None,
             extra_scores: 0,
             seeded_threads: false,
+            camera_tour: false,
             graph_score: None,
             outside_clips: Vec::new(),
             sql: Vec::new(),
+            accounts: HashMap::new(),
             files: HashMap::new(),
             assets: HashMap::new(),
             library: None,
@@ -457,6 +468,7 @@ impl Fixture {
         let source_search_responses = self.source_search_responses.clone();
         let source_import_fixture_delay = self.source_import_fixture_delay;
         let venues_delay = self.venues_delay;
+        let accounts = self.accounts.clone();
         let model = self.model.clone();
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
@@ -492,6 +504,9 @@ impl Fixture {
                 }
                 if let Some(delay) = source_import_fixture_delay {
                     library.set_source_import_fixture_delay(delay);
+                }
+                if !accounts.is_empty() {
+                    library.set_sign_in_fixture(session::accounts(accounts.clone()));
                 }
                 if let Some(steps) = &model {
                     library.set_agent_model(Arc::new(agent::model(steps, model_cadence)));
@@ -633,6 +648,9 @@ impl Fixture {
         }
         db.0.close().await;
         session::signed_in_as(config_dir, &owner).await;
+        if !self.camera_tour {
+            session::toured(config_dir, &owner).await;
+        }
     }
 
     async fn write(&self, config_dir: &Path) {
@@ -770,6 +788,9 @@ impl Fixture {
 
         // Then the score, through the seam.
         session::signed_in(config_dir).await;
+        if !self.camera_tour {
+            session::toured(config_dir, session::PRINCIPAL).await;
+        }
         let services = luma_lib::boot::open(luma_lib::boot::Boot {
             storage: luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf()),
             fixtures_root: config_dir.to_path_buf(),
@@ -868,9 +889,8 @@ impl Fixture {
                     (clip.end - clip.start) * BEATS_PER_SECOND,
                 );
             placed.seed = clip.seed;
-            if let Some(expression) = &clip.selection {
-                placed.selection = serde_json::from_value(json!({ "expression": expression }))
-                    .expect("a selection expression");
+            if let Some(groups) = &clip.groups {
+                placed.selection = luma_patterns::Selection::groups(groups);
             }
             placed.z_index = clip.z_index;
             let mut placed = serde_json::to_value(placed).expect("a serializable clip");

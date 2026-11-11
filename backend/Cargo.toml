@@ -4,13 +4,14 @@ members = [
     "crates/stagelinq",
     "crates/prodjlink",
     "crates/fixture-kinematics",
+    "crates/luma-fixture",
     "crates/patterns",
     "crates/sync",
 ]
 
 [package]
 name = "luma"
-version = "0.6.2"
+version = "0.7.0"
 description = "Node-based lighting control software for live performance"
 authors = ["Julian Allchin <julian@allchin.com>"]
 license = "PolyForm-Shield-1.0.0"
@@ -84,11 +85,13 @@ prodjlink = { path = "crates/prodjlink" }
 # the CLI's render commands use it: it links wgpu, and everything else reaches
 # venue types through `luma-scene`. It reaches across into the `gpui/`
 # workspace; that direction is safe because `luma-render` and `luma-scene`
-# depend on nothing here but `fixture-kinematics`.
+# depend on nothing here but `fixture-kinematics` and `luma-fixture`.
 luma-render = { path = "../gpui/crates/render" }
 # Where a fixture's light comes from and where it points — the single
 # implementation the renderer, the eval engine and the agent bindings share.
 fixture-kinematics = { path = "crates/fixture-kinematics" }
+# The fixture library's specs: what a `lib:` fixture is built and driven from.
+luma-fixture = { path = "crates/luma-fixture" }
 # The vector type those two speak. Pinned to their version by definition: a
 # second glam here would be a second, incompatible `Vec3`.
 glam = "0.30"
@@ -111,7 +114,7 @@ sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "sqlite", "post
 # (`src/inputs/midi.rs`). Already in the tree through midir's coremidi.
 core-foundation-sys = "0.8"
 
-# Fast compile, no optimizations (use `cargo run --profile perf` for optimized builds)
+# Fast compile, no optimizations.
 # Line tables, not full DWARF: backtraces keep `file:line`, and the test
 # binaries and headless hosts this workspace builds link far faster. The app is
 # built from gpui/, which already builds this crate this way. For a debugger
@@ -128,8 +131,3 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 debug = false
-
-# Optimized dev builds for real-time audio/DSP testing
-[profile.perf]
-inherits = "dev"
-opt-level = 2

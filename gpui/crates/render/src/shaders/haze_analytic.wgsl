@@ -16,11 +16,52 @@
 
 @group(2) @binding(0) var analytic_out: texture_storage_2d<rgba16float, write>;
 
+// A face of cells (`panel.wgsl`) has no closed form: its light along the ray
+// is whatever cells the ray passes. The same Gauss rule in the equiangular
+// angle about the face's middle, a piece per cell passed and no fewer than
+// the angle the ray turns through about the face calls for. One piece for
+// every ray the cells did not ask more of drew the edge of where they did,
+// an arc around the face, across a strobe's glow.
+fn analytic_panel(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
+    let rest = light_rest[li];
+    let core = light_core[li];
+    let sigma = haze.depth.z;
+    let oc = haze.camera_pos.xyz - core.position;
+    let delta = -dot(oc, ray.dir);
+    let h = sqrt(max(dot(oc, oc) - delta * delta, 1e-4));
+    let th0 = atan((span.x - delta) / h);
+    let th1 = atan((span.y - delta) / h);
+    let pieces = max(
+        panel_pieces(rest.panel, rest.direction, oc + ray.dir * span.x, oc + ray.dir * span.y),
+        clamp(u32(ceil(angular_pieces(th0, th1))), 1u, 32u),
+    );
+    let half = 0.5 * (th1 - th0) / f32(pieces);
+    let nodes = array<f32, 3>(-0.7745966692, 0.0, 0.7745966692);
+    let weights = array<f32, 3>(0.5555555556, 0.8888888889, 0.5555555556);
+    var sum = vec3<f32>(0.0);
+    for (var piece = 0u; piece < pieces; piece += 1u) {
+        let centre = th0 + f32(2u * piece + 1u) * half;
+        for (var j = 0u; j < 3u; j += 1u) {
+            let tangent = tan(centre + nodes[j] * half);
+            let t = delta + h * tangent;
+            let q = oc + ray.dir * t;
+            let distance = length(q);
+            let cells = panel_scatter(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q, ray.dir);
+            let density = medium_envelope(haze.medium, haze.camera_pos.xyz + ray.dir * t);
+            let transmittance = exp(-sigma * (t + distance));
+            sum += panel_tint(cells) * (weights[j] * beam_range_falloff(distance, core.range)
+                * density * transmittance * (1.0 + tangent * tangent));
+        }
+    }
+    return sum * (half * h * rest.intensity * rest.haze_gain * haze.tuning.w * sigma);
+}
+
 fn analytic_beam(li: u32, ray: SceneRay) -> vec3<f32> {
     let rest = light_rest[li];
     if rest.haze_gain <= 0.0 { return vec3<f32>(0.0); }
     let span = beam_span(li, ray);
     if span.y <= span.x { return vec3<f32>(0.0); }
+    if rest.panel > 0.5 { return analytic_panel(li, ray, span); }
     let core = light_core[li];
     let sigma = haze.depth.z;
     let oc = haze.camera_pos.xyz - core.position;
@@ -40,13 +81,13 @@ fn analytic_beam(li: u32, ray: SceneRay) -> vec3<f32> {
         let q = oc + ray.dir * t;
         let distance = length(q);
         let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
-        let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
+        let phase = haze_phase(-dot(q, ray.dir) / max(distance, 1e-4));
         let density = medium_envelope(haze.medium, haze.camera_pos.xyz + ray.dir * t);
         // Camera path and light path, both at the mean extinction.
         let transmittance = exp(-sigma * (t + distance));
         sum += weights[j] * angular * phase * beam_range_falloff(distance, core.range) * density * transmittance;
     }
-    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    let tint = beam_tint(li);
     return tint * (sum * half / h * rest.intensity * rest.haze_gain * haze.tuning.w * sigma);
 }
 

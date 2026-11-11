@@ -201,6 +201,145 @@ pub async fn open_app_db_at(app_dir: &Path) -> Result<(Db, Connections), String>
     Ok((Db(connections.sql().clone()), connections))
 }
 
+/// Empty every synced table and PowerSync's download state, so the library
+/// is downloaded again from nothing. The clear is marked local, so nothing it
+/// removes reaches the server; the caller turns upload capture back on
+/// ([`crate::sync::triggers::uploading`]) before it commits.
+///
+/// Answers `false`, having changed nothing, while a change still waits to
+/// upload: clearing PowerSync's state drops its queue, and a local edit is
+/// not this function's to discard.
+async fn clear_synced_tables(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<bool, String> {
+    // PowerSync creates its tables the first time it opens a library.
+    let synced_before: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ps_buckets')",
+    )
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("Failed to inspect the sync state: {error}"))?;
+    if synced_before {
+        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ps_crud")
+            .fetch_one(&mut **transaction)
+            .await
+            .map_err(|error| format!("Failed to count changes waiting to sync: {error}"))?;
+        if pending > 0 {
+            return Ok(false);
+        }
+    }
+    crate::sync::triggers::local_only(transaction).await?;
+    // Every synced table goes, so a reference between two of them is gone by
+    // the commit whichever order they are cleared in. Admission guards a write
+    // made *as* someone; an eviction is nobody's, so it is disarmed for the
+    // clear and put back as it was.
+    let armed: Option<i64> =
+        sqlx::query_scalar("SELECT armed FROM auth_write_admission WHERE singleton = 1")
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(|error| format!("Failed to read write admission: {error}"))?;
+    sqlx::raw_sql(
+        "PRAGMA defer_foreign_keys = ON;
+         UPDATE auth_write_admission SET armed = 0 WHERE singleton = 1;",
+    )
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| format!("Failed to prepare the projection reset: {error}"))?;
+    for table in crate::sync::schema::SYNCED_TABLES.iter().rev() {
+        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {}", table.name)))
+            .execute(&mut **transaction)
+            .await
+            .map_err(|error| format!("Failed to clear {}: {error}", table.name))?;
+    }
+    sqlx::query("UPDATE auth_write_admission SET armed = ? WHERE singleton = 1")
+        .bind(armed.unwrap_or(0))
+        .execute(&mut **transaction)
+        .await
+        .map_err(|error| format!("Failed to restore write admission: {error}"))?;
+    if synced_before {
+        sqlx::query("SELECT powersync_clear(0)")
+            .execute(&mut **transaction)
+            .await
+            .map_err(|error| format!("Failed to reset the sync state: {error}"))?;
+    }
+    Ok(true)
+}
+
+/// Clear the library when it is another account's, so `principal` downloads
+/// their own from nothing. Runs between disconnecting one account's sync and
+/// connecting the next.
+///
+/// PowerSync's state is one account's: its write checkpoints count that
+/// account's uploads, and a stream opened as someone else can never reach
+/// them, so its downloads are fetched and never applied. A library is
+/// another account's when it holds a venue or a track `principal` has no
+/// standing on. Rows nobody owns are a library from before accounts, which
+/// exists nowhere else: one of those postpones the clear, as a change still
+/// waiting to upload does.
+///
+/// # Errors
+///
+/// If the library cannot be read, or the clear fails.
+pub(crate) async fn evict_other_account(
+    pool: &SqlitePool,
+    principal: &str,
+) -> Result<bool, String> {
+    let mut transaction = pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("Failed to begin the account check: {error}"))?;
+    // The views below answer for whoever is admitted, so they are only
+    // evidence once that is `principal`.
+    let admitted: Option<String> = sqlx::query_scalar(
+        "SELECT active_uid FROM auth_write_admission
+         WHERE singleton = 1 AND armed = 1 AND accepting = 1
+           AND maintenance = 0 AND remote_writes = 0",
+    )
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to read write admission: {error}"))?
+    .flatten();
+    if admitted.as_deref() != Some(principal) {
+        return Ok(false);
+    }
+    let (foreign, unowned): (bool, bool) = sqlx::query_as(
+        "SELECT
+            EXISTS(SELECT 1 FROM venues
+                   WHERE uid IS NOT NULL
+                     AND id NOT IN (SELECT venue_id FROM auth_venue_access))
+            OR EXISTS(SELECT 1 FROM tracks
+                      WHERE uid IS NOT NULL
+                        AND id NOT IN (SELECT track_id FROM auth_visible_tracks)),
+            EXISTS(SELECT 1 FROM venues WHERE uid IS NULL)
+            OR EXISTS(SELECT 1 FROM tracks WHERE uid IS NULL)",
+    )
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to inspect the library's owner: {error}"))?;
+    if !foreign {
+        return Ok(false);
+    }
+    if unowned {
+        log::warn!(
+            "[sync] the library is another account's but also holds rows nobody owns; it is left as it is"
+        );
+        return Ok(false);
+    }
+    if !clear_synced_tables(&mut transaction).await? {
+        log::warn!(
+            "[sync] the library is another account's, but changes wait to upload; it is left as it is"
+        );
+        return Ok(false);
+    }
+    crate::sync::triggers::uploading(&mut transaction).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to commit the account clear: {error}"))?;
+    log::info!("[sync] another account's library cleared for a fresh download");
+    Ok(true)
+}
+
 /// Clear the synced tables if they hold an older projection, so PowerSync
 /// downloads them again in the current format.
 ///
@@ -224,58 +363,11 @@ pub(crate) async fn reset_stale_projection(pool: &SqlitePool) -> Result<(), Stri
     if version == PROJECTION_VERSION {
         return Ok(());
     }
-    // PowerSync creates its tables the first time it opens a library.
-    let synced_before: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ps_buckets')",
-    )
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| format!("Failed to inspect the sync state: {error}"))?;
-    if synced_before {
-        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ps_crud")
-            .fetch_one(&mut *transaction)
-            .await
-            .map_err(|error| format!("Failed to count changes waiting to sync: {error}"))?;
-        if pending > 0 {
-            log::warn!(
-                "[sync] projection {version} is not {PROJECTION_VERSION}; {pending} change(s) wait to upload, so the re-download waits for a later launch"
-            );
-            return Ok(());
-        }
-    }
-    crate::sync::triggers::local_only(&mut transaction).await?;
-    // Every synced table goes, so a reference between two of them is gone by
-    // the commit whichever order they are cleared in. Admission guards a write
-    // made *as* someone; an eviction is nobody's, so it is disarmed for the
-    // clear and put back as it was.
-    let armed: Option<i64> =
-        sqlx::query_scalar("SELECT armed FROM auth_write_admission WHERE singleton = 1")
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|error| format!("Failed to read write admission: {error}"))?;
-    sqlx::raw_sql(
-        "PRAGMA defer_foreign_keys = ON;
-         UPDATE auth_write_admission SET armed = 0 WHERE singleton = 1;",
-    )
-    .execute(&mut *transaction)
-    .await
-    .map_err(|error| format!("Failed to prepare the projection reset: {error}"))?;
-    for table in crate::sync::schema::SYNCED_TABLES.iter().rev() {
-        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {}", table.name)))
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("Failed to clear {}: {error}", table.name))?;
-    }
-    sqlx::query("UPDATE auth_write_admission SET armed = ? WHERE singleton = 1")
-        .bind(armed.unwrap_or(0))
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| format!("Failed to restore write admission: {error}"))?;
-    if synced_before {
-        sqlx::query("SELECT powersync_clear(0)")
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| format!("Failed to reset the sync state: {error}"))?;
+    if !clear_synced_tables(&mut transaction).await? {
+        log::warn!(
+            "[sync] projection {version} is not {PROJECTION_VERSION}; changes wait to upload, so the re-download waits for a later launch"
+        );
+        return Ok(());
     }
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "PRAGMA user_version = {PROJECTION_VERSION}"

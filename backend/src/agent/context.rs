@@ -11,9 +11,11 @@ use std::fmt::Write as _;
 use crate::controls::perform as names;
 use crate::models::agent_threads::AgentThread;
 use crate::models::beat_grid::BeatGrid;
+use crate::models::groups::FixtureGroup;
 use crate::models::perform::{
     Cell, CellContent, PerformClock, PerformLayout, PerformPattern, PerformSource, PerformState,
 };
+use crate::services::groups::GroupNames;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
@@ -260,7 +262,8 @@ pub struct PerformDeckView {
 impl PerformView {
     /// Put the Perform tab's state into the shape a message carries: the
     /// page on screen (`page` indexes `layout.pages`), the selected cell, and
-    /// from `live`, what plays and to what.
+    /// from `live`, what plays and to what. `groups` is the venue's groups:
+    /// the message names each one the set refers to.
     #[must_use]
     pub fn capture(
         setup: bool,
@@ -268,8 +271,13 @@ impl PerformView {
         page: usize,
         selected: Option<&str>,
         patterns: &[PerformPattern],
+        groups: &[FixtureGroup],
         live: Option<&PerformState>,
     ) -> Self {
+        let groups = GroupNames::of_rows(groups);
+        let named = |chosen: &[String]| -> Vec<String> {
+            chosen.iter().map(|group| called(&groups, group)).collect()
+        };
         let pages = layout.map_or(&[][..], |layout| &layout.pages[..]);
         let shown = pages.get(page.min(pages.len().saturating_sub(1)));
         let value = |name: &str, rest: f64| {
@@ -291,7 +299,7 @@ impl PerformView {
                 level: value(&names::level(&pattern.id), 1.0),
                 on: live
                     .and_then(|live| live.bank.effects.get(&pattern.id))
-                    .map(|effect| effect.groups.clone())
+                    .map(|effect| named(&effect.groups))
                     .unwrap_or_default(),
             })
             .collect();
@@ -320,12 +328,12 @@ impl PerformView {
                     row: cell.row,
                     width: cell.width,
                     height: cell.height,
-                    holds: holds(cell, patterns),
+                    holds: holds(cell, patterns, &groups),
                 }),
             playing,
             playing_omitted,
             chosen: live
-                .map(|live| live.bank.chosen.clone())
+                .map(|live| named(&live.bank.chosen))
                 .unwrap_or_default(),
             master: value(names::MASTER, 1.0),
             clock: live
@@ -372,8 +380,13 @@ impl PerformView {
     }
 }
 
+/// What a chosen group is called.
+fn called(groups: &GroupNames, group: &str) -> String {
+    groups.name(group).unwrap_or("a deleted group").to_owned()
+}
+
 /// What `cell` holds, as the context block says it.
-fn holds(cell: &Cell, patterns: &[PerformPattern]) -> String {
+fn holds(cell: &Cell, patterns: &[PerformPattern], groups: &GroupNames) -> String {
     let name = |id: &str| {
         patterns
             .iter()
@@ -405,7 +418,9 @@ fn holds(cell: &Cell, patterns: &[PerformPattern]) -> String {
             match patterns.iter().find(|p| &p.id == pattern_id) {
                 Some(pattern) => format!(
                     "pattern {} {:?}, selection {}",
-                    pattern.id, pattern.name, pattern.selection.expression
+                    pattern.id,
+                    pattern.name,
+                    groups.spell(&pattern.selection)
                 ),
                 None => format!("pattern {pattern_id}, deleted"),
             }
@@ -452,8 +467,10 @@ fn holds(cell: &Cell, patterns: &[PerformPattern]) -> String {
                 values.len()
             )
         }
-        CellContent::Group { label, group } if label.is_empty() => format!("group {group}"),
-        CellContent::Group { label, group } => format!("group {label:?}, {group}"),
+        CellContent::Group { label, group } if label.is_empty() => {
+            format!("group {}", called(groups, group))
+        }
+        CellContent::Group { label, group } => format!("group {label:?}, {}", called(groups, group)),
     }
 }
 
@@ -761,7 +778,7 @@ fn lanes(first: usize, last: usize) -> String {
 pub async fn execution_thread(
     pool: &SqlitePool,
     thread_id: &str,
-    principal: Option<&str>,
+    principal: &str,
 ) -> Result<AgentThread, String> {
     let mut thread =
         crate::database::local::agent_threads::get_thread_row(pool, thread_id, principal).await?;
@@ -770,7 +787,7 @@ pub async fn execution_thread(
             SELECT message.id, message.parent_message_id, message.depth, message.role, message.parts_json
             FROM agent_thread_messages message
             JOIN agent_thread_transcript_heads head ON head.head_message_id = message.id
-            WHERE head.thread_id = ? AND head.uid IS ?
+            WHERE head.thread_id = ? AND head.uid = ?
             UNION ALL
             SELECT parent.id, parent.parent_message_id, parent.depth, parent.role, parent.parts_json
             FROM agent_thread_messages parent JOIN lineage child ON parent.id = child.parent_message_id
@@ -977,15 +994,29 @@ mod tests {
         assert!(text.contains("\n…and 15 more\n</editor-context>"), "{text}");
     }
 
+    fn group(id: &str, name: &str) -> FixtureGroup {
+        FixtureGroup {
+            id: id.into(),
+            uid: None,
+            venue_id: "venue-1".into(),
+            name: Some(name.into()),
+            axis_lr: None,
+            axis_fb: None,
+            axis_ab: None,
+            movement_config: None,
+            display_order: 0,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
     fn perform_pattern(id: &str, name: &str) -> PerformPattern {
         let preset = luma_patterns::presets().clip("Wash").expect("Wash");
         PerformPattern {
             id: id.into(),
             venue_id: "venue-1".into(),
             name: name.into(),
-            selection: luma_patterns::Selection {
-                expression: "front_wash".into(),
-            },
+            selection: luma_patterns::Selection::groups(["group-front"]),
             z_index: 0,
             blend_mode: preset.blend_mode,
             seed: 1,
@@ -1023,12 +1054,12 @@ mod tests {
                 effects: [(
                     "p1".to_owned(),
                     crate::controls::Played {
-                        groups: vec!["front".into()],
+                        groups: vec!["group-front".into()],
                         below: false,
                     },
                 )]
                 .into(),
-                chosen: vec!["back".into()],
+                chosen: vec!["group-back".into()],
                 ..Default::default()
             },
         );
@@ -1038,6 +1069,7 @@ mod tests {
             0,
             Some(&selected),
             &patterns,
+            &[group("group-front", "front_wash"), group("group-back", "back")],
             Some(&live),
         );
         assert_eq!(view.playing.len(), 1, "only the pattern whose pad is on");
@@ -1059,7 +1091,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("- p1 \"Warm wash\" on front at level 0.50\n"),
+            text.contains("- p1 \"Warm wash\" on front_wash at level 0.50\n"),
             "{text}"
         );
         assert!(!text.contains("Strobe\" at level"), "{text}");

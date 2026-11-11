@@ -55,12 +55,12 @@ mod pick;
 mod render_controls;
 mod render_scale;
 mod rig;
-mod selection_card;
 mod settings;
 mod subject;
 mod telemetry;
 #[cfg(test)]
 mod test_support;
+pub(crate) mod tour;
 mod view_panel;
 mod viewport;
 
@@ -78,7 +78,6 @@ use navigation::*;
 use pick::*;
 use render_controls::*;
 use render_scale::*;
-use selection_card::*;
 use telemetry::*;
 use view_panel::*;
 use viewport::*;
@@ -203,6 +202,8 @@ pub(crate) struct Visualizer {
     /// The held right button's fly. Beside [`Self::drag`] rather than in it,
     /// because keys change it and a pointer anchor does not.
     fly: Option<Fly>,
+    /// The camera walkthrough, while it is up — see [`tour`].
+    tour: Option<tour::Tour>,
     /// Whether this view holds the window's pointer lock — see
     /// [`Self::sync_pointer_lock`].
     pointer_locked: bool,
@@ -229,16 +230,11 @@ pub(crate) struct Visualizer {
     render_controls: RenderControls,
     /// The view-settings popover beside the dock.
     pub(crate) settings: luma_ui::float::MenuVisibility,
+    /// The page of it that is open.
+    settings_page: settings::Page,
     presentation: bool,
     bottom_bar_visible: bool,
     settings_motion: RefCell<settings::DockMotion>,
-    selection_motion: SelectionMotion,
-    /// The side the card sits on, for the selection it was chosen for. Kept
-    /// while it still fits, so an edit that reshapes the object does not flip
-    /// the card to another side.
-    selection_card_side: Option<(Vec<EditorObject>, CardSide)>,
-    /// Where the card was last placed, for the frames it is held still.
-    selection_card_last: Option<Point<Pixels>>,
     environment_saving: bool,
     environment_edited: bool,
     environment_pending: Rc<RefCell<Option<VenueEnvironment>>>,
@@ -266,6 +262,10 @@ pub(crate) struct Visualizer {
     /// The builder. `None` until the rig lands, and the one place a position
     /// is editable in this app — see [`crate::stage`].
     pub(crate) build: Option<crate::stage::Build>,
+    /// The Rig page is under the stage: the room is shown under work light.
+    pub(crate) rigging: bool,
+    /// Where the work light's dial is, as a fraction of its travel.
+    pub(crate) work_light: f32,
     stage: Rc<RefCell<Stage>>,
 }
 
@@ -282,6 +282,8 @@ struct Stage {
     /// The rig. `None` until the load lands.
     scene: Option<scene_desc::Scene>,
     definitions: BTreeMap<String, luma_scene::definition::Definition>,
+    /// The light the rig's fixtures make of a universe.
+    lights: luma_lib::stage_render::StageLights,
     /// The rig's fixtures that strobe on their own clock, and that clock.
     strobes: FixtureStrobes,
     /// The rig's laser projectors and zones, solved each frame.
@@ -316,12 +318,15 @@ struct Stage {
     last_cpu_ms: Option<f32>,
     /// GPU scene-through-composite time from the previous frame.
     last_gpu_ms: Option<f32>,
+    /// The exposure the stage's camera had reached at the last frame that
+    /// said, in stops: where it stays when its meter is switched off.
+    exposure_ev: Option<f32>,
     /// Cold cluster rebuild time; zero on topology cache hits.
     last_cluster_ms: Option<f32>,
     /// Fixture shadow maps redrawn by the previous frame. Zero is the healthy
     /// steady state; a sustained non-zero run is tenancy churning.
     last_shadow_maps: Option<u32>,
-    /// Low quality's frame-time-driven share of its pixel budget.
+    /// The share of its pixels the quality level's frame rate leaves it.
     dynamic: DynamicBudget,
     /// When the stage last asked for another frame, and when its prepaint last
     /// ran. Together these separate the two ways a frame can be late: the UI
@@ -359,12 +364,6 @@ struct Stage {
     /// [`Visualizer::viewport_origin`] both exist only once a frame has been
     /// drawn.
     pane: Bounds<Pixels>,
-    /// Measured card size; short cards align with the object just like tall ones.
-    selection_card_size: gpui::Size<Pixels>,
-    /// A left press that began on the card and has not been released. The
-    /// card holds still under it, so a control being scrubbed never moves
-    /// away from the pointer.
-    selection_card_held: bool,
     /// The camera export in flight, and its result.
     exports: camera_export::Exports,
     /// The free-running clock the air and the strobes run on.

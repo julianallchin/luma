@@ -6,9 +6,16 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The QLC+ `.qxf` subset the renderer reads.
+/// The QLC+ `.qxf` subset the renderer reads, or a library fixture's
+/// lowering of itself into it plus its [`Built`](luma_fixture::Built).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Definition {
+    /// A library (`lib:<id>`) fixture's build: its meshes, joints, cells and
+    /// lenses in housing space. When present it is what the stage draws, and
+    /// the QLC+ fields below are only what search and the patch page read.
+    /// Never serialized: it is rebuilt from the spec, not stored.
+    #[serde(skip)]
+    pub built: Option<std::sync::Arc<luma_fixture::Built>>,
     /// QLC+ fixture type; selects the mesh and the fallback cone.
     #[serde(rename = "Type")]
     pub kind: String,
@@ -44,6 +51,27 @@ pub struct Physical {
     /// Lens block — the source of cone geometry.
     #[serde(rename = "Lens")]
     pub lens: Option<Lens>,
+    /// Light source — the source of the fixture's output
+    /// (`luminaire::output_lumens`).
+    #[serde(rename = "Bulb", default, skip_serializing_if = "Option::is_none")]
+    pub bulb: Option<Bulb>,
+}
+
+/// QLC+ `Bulb`, as far as light output goes.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Bulb {
+    /// The lamp's rating in lumens, before the optics. Zero means unknown.
+    #[serde(rename = "@Lumens", default, skip_serializing_if = "Option::is_none")]
+    pub lumens: Option<f32>,
+    /// Measured lumens out of the front of the whole fixture, from a
+    /// datasheet. QLC+ has no such attribute; a library fixture carries it,
+    /// and when present it wins over the lamp rating.
+    #[serde(
+        rename = "@OutputLumens",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_lumens: Option<f32>,
 }
 
 /// Millimetres, as QLC+ writes them.

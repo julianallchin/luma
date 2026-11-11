@@ -33,7 +33,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{UVec3, Vec3};
 
-use crate::frame::{Draw, EditorObject, Frame};
+use crate::frame::{Draw, Frame};
 use crate::quality::QualityBudget;
 use crate::scene_desc::Quality;
 
@@ -229,10 +229,6 @@ fn local_box(frame: &Frame, mesh: usize) -> (Vec3, Vec3) {
     (min, max)
 }
 
-fn is_fixture(draw: &Draw) -> bool {
-    matches!(draw.editor_object, Some(EditorObject::Fixture(_)))
-}
-
 /// Everything the captures depend on: the stage's geometry and materials
 /// (fixtures by count only, so a moving head does not recapture every
 /// frame), the floor, whether there is a sky, and the quality. Fixture
@@ -246,7 +242,7 @@ pub(crate) fn key(frame: &Frame, opaque: usize) -> u64 {
     };
     let mut fixtures = 0u32;
     for draw in frame.draws.iter().take(opaque) {
-        if is_fixture(draw) {
+        if crate::frame::is_luminaire(frame, draw) {
             fixtures += 1;
             continue;
         }
@@ -287,7 +283,7 @@ pub(crate) fn place(frame: &Frame, opaque: usize) -> Option<Layout> {
         .map(|draw| {
             let bounds = *local[draw.mesh].get_or_insert_with(|| local_box(frame, draw.mesh));
             let (min, max) = world_box(draw, bounds);
-            (min, max, is_fixture(draw))
+            (min, max, crate::frame::is_luminaire(frame, draw))
         })
         .filter(|(min, max, _)| min.is_finite() && max.is_finite())
         .collect();
@@ -849,9 +845,6 @@ impl Pipelines {
 pub(crate) struct Probes {
     albedo: wgpu::TextureView,
     normal: wgpu::TextureView,
-    /// The atlases themselves, for [`Probes::read_back`].
-    albedo_texture: wgpu::Texture,
-    normal_texture: wgpu::Texture,
     depth: wgpu::TextureView,
     radiance: wgpu::Texture,
     cubes: wgpu::TextureView,
@@ -926,8 +919,6 @@ impl Probes {
                 view_formats: &[],
             })
         };
-        let albedo_texture = atlas("probe-albedo", ALBEDO_FORMAT);
-        let normal_texture = atlas("probe-normal", NORMAL_FORMAT);
         let view =
             |texture: &wgpu::Texture| texture.create_view(&wgpu::TextureViewDescriptor::default());
         let radiance = device.create_texture(&wgpu::TextureDescriptor {
@@ -976,11 +967,9 @@ impl Probes {
             mapped_at_creation: false,
         });
         Self {
-            albedo: view(&albedo_texture),
-            normal: view(&normal_texture),
+            albedo: view(&atlas("probe-albedo", ALBEDO_FORMAT)),
+            normal: view(&atlas("probe-normal", NORMAL_FORMAT)),
             depth: view(&atlas("probe-depth", crate::gpu::DEPTH_FORMAT)),
-            albedo_texture,
-            normal_texture,
             radiance,
             cubes,
             grid,
@@ -1075,136 +1064,6 @@ impl Probes {
         self.layout
             .as_ref()
             .map_or(0, |layout| layout.count() * 6 - self.captured)
-    }
-
-    /// Read one probe's six faces back as linear RGBA, laid side by side
-    /// (+X, -X, +Y, -Y, +Z, -Z of cube space): its relit radiance at `mip`
-    /// (from the base), or with `what` 1 and 2 its captured albedo and its
-    /// normal (xy octahedral, z metal, w distance). For diagnosis only.
-    pub(crate) fn read_back(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        probe: u32,
-        what: u32,
-        mip: u32,
-    ) -> anyhow::Result<(u32, u32, Vec<[f32; 4]>)> {
-        let layout = self
-            .layout
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no probes placed"))?;
-        anyhow::ensure!(probe < layout.count(), "no probe {probe}");
-        let base = layout.base_mip;
-        let size = match what {
-            0 => (PROBE_SIZE >> (base + mip)).max(1),
-            _ => PROBE_SIZE >> base,
-        };
-        let texel = if what == 1 { 4 } else { 8 };
-        let row = (size * texel).div_ceil(256) * 256;
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("probe-read-back"),
-            size: u64::from(row * size * 6),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = device.create_command_encoder(&Default::default());
-        for face in 0..6 {
-            let layer = probe * 6 + face;
-            let (texture, mip_level, origin) = match what {
-                0 => (
-                    &self.radiance,
-                    base + mip,
-                    wgpu::Origin3d {
-                        x: 0,
-                        y: 0,
-                        z: layer,
-                    },
-                ),
-                _ => (
-                    if what == 1 {
-                        &self.albedo_texture
-                    } else {
-                        &self.normal_texture
-                    },
-                    0,
-                    wgpu::Origin3d {
-                        x: (layer % ATLAS_COLUMNS) * PROBE_SIZE,
-                        y: (layer / ATLAS_COLUMNS) * PROBE_SIZE,
-                        z: 0,
-                    },
-                ),
-            };
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture,
-                    mip_level,
-                    origin,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: u64::from(row * size * face),
-                        bytes_per_row: Some(row),
-                        rows_per_image: Some(size),
-                    },
-                },
-                wgpu::Extent3d {
-                    width: size,
-                    height: size,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-        queue.submit([encoder.finish()]);
-        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(anyhow::Error::msg)?;
-        let bytes = buffer
-            .slice(..)
-            .get_mapped_range()
-            .map_err(anyhow::Error::msg)?
-            .to_vec();
-        let width = size * 6;
-        let mut out = vec![[0.0; 4]; (width * size) as usize];
-        for face in 0..6 {
-            for y in 0..size {
-                for x in 0..size {
-                    let o = (row * size * face + row * y + x * texel) as usize;
-                    let value = if what == 1 {
-                        let srgb = |b: u8| {
-                            let c = f32::from(b) / 255.0;
-                            if c <= 0.04045 {
-                                c / 12.92
-                            } else {
-                                ((c + 0.055) / 1.055).powf(2.4)
-                            }
-                        };
-                        [
-                            srgb(bytes[o]),
-                            srgb(bytes[o + 1]),
-                            srgb(bytes[o + 2]),
-                            f32::from(bytes[o + 3]) / 255.0,
-                        ]
-                    } else {
-                        std::array::from_fn(|c| {
-                            half::f16::from_le_bytes([bytes[o + 2 * c], bytes[o + 2 * c + 1]])
-                                .to_f32()
-                        })
-                    };
-                    out[(y * width + face * size + x) as usize] = value;
-                }
-            }
-        }
-        Ok((width, size, out))
-    }
-
-    /// Where the probes stand, world.
-    pub(crate) fn positions(&self) -> Vec<Vec3> {
-        self.layout
-            .as_ref()
-            .map_or_else(Vec::new, |layout| layout.positions.clone())
     }
 
     /// Turn the probes on or off from this frame. Off keeps the placement

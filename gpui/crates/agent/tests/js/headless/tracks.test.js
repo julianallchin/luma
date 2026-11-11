@@ -36,7 +36,7 @@ const track = (id, title, artist, uid, createdAt) =>
   `('${id}', '${uid ?? "$PRINCIPAL"}', '${id}-hash', '${title}', '${artist}', 240.0, '/fixture/${id}.mp3', '${createdAt}')`;
 const score = (trackId, venue) => `('score-${trackId}-${venue}', '$PRINCIPAL', '${trackId}', '${venue}', 'Score')`;
 const clip = (trackId, venue) =>
-  `('clip-score-${trackId}-${venue}', '$PRINCIPAL', 'score-${trackId}-${venue}', 'pattern', 0.0, 120.0, '0', '{"expression":"all"}', 'replace')`;
+  `('clip-score-${trackId}-${venue}', '$PRINCIPAL', 'score-${trackId}-${venue}', 'pattern', 0.0, 120.0, '0', '{"all":true}', 'replace')`;
 
 const tracks = [
   ...SEEDS.map((s, i) => track(s.id, s.title, s.artist, s.uid, `2026-08-19T12:${String(59 - i).padStart(2, "0")}:00Z`)),
@@ -93,12 +93,12 @@ test("the browser filters a seeded library by venue, ownership and search", () =
   nav.venue("Test Venue");
   until("the songs counted", (s) => s.find((node) => /^All songs songs: \d+$/.test(node.label)));
   const opened = read();
-  expect(opened.count).toBe(`${MINE} songs`);
+  expect(opened.count).toBe(`${ALL} songs`);
   expect(opened.rows.slice(0, 3)).toEqual(["Aurora", "Basslines", "Cascade"]);
 
   // Each filter moves the count by exactly the rows it admits.
-  expect(press("toggle", "All").count).toBe(`${ALL} songs`);
   expect(press("toggle", "Mine").count).toBe(`${MINE} songs`);
+  expect(press("toggle", "All").count).toBe(`${ALL} songs`);
 
   // Search narrows to what it matches, and escape puts it back.
   app.type(app.snapshot().find({ role: "input" }), "bassl");
@@ -108,9 +108,9 @@ test("the browser filters a seeded library by venue, ownership and search", () =
   expect(searched.rows).toEqual(["Basslines"]);
   app.key("escape");
   app.frames(2);
-  expect(read().count).toBe(`${MINE} songs`);
+  expect(read().count).toBe(`${ALL} songs`);
 
   // The list is virtualized: a screenful of rows, not a library of them.
   expect(opened.rows.length).toBeGreaterThan(0);
-  expect(opened.rows.length).toBeLessThan(MINE / 4);
+  expect(opened.rows.length).toBeLessThan(ALL / 4);
 });

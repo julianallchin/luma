@@ -262,7 +262,7 @@ impl Fixture {
                 score_id: Some(ANALYSIS_SCORE_ID.to_string()),
                 ..Default::default()
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .expect("create thread")
@@ -279,7 +279,7 @@ impl Fixture {
                     parts: json!([{ "type": "text", "text": "Session opened." }]),
                 }],
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .expect("open the thread's session");
@@ -320,7 +320,7 @@ impl Fixture {
                 score_id: Some(SCORE_ID.into()),
                 ..Default::default()
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .unwrap()
@@ -338,8 +338,24 @@ impl Fixture {
 
     /// A cell in a [`Self::thread`], attached to its session.
     async fn run(&self, thread_id: &str, code: &str) -> PythonCellResult {
-        self.run_scoped(thread_id, code, self.scope(), Some(session_turn(thread_id)))
-            .await
+        self.run_telling(thread_id, code, &|_| {}).await
+    }
+
+    /// [`Self::run`], telling `waiting` what the cell waits for.
+    async fn run_telling(
+        &self,
+        thread_id: &str,
+        code: &str,
+        waiting: &(dyn Fn(bool) + Sync),
+    ) -> PythonCellResult {
+        self.run_scoped(
+            thread_id,
+            code,
+            self.scope(),
+            Some(session_turn(thread_id)),
+            waiting,
+        )
+        .await
     }
 
     async fn run_scoped(
@@ -348,6 +364,7 @@ impl Fixture {
         code: &str,
         scope: PythonScopeInput,
         turn: Option<String>,
+        waiting: &(dyn Fn(bool) + Sync),
     ) -> PythonCellResult {
         run_python_cell_inner(
             &self.pool,
@@ -359,9 +376,10 @@ impl Fixture {
             code.to_string(),
             scope,
             turn,
-            Some("owner".into()),
+            "owner",
             None,
             None,
+            waiting,
         )
         .await
         .expect("run_python_cell")
@@ -489,6 +507,38 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
 }
 
 #[tokio::test]
+async fn a_cold_kernel_says_python_is_starting_and_a_warm_one_does_not() {
+    let Some(f) =
+        Fixture::new("a_cold_kernel_says_python_is_starting_and_a_warm_one_does_not").await
+    else {
+        return;
+    };
+    let thread = f.thread().await;
+    let told = std::sync::Mutex::new(Vec::new());
+    let waiting = |waiting: bool| told.lock().unwrap().push(waiting);
+
+    expect_ok(
+        &f.run_telling(&thread, "1 + 1", &waiting).await,
+        "cold cell",
+    );
+    assert_eq!(
+        *told.lock().unwrap(),
+        [true, false],
+        "the first cell starts the kernel"
+    );
+
+    expect_ok(
+        &f.run_telling(&thread, "2 + 2", &waiting).await,
+        "warm cell",
+    );
+    assert_eq!(
+        *told.lock().unwrap(),
+        [true, false],
+        "a cell on a running kernel waits for nothing"
+    );
+}
+
+#[tokio::test]
 async fn python_execution_rejects_a_thread_owned_by_another_principal() {
     let Some(f) =
         Fixture::new("python_execution_rejects_a_thread_owned_by_another_principal").await
@@ -509,9 +559,10 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
         "1 + 1".into(),
         scope,
         None,
-        Some("another-user".into()),
+        "another-user",
         None,
         None,
+        &|_| {},
     )
     .await
     .unwrap_err();
@@ -544,7 +595,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
                 parts: json!([{ "type": "text", "text": "Done." }]),
             }],
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("an assistant row appends like any other");
@@ -562,9 +613,10 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
             "1 + 1".into(),
             scope.clone(),
             Some(turn_message_id.into()),
-            Some("owner".into()),
+            "owner",
             None,
             None,
+            &|_| {},
         )
         .await
         .unwrap_err();
@@ -583,9 +635,10 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         "1 + 1".into(),
         scope,
         Some("assistant-turn".into()),
-        Some("owner".into()),
+        "owner",
         None,
         None,
+        &|_| {},
     )
     .await
     .unwrap_err();
@@ -613,7 +666,7 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
                 parts: json!([{ "type": "text", "text": "Session opened on Aurora." }]),
             }],
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("a session turn appends like any other row — no trigger gates it");
@@ -629,9 +682,10 @@ async fn editable_python_accepts_only_its_own_durable_turn() {
         "1 + 1".into(),
         session_scope,
         Some("session-turn".into()),
-        Some("owner".into()),
+        "owner",
         None,
         None,
+        &|_| {},
     )
     .await
     .expect("an editable cell attaches to a session turn");
@@ -725,6 +779,10 @@ async fn dropping_a_running_cell_interrupts_it() {
 /// face holds them with room to spare.
 const MOVER: &str = "Chauvet/Chauvet-Rogue-R2-Spot.qxf";
 const MOVER_MODE: &str = "18 Channel";
+/// The same head as the library has it, which is what a search offers in
+/// place of the QLC+ file it aliases.
+const LIBRARY_MOVER: &str = "lib:chauvet/rogue-r2-spot";
+const LIBRARY_MOVER_MODE: &str = "18ch";
 
 impl Fixture {
     /// An empty room, and a `venue_rig` thread pinned to it.
@@ -746,7 +804,7 @@ impl Fixture {
                 venue_id: Some(venue_id.clone()),
                 ..Default::default()
             },
-            Some("owner"),
+            "owner",
         )
         .await
         .expect("create venue thread")
@@ -763,6 +821,7 @@ impl Fixture {
                 ..Default::default()
             },
             None,
+            &|_| {},
         )
         .await
     }
@@ -1059,7 +1118,7 @@ async fn a_perform_thread_changes_the_set_and_a_venue_thread_cannot() {
             venue_id: Some(venue_id.clone()),
             ..Default::default()
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("create Perform thread")
@@ -1127,81 +1186,42 @@ except luma.PerformRefused as error:
     f.service.shutdown_all();
 }
 
-// ---------------------------------------------------------------------------
-// B6 — the usability run
-// ---------------------------------------------------------------------------
-
-/// Run an outside agent's program against an empty venue, cell by cell.
-///
-/// Not an assertion: the gauntlet's §8 usability run is evidence, not a
-/// contract, so this drives the same facade the tests above do and writes down
-/// what the room said. Inert unless `LUMA_USABILITY_IN` names a directory of
-/// `cell_*.py`; results land beside them in `LUMA_USABILITY_OUT`.
+/// A nudge reads in the frame a placement does: `trim(u=, v=)` puts the
+/// footprint centre where `place(at=)` would, on a deck whose own surface axes
+/// run the other way; a rename reaches the patch; one light is named as asked.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn venue_usability_run() {
-    let Ok(input) = std::env::var("LUMA_USABILITY_IN") else {
+async fn a_nudge_lands_where_a_placement_would() {
+    let Some(f) = Fixture::new("venue nudge").await else {
         return;
     };
-    let out_dir =
-        std::path::PathBuf::from(std::env::var("LUMA_USABILITY_OUT").expect("LUMA_USABILITY_OUT"));
-    std::fs::create_dir_all(&out_dir).unwrap();
-    let Some(f) = Fixture::new("venue usability").await else {
-        panic!("the cell service would not start");
-    };
     let (venue_id, thread) = f.empty_venue().await;
-
-    let mut cells: Vec<_> = std::fs::read_dir(&input)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "py"))
-        .collect();
-    cells.sort();
-
-    let mut transcript = String::new();
-    for cell in &cells {
-        let code = std::fs::read_to_string(cell).unwrap();
-        let name = cell.file_name().unwrap().to_string_lossy().to_string();
-        let out = f.run_in_venue(&thread, &venue_id, &code).await;
-        transcript.push_str(&format!(
-            "===== {name} =====\n{code}\n----- status: {} -----\nstdout:\n{}\n\
-             stderr:\n{}\nrepr: {:?}\ntraceback: {:?}\nnotices: {:?}\nfigures: {:?}\n\n",
-            out.status,
-            out.stdout,
-            out.stderr,
-            out.repr,
-            out.traceback,
-            out.notices,
-            out.figures
-                .iter()
-                .map(|fig| fig.artifact_rel.clone())
-                .collect::<Vec<_>>()
-        ));
-    }
-
-    let tail = f
+    let out = f
         .run_in_venue(
             &thread,
             &venue_id,
-            "shot = luma.venue.render(view='front', width=1280, height=720)\n\
-             top = luma.venue.render(view='overhead', width=1280, height=720)\n\
-             print(luma.venue.describe(detail=True))\n\
-             print(luma.venue.tiles())\n\
-             (str(shot.path), str(top.path))",
+            r#"
+v = luma.venue
+deck = v.place("deck", at=(2.0, 1.0))
+tower = v.place("truss", on=deck, at=(0.2, -0.25), length=1.5, direction=(0, 0, 1), label="Totem L")
+placed = v.nodes(label="Totem")[0].at
+v.trim(tower, u=-0.3, v=0.25)
+nudged = v.nodes(label="Totem")[0].at
+head = v.fixture_library("rogue r2 spot")[0]
+bar = v.place("truss", at=(0.0, 4.0), length=6.0, direction=(1, 0, 0), trim=4.0)
+v.distribute(head, 1, on=bar, face=(0, 0, -1), mode=head.mode(18), label="solo")
+v.trim(v.fixtures[-1].id, label="Solo Spot")
+(tuple(round(c, 3) for c in placed), tuple(round(c, 3) for c in nudged),
+ [x.label for x in v.fixtures])
+"#,
         )
         .await;
-    transcript.push_str(&format!(
-        "===== final =====\nstatus: {}\n{}\nrepr: {:?}\ntraceback: {:?}\n",
-        tail.status, tail.stdout, tail.repr, tail.traceback
-    ));
-    std::fs::write(out_dir.join("transcript.txt"), &transcript).unwrap();
-    for figure in &tail.figures {
-        let name = std::path::Path::new(&figure.artifact_rel)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "figure.png".into());
-        std::fs::write(out_dir.join(format!("{name}.b64")), &figure.base64_png).unwrap();
-    }
+    expect_ok(&out, "nudge");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "((2.2, 0.75), (1.7, 1.25), ['Solo Spot'])",
+        "{}",
+        out.stdout
+    );
     f.service.shutdown_all();
 }
 
@@ -1248,7 +1268,7 @@ line = [l for l in tree.splitlines() if row.fixtures[0].id in l][0]
     let repr = out.repr.clone().unwrap_or_default();
     assert!(
         repr.starts_with(&format!(
-            "('{MOVER}', True, '{MOVER_MODE}', True, True, True, True)"
+            "('{LIBRARY_MOVER}', True, '{LIBRARY_MOVER_MODE}', True, True, True, True)"
         )),
         "the library or the aim did not answer as asked: {repr}\n{}",
         out.stdout
@@ -1280,7 +1300,7 @@ async fn a_python_laser_clip_draws_beams_on_the_stage() {
             venue_id: Some(f.venue_id.clone()),
             ..Default::default()
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .expect("create venue thread")
@@ -1319,7 +1339,7 @@ projector.path
                 parts: json!([{ "type": "text", "text": "Session opened." }]),
             }],
         },
-        Some("owner"),
+        "owner",
     )
     .await
     .unwrap();
@@ -1338,17 +1358,19 @@ import matplotlib.image as image
 edit = luma.track.edit()
 edit.add_clip(laser(figure(count=5, size=1)), name="Fan", seconds=(0, 4), selection="lasers")
 def light(shot):
-    return float(image.imread(io.BytesIO(shot.read_bytes()))[..., :3].sum())
+    pixels = image.imread(io.BytesIO(shot.read_bytes()))[..., :3]
+    return int((pixels.max(axis=-1) > 0.95).sum())
 v = luma.venue
 lit, dark = light(v.render(edit=edit, t=1.0)), light(v.render(t=1.0))
-(lit > dark * 1.01, lit, dark)
+(lit > dark + 100, lit, dark)
 "#
         .into(),
         scope,
         Some("laser-session".into()),
-        Some("owner".into()),
+        "owner",
         None,
         None,
+        &|_| {},
     )
     .await
     .expect("run_python_cell");

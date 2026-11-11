@@ -21,8 +21,8 @@ const SHOWN_STOPS: f32 = 6.0;
 const CENTRE_WEIGHT: f32 = 4.0;
 
 struct Meter {
-    // x: auto (1) or manual (0), y: ev (compensation when auto, exposure
-    // when manual), z: min ev, w: max ev.
+    // x: auto (1) or held (0), y: ev (compensation when auto, the exposure
+    // itself when held), z: min ev, w: max ev.
     exposure: vec4<f32>,
     // x: seconds since the last adaptation, y: 1 to snap to the target,
     // z: brightening speed (1/s), w: darkening speed (1/s).
@@ -30,14 +30,24 @@ struct Meter {
     // x: low percentile, y: high percentile of the metered band, z: log2 of
     // the key the band's mean is exposed to, w: centre weighting (0 or 1).
     meter: vec4<f32>,
+    // x: stops the pupil closes, y: closing speed of what it cannot (1/s),
+    // z: the share of a change in the light that the exposure makes up for.
+    eye: vec4<f32>,
+};
+
+struct Exposed {
+    // x: current ev, y: target ev, z: 1 once valid, w: exposure multiplier.
+    now: vec4<f32>,
+    // x: the exposure the eye has adapted to behind its pupil, ev.
+    adapted: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> cfg: Meter;
 @group(0) @binding(1) var scene_tex: texture_2d<f32>;
 // BINS bins, then the black weight.
 @group(0) @binding(2) var<storage, read_write> histogram: array<atomic<u32>, 129>;
-// x: current ev, y: target ev, z: 1 once valid, w: exposure multiplier.
-@group(0) @binding(3) var<storage, read_write> state: vec4<f32>;
+// `post_glare.wgsl` and `post_tonemap.wgsl` read `now` alone.
+@group(0) @binding(3) var<storage, read_write> state: Exposed;
 
 var<workgroup> local_bins: array<atomic<u32>, 129>;
 
@@ -119,11 +129,12 @@ fn adapt_main(@builtin(local_invocation_index) lindex: u32) {
         return;
     }
 
-    let previous = state;
+    let previous = state.now;
     let valid = previous.z > 0.5;
     let snap = cfg.adapt.y > 0.5 || !valid;
     var target_ev = cfg.exposure.y;
     var current = target_ev;
+    var adapted = target_ev;
 
     if cfg.exposure.x > 0.5 {
         var total = 0.0;
@@ -165,7 +176,9 @@ fn adapt_main(@builtin(local_invocation_index) lindex: u32) {
                 }
             }
             let mean = sum / max(weight, 1e-6);
-            target_ev = clamp(cfg.meter.z - mean, cfg.exposure.z, cfg.exposure.w)
+            // Only a share of the way from the reference room: the rest
+            // shows, so a brighter room is a brighter picture.
+            target_ev = clamp(cfg.meter.z - mean, cfg.exposure.z, cfg.exposure.w) * cfg.eye.z
                 + cfg.exposure.y;
         } else if valid {
             target_ev = previous.y;
@@ -173,13 +186,21 @@ fn adapt_main(@builtin(local_invocation_index) lindex: u32) {
             target_ev = clamp(0.0, cfg.exposure.z, cfg.exposure.w) + cfg.exposure.y;
         }
         current = target_ev;
+        adapted = target_ev;
         if !snap {
-            let delta = target_ev - previous.x;
-            // A scene that got brighter closes the iris fast; one that got
-            // darker opens it slowly, the way an eye does.
+            // A darker scene opens the eye slowly and all the way. A
+            // brighter one closes the pupil fast, and the pupil only closes
+            // so far: past it the eye adapts over about a minute, and until
+            // then a light in the face is blinding.
+            let behind = target_ev - state.adapted.x;
+            let pace = select(cfg.eye.y, cfg.adapt.z, behind > 0.0);
+            adapted = state.adapted.x + behind * (1.0 - exp(-cfg.adapt.x * pace));
+            let reach = max(target_ev, adapted - cfg.eye.x);
+            let delta = reach - previous.x;
             let speed = select(cfg.adapt.w, cfg.adapt.z, delta > 0.0);
             current = previous.x + delta * (1.0 - exp(-cfg.adapt.x * speed));
         }
     }
-    state = vec4<f32>(current, target_ev, 1.0, exp2(current));
+    state.now = vec4<f32>(current, target_ev, 1.0, exp2(current));
+    state.adapted = vec4<f32>(adapted, 0.0, 0.0, 0.0);
 }

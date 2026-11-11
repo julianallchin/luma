@@ -224,15 +224,10 @@ otherwise, and the drift compounds bar by bar.
 
 ## User-provisioned model weights
 
-The `genre` node is the one preprocessor whose model Luma does not ship: the
-Essentia Discogs-EffNet weights are CC BY-NC-ND 4.0, so they are never bundled
-(`include_bytes!`) or committed. Instead `workers::genre::process::ensure_model` downloads
-them on first use from MTG's own server into `<app config>/models/`,
-checksum-pinned — Luma never redistributes the file, it only fetches from the
-source. Acceptable while Luma is internal; a commercially distributed build
-still needs MTG's proprietary license — see
-[`docs/design/genre-model.md`](../../../docs/design/genre-model.md). Prefer bundling for
-anything new; this is an exception forced by licensing, not a pattern to copy.
+The `genre` node's model is not bundled or committed: `workers::genre::process::ensure_model`
+downloads the Essentia Discogs-EffNet weights on first use from MTG's own server into
+`<app config>/models/`, checksum-pinned. See
+[`docs/design/genre-model.md`](../../../docs/design/genre-model.md).
 
 ## Pointers
 

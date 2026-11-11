@@ -100,7 +100,6 @@ async fn prepare_scene_data(
         let elements = clip.graph.laser().map(|laser| laser.count());
         let key = (
             serde_json::to_string(&clip.selection).map_err(|error| error.to_string())?,
-            clip.selection_seed.unwrap_or(clip.seed),
             elements,
         );
         let cells = if let Some(cells) = domains.get(&key) {
@@ -110,7 +109,6 @@ async fn prepare_scene_data(
                 access,
                 fixtures_root,
                 std::slice::from_ref(&clip.selection),
-                clip.selection_seed.unwrap_or(clip.seed),
                 elements,
             )
             .await?;
@@ -329,7 +327,6 @@ pub(crate) async fn preview_clips(
         let elements = clip.graph.laser().map(|laser| laser.count());
         let key = (
             serde_json::to_string(&clip.selection).map_err(|error| error.to_string())?,
-            clip.selection_seed.unwrap_or(clip.seed),
             elements,
         );
         let cells = match domains.get(&key) {
@@ -339,7 +336,6 @@ pub(crate) async fn preview_clips(
                     access,
                     fixtures_root,
                     std::slice::from_ref(&clip.selection),
-                    clip.selection_seed.unwrap_or(clip.seed),
                     elements,
                 )
                 .await
@@ -511,9 +507,9 @@ fn aims(graph: &luma_patterns::ClipGraph) -> bool {
 
 /// Heads in the stand-in rig of [`stand_in_strip`].
 const STAND_IN_HEADS: usize = 16;
-/// How far a stand-in head turns, pan then tilt, end to end, in degrees: a
-/// common moving head's.
-const STAND_IN_RANGE: [f64; 2] = [540., 270.];
+/// How far a stand-in head turns, pan then tilt, `[lo, hi]` degrees from
+/// home: a common moving head's.
+const STAND_IN_RANGE: [[f64; 2]; 2] = [[-270., 270.], [-135., 135.]];
 
 /// The strip of a clip `graph`, such as a preset's, over `beats` beats on a
 /// stand-in rig: a straight line of moving heads at 120 BPM. It needs no
@@ -549,7 +545,6 @@ fn stand_in_clip(graph: &luma_patterns::ClipGraph, beats: f64) -> luma_patterns:
         start: 0.,
         duration: beats,
         seed: 0,
-        selection_seed: None,
         selection: luma_patterns::Selection::all(),
         z_index: 0,
         blend_mode: luma_patterns::BlendMode::Replace,
@@ -583,7 +578,7 @@ fn stand_in_rig(cells: &[luma_patterns::Cell]) -> crate::eval::aim::Rig {
         );
         rig.insert(
             cell.id.clone(),
-            crate::eval::aim::Head::with_range(mount, STAND_IN_RANGE),
+            crate::eval::aim::Head::with_travel(mount, STAND_IN_RANGE),
         );
     }
     rig

@@ -194,7 +194,7 @@ fn wash(id: &str) -> crate::models::perform::PerformPattern {
         id: id.into(),
         venue_id: String::new(),
         name: "Wash".into(),
-        selection: serde_json::from_value(json!({ "expression": "all" })).unwrap(),
+        selection: luma_patterns::Selection::All,
         z_index: 0,
         blend_mode: wash.blend_mode,
         seed: u64::MAX,
@@ -581,6 +581,16 @@ async fn two_groups(services: &AppServices, venue: &str) {
     }
 }
 
+/// The id of `venue`'s group called `name`.
+async fn group_id(services: &AppServices, venue: &str, name: &str) -> String {
+    sqlx::query_scalar("SELECT id FROM fixture_groups WHERE venue_id = ? AND name = ?")
+        .bind(venue)
+        .bind(name)
+        .fetch_one(&services.db.0)
+        .await
+        .unwrap()
+}
+
 /// Open `venue`'s set of `pattern`, laid out with a group cell on each of
 /// `left` and `right` and `extra`.
 async fn open_on_groups(
@@ -594,10 +604,13 @@ async fn open_on_groups(
     save(services, venue, pattern).await.unwrap();
     let mut layout = PerformLayout::generated(std::slice::from_ref(pattern));
     let page = &mut layout.pages[0];
-    let groups = ["left", "right"].map(|group| CellContent::Group {
-        label: String::new(),
-        group: group.into(),
-    });
+    let mut groups = Vec::new();
+    for name in ["left", "right"] {
+        groups.push(CellContent::Group {
+            label: String::new(),
+            group: group_id(services, venue, name).await,
+        });
+    }
     for (n, content) in groups.into_iter().chain(extra).enumerate() {
         let (column, row) = page.free_spot(1, 1).expect("room");
         page.cells.push(Cell {
@@ -678,7 +691,7 @@ async fn an_effect_on_a_group_lights_only_its_heads_and_moves_when_it_does() {
     assert_eq!(right, 0.0, "nothing outside left");
     assert_eq!(
         services.perform.state().bank.effects["wash"].groups,
-        ["left"]
+        [group_id(&services, &venue, "left").await]
     );
 
     // Right chosen instead, the pad tapped again: right too.

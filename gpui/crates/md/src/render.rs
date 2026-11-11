@@ -10,7 +10,7 @@
 //! chunk opacity veil over the text runs (see [`super::veil`]) — opacity only,
 //! zero translate, applied after layout-relevant properties are fixed.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
@@ -160,7 +160,6 @@ pub struct CachedCode {
 }
 
 impl RenderCache {
-
     /// Drop `row`'s entries at or after top-level block `from`.
     ///
     /// The cache is keyed by *position*, not by content, so an entry whose
@@ -175,6 +174,17 @@ impl RenderCache {
             .retain(|(r, top, _), _| r.as_ref() != row || *top < from);
         self.code
             .retain(|(r, top, _), _| r.as_ref() != row || *top < from);
+    }
+
+    /// Keep only the rows laid out in the last viewport, overdraw included.
+    /// Scrolling back regenerates a dropped row's flattened text and code-line
+    /// runs; the cache is derived data, so this trades CPU for memory.
+    ///
+    /// The caller owns "which rows were visible": the transcript knows its
+    /// list's rendered range, this module does not.
+    pub fn retain_rows(&mut self, rows: &std::collections::HashSet<SharedString>) {
+        self.flats.retain(|(row, _, _), _| rows.contains(row));
+        self.code.retain(|(row, _, _), _| rows.contains(row));
     }
 
     pub fn clear(&mut self) {
@@ -198,7 +208,7 @@ pub type CodeHighlight<'a> = Option<&'a HighlightedCode>;
 
 /// Render a whole tree stacked with the md block gap.
 ///
-/// `highlighter` is asked only about fenced blocks; [`crate::NoHighlight`]
+/// `highlighter` is asked only about fenced blocks; one that answers `None`
 /// paints them plain, and the layout is identical either way.
 pub fn render_tree(
     tree: &BlockTree,
@@ -752,7 +762,8 @@ pub fn paint_text_selection(
     layout: &gpui::TextLayout,
     theme: &Theme,
 ) {
-    if let Some(range) = super::selection::wash_range(key) {
+    let surface = PAINTING_SURFACE.with(Cell::get);
+    if let Some(range) = super::selection::wash_range(surface, key) {
         for rect in range_rects(layout, &range, 0.0, 0.0) {
             window.paint_quad(quad(
                 rect,
@@ -766,18 +777,23 @@ pub fn paint_text_selection(
     }
     REGISTRY.with(|r| {
         r.borrow_mut().push(RegEntry {
+            surface,
             key: key.clone(),
             text: text.clone(),
             layout: layout.clone(),
         })
     });
-    register_selection_listeners(window, key, text, layout);
+    register_selection_listeners(window, key, surface, text, layout);
 }
 
 /// One painted text element, registered per frame in document order — the
 /// continuity model that lets a drag span paragraphs/list items (Zed gets
 /// this for free from its single-element markdown; our tree rebuilds it).
 struct RegEntry {
+    /// Which painted transcript this element belongs to (see
+    /// [`selection_frame_reset_for`]); 0 for a surface that never shares a
+    /// frame with another.
+    surface: u64,
     key: std::sync::Arc<str>,
     text: SharedString,
     layout: gpui::TextLayout,
@@ -785,29 +801,64 @@ struct RegEntry {
 
 thread_local! {
     static REGISTRY: RefCell<Vec<RegEntry>> = const { RefCell::new(Vec::new()) };
+    /// The surface currently painting: set by its reset canvas, which paints
+    /// before any of its text, and stamped onto each entry it registers.
+    static PAINTING_SURFACE: Cell<u64> = const { Cell::new(0) };
+    /// Surfaces whose reset painted since the latest one's previous reset.
+    static PAINTED_SURFACES: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A zero-size canvas that clears the selection registry — paint it FIRST in
 /// the transcript root (before any markdown), so each frame's registry holds
 /// exactly that frame's visible text elements in paint order.
 pub fn selection_frame_reset() -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        |_, _, _, _| REGISTRY.with(|r| r.borrow_mut().clear()),
-    )
-    .absolute()
-    .w(px(0.0))
-    .h(px(0.0))
+    selection_frame_reset_for(0)
 }
 
-/// `(element index, byte offset)` for a window position: the registered
+/// [`selection_frame_reset`] for one of several surfaces painted in the same
+/// frame (the main chat beside a side chat or subagent tab). It clears only
+/// its own surface's entries and stamps the text painted after it, so another
+/// transcript's reset can't wipe this one's drag anchor.
+///
+/// A surface that stops painting never resets again, so its entries are
+/// dropped once a full cycle of this surface's resets passes without it.
+pub fn selection_frame_reset_for(surface: u64) -> impl IntoElement {
+    canvas(|_, _, _| (), move |_, _, _, _| reset_surface(surface))
+        .absolute()
+        .w(px(0.0))
+        .h(px(0.0))
+}
+
+fn reset_surface(surface: u64) {
+    PAINTING_SURFACE.with(|s| s.set(surface));
+    PAINTED_SURFACES.with(|painted| {
+        let mut painted = painted.borrow_mut();
+        // Seeing this surface again closes a cycle: `painted` now holds every
+        // surface still on screen.
+        let cycle = painted.contains(&surface);
+        REGISTRY.with(|r| {
+            r.borrow_mut()
+                .retain(|e| e.surface != surface && (!cycle || painted.contains(&e.surface)))
+        });
+        if cycle {
+            painted.clear();
+        }
+        painted.push(surface);
+    });
+}
+
+/// `(element index within the anchor's surface, byte offset)` for a window position: the registered
 /// element whose vertical band contains it, else the nearest by vertical
 /// distance (a drag past the gutter or between blocks clamps sensibly).
 fn registry_point(position: gpui::Point<gpui::Pixels>) -> Option<(usize, usize)> {
     REGISTRY.with(|r| {
         let reg = r.borrow();
+        // A drag only resolves against its own surface, so a second
+        // transcript on screen can't capture it.
+        let surface = super::selection::anchor_surface();
+        let on_surface: Vec<&RegEntry> = reg.iter().filter(|e| e.surface == surface).collect();
         let mut best: Option<(usize, f32)> = None;
-        for (ei, entry) in reg.iter().enumerate() {
+        for (ei, entry) in on_surface.iter().enumerate() {
             let b = entry.layout.bounds();
             let dy = if position.y < b.top() {
                 f32::from(b.top() - position.y)
@@ -824,7 +875,7 @@ fn registry_point(position: gpui::Point<gpui::Pixels>) -> Option<(usize, usize)>
             }
         }
         let (ei, _) = best?;
-        let ix = match reg[ei].layout.closest_index_for_position(position) {
+        let ix = match on_surface[ei].layout.closest_index_for_position(position) {
             Ok(ix) | Err(ix) => ix,
         };
         Some((ei, ix))
@@ -836,10 +887,12 @@ fn registry_point(position: gpui::Point<gpui::Pixels>) -> Option<(usize, usize)>
 fn resolve_drag(anchor_key: &str, anchor_ix: usize, head: (usize, usize)) -> bool {
     REGISTRY.with(|r| {
         let reg = r.borrow();
-        let Some(anchor_ei) = reg.iter().position(|e| e.key.as_ref() == anchor_key) else {
+        let surface = super::selection::anchor_surface();
+        let on_surface: Vec<&RegEntry> = reg.iter().filter(|e| e.surface == surface).collect();
+        let Some(anchor_ei) = on_surface.iter().position(|e| e.key.as_ref() == anchor_key) else {
             return false; // anchor scrolled out of the frame — keep spans
         };
-        let elements: Vec<(&str, &str)> = reg
+        let elements: Vec<(&str, &str)> = on_surface
             .iter()
             .map(|e| (e.key.as_ref(), e.text.as_ref()))
             .collect();
@@ -854,6 +907,7 @@ fn resolve_drag(anchor_key: &str, anchor_ix: usize, head: (usize, usize)) -> boo
 fn register_selection_listeners(
     window: &mut Window,
     key: &std::sync::Arc<str>,
+    surface: u64,
     text: &SharedString,
     layout: &gpui::TextLayout,
 ) {
@@ -880,12 +934,12 @@ fn register_selection_listeners(
                             Ok(ix) | Err(ix) => ix,
                         };
                         let range = super::selection::word_range(&text, under);
-                        super::selection::begin_with_span(&key, &text, range);
+                        super::selection::begin_with_span_in(surface, &key, &text, range);
                     }
                     n if n >= 3 => {
-                        super::selection::begin_with_span(&key, &text, 0..text.len());
+                        super::selection::begin_with_span_in(surface, &key, &text, 0..text.len());
                     }
-                    _ => super::selection::begin(&key, ix),
+                    _ => super::selection::begin_in(surface, &key, ix),
                 }
                 window.refresh();
             } else if super::selection::clear_if_owner(&key) {
@@ -1266,6 +1320,84 @@ pub fn runs_for_syntax_line_with_plain(
 mod tests {
     use super::*;
     use crate::parser::InlineStyle;
+
+    #[test]
+    fn retain_rows_releases_rows_outside_the_viewport() {
+        let mut cache = RenderCache::default();
+        for row in ["visible", "offscreen"] {
+            cache.flats.insert(
+                (row.into(), 0, 0),
+                Rc::new(FlatText {
+                    text: "text".into(),
+                    runs: Vec::new(),
+                    links: Vec::new(),
+                    code_ranges: Vec::new(),
+                }),
+            );
+            cache.code.insert(
+                (row.into(), 0, 0),
+                Rc::new(CachedCode {
+                    code_len: 0,
+                    hl_key: (0, 0),
+                    lines: Vec::new(),
+                }),
+            );
+        }
+        cache.retain_rows(&std::collections::HashSet::from(["visible".into()]));
+        assert!(cache.flats.keys().all(|(row, _, _)| row == "visible"));
+        assert!(cache.code.keys().all(|(row, _, _)| row == "visible"));
+        assert_eq!((cache.flats.len(), cache.code.len()), (1, 1));
+        cache.retain_rows(&std::collections::HashSet::new());
+        assert!(cache.flats.is_empty() && cache.code.is_empty());
+    }
+
+    fn register(surface: u64, key: &str) {
+        REGISTRY.with(|r| {
+            r.borrow_mut().push(RegEntry {
+                surface,
+                key: key.into(),
+                text: key.to_string().into(),
+                layout: gpui::TextLayout::default(),
+            })
+        });
+    }
+
+    fn keys(surface: u64) -> Vec<String> {
+        REGISTRY.with(|r| {
+            r.borrow()
+                .iter()
+                .filter(|e| e.surface == surface)
+                .map(|e| e.key.to_string())
+                .collect()
+        })
+    }
+
+    /// One transcript's frame reset never wipes another's entries, and a
+    /// surface that stops painting is eventually dropped.
+    #[test]
+    fn surfaces_keep_their_own_selection_entries() {
+        REGISTRY.with(|r| r.borrow_mut().clear());
+        PAINTED_SURFACES.with(|p| p.borrow_mut().clear());
+        for frame in 0..2 {
+            reset_surface(1);
+            register(1, &format!("a{frame}"));
+            reset_surface(2);
+            register(2, &format!("b{frame}"));
+        }
+        // Each reset replaced only its own surface's entries.
+        assert_eq!(keys(1), ["a1"]);
+        assert_eq!(keys(2), ["b1"]);
+
+        // Surface 2 closes: surface 1 keeps painting and, after a cycle, the
+        // dead surface's entries are gone.
+        for frame in 0..3 {
+            reset_surface(1);
+            register(1, &format!("c{frame}"));
+        }
+        assert_eq!(keys(1), ["c2"]);
+        assert!(keys(2).is_empty());
+        REGISTRY.with(|r| r.borrow_mut().clear());
+    }
 
     /// A token span recolors exactly its own bytes and nothing else — the
     /// property that makes highlighting pure paint.

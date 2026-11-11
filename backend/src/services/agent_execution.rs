@@ -233,6 +233,11 @@ fn assert_pinned(field: &str, requested: Option<&str>, pinned: Option<&str>) -> 
 /// detached child workspace. The durable thread remains the authorization
 /// principal; execution/workspace ids only select isolated ephemeral and
 /// detached state.
+///
+/// `waiting` is told `true` while the cell waits for Python to be ready — the
+/// host's setup, minutes on a first launch, or a cold kernel importing the
+/// analysis stack — and `false` once it stops waiting, so a host can say so
+/// rather than claim the cell is running.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_python_cell_inner(
     pool: &SqlitePool,
@@ -244,9 +249,10 @@ pub async fn run_python_cell_inner(
     code: String,
     requested_scope: PythonScopeInput,
     turn_message_id: Option<String>,
-    current_user_id: Option<String>,
+    current_user_id: &str,
     execution_id: Option<String>,
     draft_id: Option<String>,
+    waiting: &(dyn Fn(bool) + Sync),
 ) -> Result<PythonCellResult, String> {
     let execution_id = resolve_execution_id(&thread_id, execution_id, draft_id.as_deref())?;
     // The lifecycle lease begins before any database or binding work. Deletion
@@ -255,13 +261,10 @@ pub async fn run_python_cell_inner(
     let lease = service.claim_cell(&execution_id)?;
     let cancel = lease.cancel_token();
 
-    let thread = crate::database::local::agent_threads::get_thread(
-        pool,
-        &thread_id,
-        current_user_id.as_deref(),
-    )
-    .await
-    .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
+    let thread =
+        crate::database::local::agent_threads::get_thread(pool, &thread_id, current_user_id)
+            .await
+            .map_err(|e| format!("agent thread '{thread_id}' is not available: {e}"))?;
 
     let operation_scope = match turn_message_id.as_deref() {
         Some(turn_message_id) => {
@@ -291,9 +294,7 @@ pub async fn run_python_cell_inner(
         }
         None => None,
     };
-    let thread =
-        crate::agent::context::execution_thread(pool, &thread_id, current_user_id.as_deref())
-            .await?;
+    let thread = crate::agent::context::execution_thread(pool, &thread_id, current_user_id).await?;
 
     let mut resolved = resolve_scope(pool, &thread, requested_scope).await?;
     if let Some(draft) = draft_id.as_deref() {
@@ -309,7 +310,34 @@ pub async fn run_python_cell_inner(
     }
     let scope = resolved.bindings;
     // Waits for the host's Python setup, which a stop can cut short.
-    let workspace = service.workspace_for_cell(&lease).await?;
+    let setup_running = service.running_setup().is_some();
+    if setup_running {
+        waiting(true);
+    }
+    let workspace = service.workspace_for_cell(&lease).await;
+    if setup_running {
+        waiting(false);
+    }
+    let workspace = workspace?;
+    // Stopping a turn drops this future, but not the blocking tasks below.
+    // Interrupt the kernel then, so neither a start nor a cell runs on unseen.
+    let interrupt = CancelOnDrop(Some(cancel.clone()));
+
+    // A cold kernel imports the analysis stack: seconds idle, minutes beside a
+    // stem separation. Start it on its own so the host can say Python is
+    // starting, rather than fail the cell or claim it is running.
+    if !workspace.is_kernel_alive() {
+        waiting(true);
+        let starting = Arc::clone(&workspace);
+        let token = cancel.clone();
+        let started = tokio::task::spawn_blocking(move || starting.start_kernel(&token)).await;
+        waiting(false);
+        match started {
+            Ok(Ok(())) => {}
+            Ok(Err(outcome)) => return Ok(project(&workspace, outcome)),
+            Err(e) => return Err(format!("the python kernel start task failed: {e}")),
+        }
+    }
     if cancel.is_cancelled() {
         // A stopped cell has no use for bindings, and assembling them can
         // decode a song's audio while a sign-out waits for this cell. The
@@ -369,9 +397,6 @@ pub async fn run_python_cell_inner(
         )
     });
     let host = CellHost::new(track, venue, perform);
-    // Stopping a turn drops this future, but not the blocking task below.
-    // Interrupt the kernel then, so the cell does not run on unseen.
-    let interrupt = CancelOnDrop(Some(cancel.clone()));
     let executed = tokio::task::spawn_blocking(move || {
         // Once blocking execution begins, the task itself owns admission. If
         // the async command future is dropped, deletion still cannot overtake
@@ -501,7 +526,7 @@ mod tests {
     fn pinned_track_thread() -> AgentThread {
         AgentThread {
             id: "thread".into(),
-            owner_user_id: Some("owner".into()),
+            owner_user_id: "owner".into(),
             agent_kind: "track_copilot".into(),
             subject_kind: Some("track".into()),
             subject_id: Some("track".into()),
@@ -618,10 +643,7 @@ mod tests {
         directory: &Path,
         state: tokio::sync::watch::Receiver<crate::runtime::python::PythonSetup>,
     ) -> (crate::dispatch::AppServices, String) {
-        let services = crate::test_support::signed_out(directory, directory.to_path_buf()).await;
-        crate::database::local::auth::arm_write_admission(&services.db.0, None)
-            .await
-            .unwrap();
+        let services = crate::test_support::signed_in(directory, directory.to_path_buf()).await;
         let thread = crate::database::local::agent_threads::create_thread(
             &services.db.0,
             crate::models::agent_threads::CreateAgentThreadInput {
@@ -629,7 +651,7 @@ mod tests {
                 agent_kind: "unbound".into(),
                 ..Default::default()
             },
-            None,
+            crate::test_support::TEST_OWNER,
         )
         .await
         .unwrap();
@@ -646,6 +668,7 @@ mod tests {
         services: &crate::dispatch::AppServices,
         directory: &Path,
         thread: &str,
+        waiting: &(dyn Fn(bool) + Sync),
     ) -> Result<PythonCellResult, String> {
         run_python_cell_inner(
             &services.db.0,
@@ -657,9 +680,10 @@ mod tests {
             "1".to_string(),
             PythonScopeInput::default(),
             None,
+            crate::test_support::TEST_OWNER,
             None,
             None,
-            None,
+            waiting,
         )
         .await
     }
@@ -673,7 +697,7 @@ mod tests {
             ));
         let (services, thread) = waiting_on_setup(directory.path(), state).await;
 
-        let error = run(&services, directory.path(), &thread)
+        let error = run(&services, directory.path(), &thread, &|_| {})
             .await
             .expect_err("there is no Python to run the cell on");
         assert!(
@@ -696,11 +720,36 @@ mod tests {
                 tokio::task::yield_now().await;
             }
         };
-        let (cell, ()) = tokio::join!(run(&services, directory.path(), &thread), stop);
+        let (cell, ()) = tokio::join!(run(&services, directory.path(), &thread, &|_| {}), stop);
         let cell = cell.expect("a stopped cell is a result");
         // This host has no Python, so a cell that went on to start it would
         // come back failed.
         assert_eq!(cell.status, "interrupted", "{cell:?}");
+    }
+
+    #[tokio::test]
+    async fn a_cell_says_it_is_waiting_while_python_setup_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let (setup, state) =
+            tokio::sync::watch::channel(crate::runtime::python::PythonSetup::Running);
+        let (services, thread) = waiting_on_setup(directory.path(), state).await;
+        let told = std::sync::Mutex::new(Vec::new());
+        let waiting = |waiting: bool| told.lock().unwrap().push(waiting);
+
+        let finish_setup = async {
+            while told.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+            // Nothing is installed in this cache, so the cell ends with the
+            // failed step instead of starting Python.
+            setup.send_replace(crate::runtime::python::PythonSetup::failed("setup failed"));
+        };
+        let (cell, ()) = tokio::join!(
+            run(&services, directory.path(), &thread, &waiting),
+            finish_setup
+        );
+        assert!(cell.is_err(), "{cell:?}");
+        assert_eq!(*told.lock().unwrap(), [true, false]);
     }
 
     #[tokio::test]

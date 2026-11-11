@@ -1,0 +1,319 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "prolights/lumipix",
+  "name": "Prolights Lumipix",
+  "manufacturer": "Prolights",
+  "model": "Lumipix",
+  "category": "pixel_bar",
+  "description": "Original discontinued LUMIPIX: one approximately 1 m aluminium LED batten, 12 individually controlled 3 W RGB lenses in one row. Face upward in the manufacturer main image (tilt rest 0). Central rear U mounting bracket and two smaller mounting tabs; the main photo does not have the extended end L-brackets shown in the technical drawing.",
+  "provenance": {
+   "source": "Manufacturer LUMIPIX product page, main product photo and named technical drawing; photo pass",
+   "product_page": "https://www.prolights.it/en/product/LUMIPIX",
+   "main_photo": "https://www.musiclights.it/img/LUMIPIX/0/600.png",
+   "technical_drawing": "https://support.musiclights.it/ajx.php?ID_USER=&cad=A000029232.pdf&usst=1",
+   "manual": "https://support.musiclights.it/ajx.php?ID_USER=&docs=13104&usst=1",
+   "dimensions": "Technical drawing: housing width 985 mm, face cross-section 64 mm, beam-axis housing depth 69 mm, central-bracket beam-axis total 114 mm, central bracket width 153 mm. Main-photo rest is face up, so fitted configuration is inferred as W=985 H=114 D=64 mm plus the small face lip. Published 1055x82x164 mm and drawing 1049x82x154 mm describe extended end-bracket configurations, absent from main photo.",
+   "dimension_confidence": "medium: fitted configuration and upward orientation inferred from main image; the published overall bracket configuration differs.",
+   "face": "12 lenses counted in whole-face crop photo 5; one lens per group checked in two close crops; manufacturer confirms 12x3W RGB emitters.",
+   "dmx_modes": [3, 4, 6, 7, 9, 12, 18, 36],
+   "control": "12 independently controlled RGB cells; largest mode 12x3=36 channels, no extras.",
+   "weight_kg": 3.2,
+   "rejected_photos": {
+    "1": "LUMIPIX 15 IP",
+    "2": "LUMIPIX 15IP",
+    "3": "Manual title is exact but pictured unit has 15 lenses and conflicts with the named manual and manufacturer photo.",
+    "4": "LumiPix XB100"
+   },
+   "import": {"from": "depence", "old_id": "492ce18a-eb6a-425b-896f-243bcc7f7fa5"},
+   "sources": [
+    {
+     "sha": "2fb16d511db18968d93d1b091e9a95f8d8f11dd241cd7393bae68731dd061beb",
+     "kind": "manual",
+     "verdict": "verified"
+    },
+    {
+     "sha": "3afd30d08738148e53be7a79c1c96328659b0e024baa91a6e6b12a89b7ad8db8",
+     "kind": "manual",
+     "verdict": "verified"
+    },
+    {
+     "sha": "da54c8961e240f57c78b64554f313f08ea394a9dc7b82ebb77ae3982ab1f78f3",
+     "kind": "manual",
+     "verdict": "verified"
+    },
+    {"sha": "1406bbc2699b539f9a2646575a958e9c5fd94a1b5e2864eba63cb8567b5aeeb7", "kind": "photo"},
+    {"sha": "2442adab5fab4f540f2ecdf7c88d854baaa816c5a782a0292191e6c329937cb1", "kind": "photo"},
+    {"sha": "280abc17a1ac392bb21512ce6b7ca031ab7939d2af1f96fc3436f8a02d0db074", "kind": "photo"},
+    {"sha": "364ce096d09979977876fb9253d9185aaca6d2114fe2f377e7c8dac14b34948f", "kind": "photo"},
+    {"sha": "544c1646a97fe71a6e61f3bad720eeed0b3af69bb79662bb6be8924b311638cc", "kind": "photo"},
+    {"sha": "9276a0d5b84faa718af2ea629fc21ac2736be66ab2d886835f01d25230c8b153", "kind": "photo"},
+    {"sha": "c7ef7e3811daa5cf3afc99d9404520a9cde5d8e7ddf5cb83c5b9b2cf69d8cd02", "kind": "photo"},
+    {"sha": "cad053f7ce6d3ca13484fe5b4f211519e6322dfb69044fa8741c18f229dd17cf", "kind": "photo"},
+    {"sha": "e6179471319f350e0e169264ac09657de95ffdc73c37526a49d674d8d822eae4", "kind": "photo"},
+    {"sha": "f0ee09e18adc3944a2fb77f0952b53d9e0d5af245a4fc83613035c07b944366c", "kind": "photo"}
+   ]
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.985, 0.119, 0.064]},
+ "optics": {"cct_k": {"v": 5600, "src": "control:onyx", "conf": "medium"}},
+ "materials": {},
+ "rig": {
+  "mount": {
+   "type": "bracket",
+   "legs": 0,
+   "base": {"shape": "u", "w": 0.153, "h": 0.045, "d": 0.03, "block": 0.1, "handles": false, "display": false},
+   "yoke": null
+  },
+  "joints": {
+   "pan": null,
+   "tilt": {"drive": "manual", "axis": [1, 0, 0], "range": [-90, 90], "rest": 0},
+   "spin": [],
+   "slide": []
+  },
+  "body": {
+   "shape": "bar",
+   "outline": "rect",
+   "w": 0.985,
+   "len": 0.069,
+   "d": 0.064,
+   "off": 0,
+   "tilt_y": 0.0795,
+   "features": []
+  },
+  "parts": [
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.05, 0.045, 0.003],
+    "pos": [-0.35, 0.0225, -0.0135],
+    "mat": "body",
+    "name": "mount_tab_upright"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.05, 0.003, 0.03],
+    "pos": [-0.35, 0.0015, 0],
+    "mat": "body",
+    "name": "mount_tab_foot"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.05, 0.045, 0.003],
+    "pos": [0.35, 0.0225, -0.0135],
+    "mat": "body",
+    "name": "mount_tab_upright"
+   },
+   {
+    "attach": "base",
+    "shape": "box",
+    "size": [0.05, 0.003, 0.03],
+    "pos": [0.35, 0.0015, 0],
+    "mat": "body",
+    "name": "mount_tab_foot"
+   }
+  ]
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "plane": [0.98, 0.05],
+    "layout": {"kind": "line", "n": 12, "dir": "x"},
+    "child": {
+     "cell": true,
+     "outline": "circle",
+     "fill": 0.65,
+     "layout": {"kind": "single"},
+     "child": {"fill": 1, "emitter": {"kind": "lens", "colour": "rgb"}}
+    }
+   }
+  }
+ ],
+ "cells": {"count": 12, "emitters": 12},
+ "sources": [{"cell_ranges": [[0, 11]]}],
+ "control": {
+  "native_cct_k": 5600,
+  "modes": [
+   {
+    "name": "3ch",
+    "options": {"channels": "3"},
+    "footprint": 3,
+    "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "depence"],
+     "doc": "2fb16d511db1",
+     "page": 14,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "4ch",
+    "options": {"channels": "4"},
+    "footprint": 4,
+    "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}, {"attr": "dimmer"}],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "depence"],
+     "doc": "2fb16d511db1",
+     "page": 14,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "6ch",
+    "options": {"channels": "6"},
+    "footprint": 6,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 11, "size": 6},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "depence"],
+     "doc": "2fb16d511db1",
+     "page": 14,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "7ch",
+    "options": {"channels": "7"},
+    "footprint": 7,
+    "channels": [
+     {"attr": "colour/red"},
+     {"attr": "colour/green"},
+     {"attr": "colour/blue"},
+     {"attr": "none", "ranges": [{"dmx": [0, 15]}, {"dmx": [16, 255]}]},
+     {
+      "attr": "shutter",
+      "ranges": [
+       {"dmx": [0, 10], "state": "open"},
+       {"dmx": [11, 255], "state": "strobe", "phys": [0.1, 30.0], "unit": "Hz"}
+      ]
+     },
+     {"attr": "fx/macro", "ranges": "t1"},
+     {"attr": "dimmer"}
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx"],
+     "conflict": {"depence": "slot 3: colour/macro (want none)"},
+     "doc": "2fb16d511db1",
+     "page": 14,
+     "note": "manual verified",
+     "ranges": {"agree": ["onyx"], "note": "tables taken from onyx"}
+    }
+   },
+   {
+    "name": "9ch",
+    "options": {"channels": "9"},
+    "footprint": 9,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 11, "size": 4},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "depence"],
+     "doc": "2fb16d511db1",
+     "page": 14,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "12ch",
+    "options": {"channels": "12"},
+    "footprint": 12,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 11, "size": 3},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "depence"],
+     "doc": "da54c8961e24",
+     "page": 15,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "18ch",
+    "options": {"channels": "18"},
+    "footprint": 18,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 11, "size": 2},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "depence"],
+     "doc": "2fb16d511db1",
+     "page": 14,
+     "note": "manual verified"
+    }
+   },
+   {
+    "name": "36ch",
+    "options": {"channels": "36"},
+    "footprint": 36,
+    "channels": [
+     {
+      "repeat": {
+       "cells": {"from": 0, "to": 11},
+       "channels": [{"attr": "colour/red"}, {"attr": "colour/green"}, {"attr": "colour/blue"}]
+      }
+     }
+    ],
+    "prov": {
+     "status": "manual",
+     "agree": ["manual", "onyx", "depence"],
+     "doc": "da54c8961e24",
+     "page": 15,
+     "note": "manual verified"
+    }
+   }
+  ],
+  "prov": {
+   "cells": {
+    "agree": ["onyx"],
+    "note": "12 cells; canonical order = reading order of onyx positions (prototype: check against the geometry build order)"
+   },
+   "native_cct_k": {"agree": ["onyx"]},
+   "manual": {"doc": "2fb16d511db1", "page": 14}
+  },
+  "tables": {
+   "t1": [
+    {"dmx": [0, 31], "state": "macro"},
+    {"dmx": [32, 63], "state": "macro"},
+    {"dmx": [64, 95], "state": "macro"},
+    {"dmx": [96, 114], "state": "macro"},
+    {"dmx": [115, 127], "state": "macro"},
+    {"dmx": [128, 159], "state": "macro"},
+    {"dmx": [160, 191], "state": "macro"},
+    {"dmx": [192, 223], "state": "macro"},
+    {"dmx": [224, 255], "state": "macro"}
+   ]
+  }
+ }
+}

@@ -20,7 +20,6 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | ChevronUp | chevron-up | 900 |
 | Close | xmark | 6114 |
 | Copy | copy | 5838 |
-| Cpu | microchip | 6661 |
 | Expand | expand | 950 |
 | Folder | folder | 1524 |
 | Gear | gear-2 | 1574 |
@@ -31,12 +30,8 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | Music | music-note | 6574 |
 | Network | nodes | 4714 |
 | PanelLeft | sidebar-left | 6006 |
-| PanelRight | sidebar-right | 6016 |
 | Play | media-play | 3328 |
 | Plus | plus | 5963 |
-| SquareTerminal | square-terminal | 4388 |
-| Sliders | sliders-vertical | 6022 |
-| Stage | stage | 6161 |
 | Search | magnifier | 2724 |
 | ThumbsDown | thumbs-down | 1807 |
 | ThumbsUp | thumbs-up | 1808 |

@@ -24,7 +24,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3, Vec4};
 use wgpu::util::DeviceExt;
 
-use crate::frame::{EditorObject, Frame};
+use crate::frame::Frame;
 
 /// Largest height-field side, in texels.
 pub(crate) const MAX_FIELD_TEXELS: f32 = 1024.0;
@@ -148,7 +148,7 @@ impl FieldLayout {
 pub(crate) fn in_field(frame: &Frame, index: usize) -> bool {
     let draw = &frame.draws[index];
     let key = &frame.meshes[draw.mesh].key;
-    !matches!(draw.editor_object, Some(EditorObject::Fixture(_)))
+    !crate::frame::is_luminaire(frame, draw)
         && !crate::frame::is_ground(key)
         && !key.starts_with("procedural/truss/")
 }

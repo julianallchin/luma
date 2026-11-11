@@ -23,3 +23,7 @@ serde_json = "1"
 # beam math would have produced — so the two factors are read from there rather
 # than restated here.
 fixture-kinematics = { path = "../../../backend/crates/fixture-kinematics" }
+# A library fixture's build (meshes, joints, cells, lenses) rides on its
+# `Definition`, so the stage draws exactly what the backend drives. Serde and
+# glam only, like the crate above.
+luma-fixture = { path = "../../../backend/crates/luma-fixture" }

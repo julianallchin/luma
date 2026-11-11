@@ -38,6 +38,7 @@ fn the_probe_switches_change_what_the_renderer_draws() {
         }
         nav.patch("Test Venue");
         nav.step("view settings", "toggle", "Render settings");
+        nav.step("its debug page", "toggle", "Debug");
         until("the debug switches", s =>
             s.find({role:"toggle",label:"Show probes"}) !== undefined ? s : undefined);
         const before = state();

@@ -148,6 +148,8 @@ impl Gpu {
             17,
             wgpu::ShaderStages::FRAGMENT,
         ));
+        // The cells behind the cones that a face of cells casts (`panel.rs`).
+        cluster_entries.push(storage_entry(20, wgpu::ShaderStages::FRAGMENT));
         for entry in &mut cluster_entries {
             entry.visibility |= wgpu::ShaderStages::COMPUTE;
         }
@@ -267,6 +269,12 @@ impl Gpu {
                     },
                     count: None,
                 },
+                // The cells behind the cones that a face of cells casts
+                // (`panel.rs`).
+                storage_entry(
+                    13,
+                    wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                ),
             ],
         });
 

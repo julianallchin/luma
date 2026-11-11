@@ -10,7 +10,7 @@
 //! *derived from this graph*, and the cache that holds it is a read cache over
 //! these rows. Making each of the
 //! eight callers remember to invalidate is how six of them came to forget —
-//! moving a truss left every selection expression naming a derived group
+//! moving a truss left every selection of a derived group
 //! answering with the old split. The one place that can promise the cache is
 //! not stale is the place the rows change.
 //!
@@ -197,7 +197,7 @@ pub async fn insert_node_with_id(
     placement: Option<&NodePlacement>,
 ) -> Result<(), String> {
     let venue_id = access.venue_id().to_string();
-    let principal = access.principal().map(str::to_owned);
+    let principal = access.principal().to_owned();
     sqlx::query(
         "INSERT INTO venue_nodes
              (id, uid, venue_id, kind, catalog_ref, label,
@@ -316,7 +316,7 @@ pub async fn upsert_constraint(
     target_node: &str,
     target_socket: &str,
 ) -> Result<(), String> {
-    let principal = access.principal().map(str::to_owned);
+    let principal = access.principal().to_owned();
     let venue_id = access.venue_id().to_owned();
     sqlx::query(
         "INSERT INTO venue_constraints
@@ -351,7 +351,7 @@ pub async fn set_params(
     node_id: &str,
     params: &BTreeMap<String, Option<f64>>,
 ) -> Result<(), String> {
-    let principal = access.principal().map(str::to_owned);
+    let principal = access.principal().to_owned();
     let venue_id = access.venue_id().to_owned();
     for (key, value) in params {
         match value {
@@ -406,6 +406,15 @@ pub async fn set_label(
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to rename venue node: {e}"))?;
+    // A light's node and its patch row are one fixture with one name.
+    let venue_id = access.venue_id().to_owned();
+    sqlx::query("UPDATE fixtures SET label = ? WHERE id = ? AND venue_id = ?")
+        .bind(label)
+        .bind(node_id)
+        .bind(venue_id)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|e| format!("Failed to rename the patched fixture: {e}"))?;
     rig_changed();
     Ok(())
 }

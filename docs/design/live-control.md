@@ -88,7 +88,7 @@ In Live the deck panel beside the stage shows the decks followed (or the tapped 
 - a **pattern**, which the cell is the home of: its pad (when its graph has one), its level, and a fader or button for each other fader and button node of its graph;
 - a **fader** of its own (`perform::cell(id)`), which moves every one of its targets together: patterns' levels, fader nodes of patterns' graphs, or the venue's own controls. One knob on three chases' speeds;
 - a **list** of values of one kind, colors or numbers 0–1, each a control of its own (`perform::value(id, index)`) that a pad or a MIDI key presses, and the list's own control (`perform::cell(id)`), which taps its next value; a list one place big shows as a single Next button. A value tapped sets every target: a color fades each live color of a pattern's graph it targets from the color it has now over the list's fade; a number sets each level, fader node or venue control. A color list with no targets sets the base color, or after Select the chosen effects' own colors; it may hold "below", the color below, and only it may. A number list with no targets sets nothing. Which value is on is live, in the bank. A list that steps moves on to the next value every so many bars of the set's clock (the deck's beat grid, or 4-beat bars of the tapped tempo), after the last back to the first when it loops; the engine steps it as it renders. A fader cell and a number list move only numbers and a color list only live colors: storing a layout refuses anything else, and a target whose node goes or changes kind drops out of its cell;
-- a **group**: a venue group (`group`, by name), labelled by the group unless it has a label of its own, lit while chosen;
+- a **group**: a venue group (`group`, its id, or `all`), labelled by the group unless it has a label of its own, lit while chosen;
 - **Select** and **Clear** (`perform_select`, `perform_clear`), the **master**, or **tap**.
 
 A stored layout read by a build that does not know one of its cells' kinds (such as a target or color cell of an earlier build) drops that cell as it reads the page.
@@ -126,6 +126,4 @@ Live has a chat of its own (`perform_set` threads, apart from the venue's). Its 
 
 1. **Audio features are offline only.** They are analysed per track and normalised over the whole track. For unscripted tracks, a live audio band-energy input is the "autoloop" fallback SoundSwitch users expect.
 2. **The docs have drifted.** The www architecture docs describe forms and say a pattern never holds its own graph, which is the opposite of the code. The node reference names a generator that doesn't exist.
-3. **Dead code:**
-   - The kernel's `Binding::Input` is unused: patterns copy rather than share, so nothing exposes inputs.
-   - The `clips.graph` and `inputs_json` columns are unused.
+3. **Dead code:** the `clips.graph` and `inputs_json` columns are unused.

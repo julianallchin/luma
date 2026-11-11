@@ -95,7 +95,7 @@ impl Connector {
                 .map_err(|error| error.to_string())?,
             postgrest_url: crate::config::postgrest_url(),
             powersync_url: crate::config::powersync_url(),
-            anon_key: crate::config::supabase_anon_key(),
+            anon_key: crate::config::SUPABASE_ANON_KEY.to_owned(),
         })
     }
 

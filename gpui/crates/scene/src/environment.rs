@@ -377,6 +377,10 @@ pub enum VenueEnvironment {
     },
 }
 
+/// Where a room's light dial starts while the room is being rigged, as a
+/// fraction of its travel.
+pub const WORK_LIGHT: f32 = 0.75;
+
 impl Default for VenueEnvironment {
     /// Indoor, house at full: the picture this app has always drawn.
     fn default() -> Self {
@@ -403,6 +407,35 @@ impl VenueEnvironment {
             sun_azimuth_deg: SkyParams::DUSK.sun_azimuth_deg,
             clouds: CloudCover::Clear,
             floor: Floor::default_for(false),
+        }
+    }
+
+    /// The same room with its light dial at `fraction` of its travel: the
+    /// house that bright, or the sun that far up its climb from midnight to
+    /// noon.
+    #[must_use]
+    pub fn lit_at(self, fraction: f32) -> Self {
+        let fraction = if fraction.is_finite() {
+            fraction.clamp(0.0, 1.0)
+        } else {
+            WORK_LIGHT
+        };
+        match self {
+            Self::Indoor { floor, .. } => Self::Indoor {
+                house_level: fraction,
+                floor,
+            },
+            Self::Outdoor {
+                sun_azimuth_deg,
+                clouds,
+                floor,
+                ..
+            } => Self::Outdoor {
+                sun_elevation_deg: fraction * 180.0 - 90.0,
+                sun_azimuth_deg,
+                clouds,
+                floor,
+            },
         }
     }
 

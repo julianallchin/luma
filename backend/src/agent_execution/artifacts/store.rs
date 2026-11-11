@@ -474,30 +474,6 @@ impl ArtifactStore {
         Ok(collected)
     }
 
-    /// Collect every imported artifact no revision holds a lease on. Used after
-    /// an app restart, where in-memory leases are gone by definition.
-    pub fn collect_unleased(&mut self) -> Result<Vec<ArtifactId>> {
-        let orphans: Vec<ArtifactId> = self
-            .entries
-            .iter()
-            .filter(|(id, e)| e.ownership == ArtifactOwnership::Imported && !self.is_leased(id))
-            .map(|(id, _)| id.clone())
-            .collect();
-        let mut collected = Vec::new();
-        for id in orphans {
-            let rel = self.entries[&id].descriptor.rel_path.clone();
-            let path = self.resolve(&rel)?;
-            match fs::remove_file(&path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
-            }
-            self.entries.remove(&id);
-            collected.push(id);
-        }
-        Ok(collected)
-    }
-
     /// Write a manifest into `inputs/` and return its workspace-relative path.
     pub fn write_manifest(
         &self,
@@ -896,18 +872,6 @@ mod tests {
         assert!(s.release(&r).unwrap().is_empty());
         assert!(fig.exists());
         assert!(s.descriptor(&desc.id).is_some());
-    }
-
-    #[test]
-    fn collect_unleased_removes_orphaned_inputs_only() {
-        let (_d, mut s) = store();
-        let a = s.write_raw_f32(&[1.0]).unwrap();
-        let b = s.write_raw_f32(&[2.0]).unwrap();
-        let r = BindingRevision::new();
-        s.lease(&r, [a.id.clone()]).unwrap();
-        let collected = s.collect_unleased().unwrap();
-        assert_eq!(collected, vec![b.id]);
-        assert!(s.descriptor(&a.id).is_some());
     }
 
     #[test]

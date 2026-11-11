@@ -8,7 +8,7 @@ use luma_ui::{float, glass};
 #[derive(Default)]
 pub(super) struct DockMotion {
     tooltip: Transition,
-    pub(super) switches: [Transition; 8],
+    pub(super) switches: [Transition; 7],
     knob_hovered: bool,
     light_dragging: bool,
     knob_bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
@@ -89,10 +89,12 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .w(px(268.))
         .p(px(14.))
         .gap(px(12.))
-        .child(float::label("View settings"))
-        .child(super::view_controls(state, app))
-        .child(float::divider())
-        .child(section("Debug", debug_rows(state, app)));
+        .child(page_tabs(state.settings_page, app))
+        .child(match state.settings_page {
+            Page::Camera => super::camera_page(state, app).into_any_element(),
+            Page::View => super::view_page(state, app).into_any_element(),
+            Page::Debug => debug_rows(state, app),
+        });
     let open = state.settings.is_open();
     let camera = luma_ui::icon_toggle(luma_ui::icons::IconName::Camera, open)
         .id("visualizer-settings")
@@ -151,6 +153,48 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
+/// A page of the view settings card. One shows at a time, so the card stays
+/// short enough to take in.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Page {
+    /// How scene light becomes the picture.
+    #[default]
+    Camera,
+    /// What the stage costs to draw, and the chrome over it.
+    View,
+    /// Probes and the camera export.
+    Debug,
+}
+
+/// The card's pages, as one choice across its top.
+fn page_tabs(open: Page, app: &Entity<Luma>) -> AnyElement {
+    let mut tabs = float::segmented().w_full();
+    for (name, page) in [
+        ("Camera", Page::Camera),
+        ("View", Page::View),
+        ("Debug", Page::Debug),
+    ] {
+        let app = app.clone();
+        tabs = tabs.child(
+            float::segment(name, open == page, name)
+                .id(gpui::ElementId::Name(
+                    format!("settings-page-{name}").into(),
+                ))
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| {
+                        if let Some(state) = this.visualizer_mut() {
+                            state.settings_page = page;
+                        }
+                        cx.notify();
+                    });
+                })
+                .agent_node(Role::Toggle, name),
+        );
+    }
+    tabs.agent_node(Role::Card, "Settings page")
+        .into_any_element()
+}
+
 /// The dock's width, which the settings card hangs to the left of.
 const DOCK_WIDTH: f32 = 40.;
 
@@ -158,9 +202,11 @@ const DOCK_WIDTH: f32 = 40.;
 /// panel's cached region with it, since a cached region is not measured.
 pub(crate) const ENVIRONMENT_PANEL_WIDTH: f32 = 260.;
 
-/// The room itself, beside the stage on the venue tab: indoor or outdoor, the sun and the
-/// haze. These are venue truth, saved on the venue row, so they live with the
-/// venue and not with the render settings, which are about the picture.
+/// The column beside the stage on the venue tab. With a piece selected it is
+/// that piece's placement; with nothing selected it is the room itself: indoor
+/// or outdoor, the sun and the haze. Those are venue truth, saved on the venue
+/// row, so they live with the venue and not with the render settings, which
+/// are about the picture.
 ///
 /// The panel is drawn in a cached region of its own, not with the stage, so the
 /// stage's frames do not reach it: a switch that is still sliding asks for its
@@ -170,6 +216,27 @@ pub(crate) fn environment_panel(
     app: &Entity<Luma>,
     window: &mut Window,
 ) -> AnyElement {
+    // A selected piece takes the column: its placement is what is being
+    // edited, and the room is what is edited when nothing in it is.
+    let selection = state
+        .build
+        .as_ref()
+        .and_then(|build| crate::stage::selection_controls(build, app));
+    if let Some(controls) = selection {
+        return column(
+            "Placement",
+            div()
+                .id("scene-object-controls")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .px(px(12.))
+                .pb(px(12.))
+                .child(controls),
+        )
+        .agent_node(Role::Card, "Selected object")
+        .into_any_element();
+    }
     let environment = state.venue_environment();
     let rows = div()
         .id("venue-environment-scroll")
@@ -196,6 +263,13 @@ pub(crate) fn environment_panel(
     if state.settings_motion.borrow().switching() {
         window.request_animation_frame();
     }
+    column("Environment", rows)
+        .agent_node(Role::Card, "Venue environment")
+        .into_any_element()
+}
+
+/// The column beside the stage: a title over whatever it is showing.
+fn column(title: &'static str, body: impl IntoElement) -> Div {
     div()
         .flex_none()
         .w(px(ENVIRONMENT_PANEL_WIDTH))
@@ -213,14 +287,12 @@ pub(crate) fn environment_panel(
                 .px(px(12.))
                 .py(px(8.))
                 .text_size(px(12.5))
-                .child("Environment"),
+                .child(title),
         )
-        .child(rows)
-        .agent_node(Role::Card, "Venue environment")
-        .into_any_element()
+        .child(body)
 }
 
-/// The Debug section: the reflection probes, their debug balls, and the
+/// The Debug page: the reflection probes, their debug balls, and the
 /// camera export.
 fn debug_rows(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
     let probes = state.render_controls.probes;
@@ -282,8 +354,11 @@ impl Render for LightDrag {
     }
 }
 
+/// The room's light dial: the venue's own light, saved with it — or, on the
+/// Rig page, the work light the room is built under, which is not.
 fn light_slider(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
-    let environment = state.venue_environment();
+    let environment = state.environment();
+    let rigging = state.rigging;
     let tooltip = {
         let mut motion = state.settings_motion.borrow_mut();
         let visible = motion.knob_hovered || motion.light_dragging;
@@ -423,6 +498,16 @@ fn light_slider(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                 - (f32::from(event.event.position.y - event.bounds.top()) - 6.) / 100.)
                 .clamp(0., 1.);
             app.update(cx, |this, cx| {
+                if rigging {
+                    if let Some(state) = this.visualizer_mut() {
+                        state.set_work_light(fraction);
+                    }
+                    cx.notify();
+                    return;
+                }
+                if let Some(state) = this.visualizer_mut() {
+                    state.toured(tour::Move::Lights);
+                }
                 this.set_visualizer_environment(
                     if indoor {
                         VenueEnvironment::indoor(fraction)
@@ -457,6 +542,7 @@ impl Luma {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
+        state.tour_dialled();
         state.set_venue_environment(environment);
         state.environment_edited = true;
         *state.environment_pending.borrow_mut() = Some(environment);
@@ -515,13 +601,14 @@ impl Luma {
     ///
     /// The three tiers of this panel meet here. Haze is **venue truth** and goes
     /// on the venue row; grid and gizmos are **local device settings** and follow
-    /// the operator between rooms; fixture shadows is a session dial and outlives
-    /// nothing.
+    /// the operator between rooms; the probe switches are session dials and
+    /// outlive nothing.
     pub(super) fn toggle_view_control(&mut self, control: ViewToggle, cx: &mut Context<Self>) {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
-        state.render_controls.toggle(control);
+        let metered = state.stage.borrow().exposure_ev;
+        state.render_controls.toggle(control, metered);
         let (grid, gizmos) = (
             state.render_controls.grid_enabled,
             state.render_controls.gizmos_enabled,
@@ -537,7 +624,7 @@ impl Luma {
             }
             ViewToggle::AutoExposure | ViewToggle::Footage => self.save_look(cx),
             // Session dials: they outlive nothing.
-            ViewToggle::FixtureShadows | ViewToggle::ReflectionProbes | ViewToggle::ShowProbes => {}
+            ViewToggle::ReflectionProbes | ViewToggle::ShowProbes => {}
         }
         cx.notify();
     }
@@ -872,9 +959,9 @@ fn floor_rows(environment: VenueEnvironment, app: &Entity<Luma>) -> Div {
     )
 }
 
-/// A titled group of rows on the View settings card: the card's quiet
+/// A titled group of rows on the environment panel: a quiet
 /// [`float::label`] over the rows it names.
-pub(super) fn section(title: &'static str, rows: impl IntoElement) -> Div {
+fn section(title: &'static str, rows: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_col()

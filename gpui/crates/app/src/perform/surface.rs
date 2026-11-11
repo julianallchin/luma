@@ -38,7 +38,7 @@ pub(crate) struct Surface {
 pub(crate) struct Adding {
     pub(crate) column: u16,
     pub(crate) row: u16,
-    /// A selection expression: a group's name, or `all`.
+    /// A group's id, or `all`.
     pub(crate) group: String,
 }
 

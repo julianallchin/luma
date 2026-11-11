@@ -205,8 +205,8 @@ fn lit_interval_node(li: u32, ray: SceneRay, a: f32, b: f32, j: u32) -> f32 {
         let d2 = dot(q, q);
         let distance = sqrt(d2);
         let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
-        let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
-        let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5);
+        let phase = haze_phase(-dot(q, ray.dir) / max(distance, 1e-4));
+        let source_weight = 1.0 - grid_share(rest.handover, distance);
         let world = haze.camera_pos.xyz + ray.dir * t;
         let field = mix(left_field, right_field, node * 0.5 + 0.5);
         let value = angular * phase * beam_range_falloff(distance, core.range) * source_weight
@@ -258,16 +258,16 @@ fn quad_interpolate_scalar(sum: f32) -> f32 {
     return (w_o * sum + w_h * sh + w_v * sv + w_d * sd) / (w_o + w_h + w_v + w_d);
 }
 
-fn quad_scale_shared(li: u32, sum: f32) -> vec3<f32> {
+fn quad_scale_shared(li: u32, ray: SceneRay, span: vec2<f32>, sum: f32) -> vec3<f32> {
     let rest = light_rest[li];
-    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    let tint = beam_tint(li);
     return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
 }
 
 // The shared quadrature plus this pixel's own remainder behind the quad's
 // nearest hit.
 fn quad_scatter(li: u32, ray: SceneRay, span: vec2<f32>) -> vec3<f32> {
-    var result = quad_scale_shared(li, quad_interpolate_scalar(quad_shared_scalar(li, span)));
+    var result = quad_scale_shared(li, ray, span, quad_interpolate_scalar(quad_shared_scalar(li, span)));
     if ray.hit_dist - quad_hit_min > max(QUAD_GATE_M, quad_hit_min * QUAD_GATE_FRAC) && span.y > quad_hit_min {
         result += lit_interval(li, ray, max(span.x, quad_hit_min), span.y);
     }
@@ -497,7 +497,7 @@ fn beam_scatter_cached(li: u32, ray: SceneRay) -> vec3<f32> {
         if live && !direct && !walked && cache_count <= CACHE_K { _ = cache_store(cache_block, lookup.key, lookup.gen); }
     }
     if share {
-        let whole = (direct || walked) && light_rest[li].gobo < 0.5 && quad_apex_clear(li, ray);
+        let whole = (direct || walked) && light_rest[li].gobo < 0.5 && light_rest[li].panel < 0.5 && quad_apex_clear(li, ray);
         if subgroupBallot(whole).x == 0xFFFFFFFFu { return quad_scatter(li, ray, span); }
     }
     if !live { return vec3<f32>(0.0); }

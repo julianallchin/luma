@@ -71,24 +71,65 @@ fn a_frame_shows_the_share_of_its_interval_the_gate_is_on() {
         let frame = frame(&catalogue, scene, end, interval);
         crate::common::mean_rgb(&renderer.render(&frame, WIDTH, HEIGHT, 16).unwrap())
     };
-    let full = mean(&steady, 0.14, footage::FRAME_S);
-    // At 10 Hz the gate is on over [0.1, 0.15]. Frames of 30, 45, 60 and
-    // 144 per second inside it all show the steady light's brightness...
+    // The gate's first flash after a second in, and the dark after it, read
+    // off the gate as the output tick samples it.
+    let strobe = scene
+        .state
+        .values()
+        .map(|s| s.strobe)
+        .fold(0.0_f32, f32::max);
+    let on = |t: f64| {
+        luma_scene::strobe::gain(
+            strobe,
+            luma_scene::strobe::Slice {
+                open: t,
+                length: 0.0,
+            },
+        ) > 0.5
+    };
+    let step = 1e-4;
+    let mut t = 1.0;
+    while on(t) {
+        t += step;
+    }
+    while !on(t) {
+        t += step;
+    }
+    let flash = t;
+    while on(t) {
+        t += step;
+    }
+    let edge = t;
+    while !on(t) {
+        t += step;
+    }
+    let next = t;
+    let full = mean(&steady, flash + 0.01, footage::FRAME_S);
+    // Frames of 30, 45, 60 and 144 per second inside a flash all show the
+    // steady light's brightness...
     for interval in [1.0 / 30.0, 1.0 / 45.0, 1.0 / 60.0, 1.0 / 144.0] {
-        let lit = mean(&scene, 0.1 + interval + 0.005, interval);
+        if interval >= edge - flash {
+            continue;
+        }
+        let lit = mean(
+            &scene,
+            flash + interval + (edge - flash - interval) / 2.0,
+            interval,
+        );
         assert!(
             (lit - full).abs() < 0.01 * full,
             "{interval}: {lit} vs steady {full}"
         );
     }
-    // ...a frame inside the off half shows none of it...
-    let dark = mean(&scene, 0.19, footage::FRAME_S);
+    // ...a frame inside the dark between flashes shows none of it...
+    let gap = (next - edge).min(footage::FRAME_S);
+    let dark = mean(&scene, edge + gap, gap * 0.9);
     assert!(
         full > dark + 1.0,
         "the flash lights the stage: {full} vs {dark}"
     );
-    // ...and a frame across the edge at 0.15 shows part of it.
-    let part = mean(&scene, 0.15 + footage::FRAME_S / 2.0, footage::FRAME_S);
+    // ...and a frame across the edge shows part of it.
+    let part = mean(&scene, edge + gap / 2.0, gap);
     assert!(
         dark + 0.5 < part && part < full - 0.5,
         "half on: {dark} < {part} < {full}"

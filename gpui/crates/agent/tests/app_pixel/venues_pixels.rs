@@ -6,7 +6,7 @@ use gpui_agent::fixture::session;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::{px, size, App, AppContext as _, Window};
 use gpui_agent::shots::{differing_fraction, CHANNEL_NOISE};
@@ -14,7 +14,10 @@ use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use serde_json::Value;
 use support::image::{edge_energy, preserve};
 
-const LAST_VENUE: &str = "last-venue";
+/// Where the fixture account's last venue is remembered.
+fn last_venue() -> String {
+    format!("last-venue:{}", session::PRINCIPAL)
+}
 
 async fn seed(dir: &Path, remembered: bool) {
     let db = luma_lib::database::local::database::init_app_db_at(dir)
@@ -30,7 +33,7 @@ async fn seed(dir: &Path, remembered: bool) {
         .await
         .expect("failed to open pixel fixture state database");
     if remembered {
-        luma_lib::database::local::auth::set_session_item(&state.0, LAST_VENUE, "venue")
+        luma_lib::database::local::auth::set_session_item(&state.0, &last_venue(), "venue")
             .await
             .expect("failed to seed pixel preference");
     }
@@ -366,260 +369,4 @@ fn production_venue_routes_are_frosted_distinct_and_viewport_safe() {
             "venue route card is a flat placeholder"
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// Frame cost
-// ---------------------------------------------------------------------------
-
-/// The venue dialog with motion left **on**, for measuring rather than
-/// asserting. [`support::runtime`] snaps every animation so the gates above
-/// read final geometry without racing a slide; a cost measurement needs the
-/// slide it skips.
-fn paced_harness(dir: &Path) -> Harness {
-    let root: gpui_agent::RootFactory = Arc::new(move |window: &mut Window, cx: &mut App| {
-        luma_app::init(cx);
-        let library = luma_app::Library::open().expect("failed to open pixel library");
-        let luma = cx.new(|cx| luma_app::Luma::new(library, cx));
-        cx.new(|cx| gpui_component::Root::new(luma, window, cx).bordered(false))
-            .into()
-    });
-    Harness::headless(
-        Config {
-            mode: Mode::Pixel,
-            window_size: size(px(1280.0), px(800.0)),
-            call_timeout: GPU_LIVENESS_TIMEOUT,
-            runtime: luma_ui::runtime::Runtime {
-                config_dir: Some(dir.to_path_buf()),
-                reduced_motion: false,
-                motion_scale: 1.0,
-                ..luma_ui::runtime::Runtime::default()
-            },
-            ..Config::default()
-        },
-        root,
-    )
-    .expect("failed to start paced venue harness")
-}
-
-/// Per-frame CPU cost of the production venue dialog: the shell behind it, the
-/// settled card over that shell, and the browse→create morph.
-///
-/// `#[ignore]` because it is an instrument, not a gate. The shell row is the
-/// baseline; the gap to the settled row is what the card and its frosted
-/// backdrop cost every frame they are up, and the gap to the morphing row is
-/// what the animation adds on top.
-#[test]
-#[ignore = "measurement, not a gate"]
-fn venue_dialog_frame_cost() {
-    let dir = fixture_dir("frame-cost", true);
-    let mut harness = paced_harness(&dir);
-    let out = harness.run(
-        &support::script(
-            r#"
-        until("the restored venue shell", (s) =>
-            s.find({ role: "button", label: "Pixel Venue" }) !== undefined);
-        const shellFrom = app.frames(1).frame;
-        app.frames(24, { waitMs: 16 });
-        const shellTo = app.frames(1).frame;
-
-        // Re-snapshot: the handle from `until` is 24 frames stale by now.
-        app.click(app.snapshot().find({ role: "button", label: "Pixel Venue" }));
-        until("the venue menu", (s) =>
-            s.find({ role: "row", label: "New venue…" }) !== undefined);
-        app.frames(12, { waitMs: 16 });
-        const settledFrom = app.frames(1).frame;
-        app.frames(24, { waitMs: 16 });
-        const settledTo = app.frames(1).frame;
-
-        app.click(app.snapshot().find({ role: "row", label: "New venue…" }));
-        app.frames(24, { waitMs: 16 });
-        const morphTo = app.frames(1).frame;
-        ({ shellFrom, shellTo, settledFrom, settledTo, morphTo,
-           frames: app.timings().frames })
-        "#,
-        ),
-        GPU_LIVENESS_TIMEOUT,
-    );
-    let frames = out["frames"].as_array().unwrap();
-    let number = |key: &str| out[key].as_u64().unwrap();
-    println!("\n--- venue dialog frame cost (pixel, motion on, 1280x800) ---");
-    let shell = support::cost::summarize(
-        frames,
-        number("shellFrom"),
-        number("shellTo"),
-        "shell, no dialog",
-    );
-    let settled = support::cost::summarize(
-        frames,
-        number("settledFrom"),
-        number("settledTo"),
-        "settled venue menu",
-    );
-    let morphing = support::cost::summarize(
-        frames,
-        number("settledTo"),
-        number("morphTo"),
-        "menu to create dialog",
-    );
-    println!(
-        "dialog costs {:.2} ms/frame over the shell",
-        settled - shell
-    );
-    println!(
-        "morph adds   {:.2} ms/frame over settled\n",
-        morphing - settled
-    );
-
-    // `drawMs` is the scene build and stops at the renderer's door — see
-    // `app.timings()`. The frosted backdrop is a GPU pass, so the only way to
-    // see it from here is wall clock across a free-running pump.
-    println!("--- wall clock, free-running pump (includes the GPU) ---");
-    let create = pump_wall(&mut harness, 60, "create route up");
-    harness.run(
-        &support::script(r#"app.key("escape"); app.frames(20, { waitMs: 16 });"#),
-        GPU_LIVENESS_TIMEOUT,
-    );
-    let none = pump_wall(&mut harness, 60, "no dialog");
-    println!("dialog costs {:.2} ms/frame of wall\n", create - none);
-}
-
-/// Wall-clock milliseconds per frame across a free-running pump, which is the
-/// only number here that has the GPU in it.
-fn pump_wall(harness: &mut Harness, frames: usize, label: &str) -> f64 {
-    // Once to warm whatever the first frame allocates, then the measured run.
-    harness.run(
-        &support::script(&format!("app.frames({frames})")),
-        GPU_LIVENESS_TIMEOUT,
-    );
-    let start = Instant::now();
-    harness.run(
-        &support::script(&format!("app.frames({frames})")),
-        GPU_LIVENESS_TIMEOUT,
-    );
-    let per = start.elapsed().as_secs_f64() * 1000.0 / frames as f64;
-    println!("{label:<22} wall {per:6.2} ms/frame over {frames} frames");
-    per
-}
-
-/// Seed enough venues that the browse route is a real list rather than a line.
-///
-/// The one-venue fixture the gates use is the wrong shape for a cost
-/// measurement: [`morph::card`] rebuilds every layer's content every frame, so
-/// what a morph actually costs is proportional to the content it is carrying,
-/// and a card holding one row carries almost none.
-async fn seed_many(dir: &Path, venues: usize) {
-    let db = luma_lib::database::local::database::init_app_db_at(dir)
-        .await
-        .expect("failed to open venue cost fixture database");
-    for index in 0..venues {
-        sqlx::query("INSERT INTO venues (id, uid, name, description) VALUES (?, ?, ?, ?)")
-            .bind(format!("venue-{index:04}"))
-            .bind(session::PRINCIPAL)
-            .bind(format!("Pixel Venue {index:04}"))
-            .bind(format!(
-                "A seeded room for frame-cost measurement, number {index}"
-            ))
-            .execute(&db.0)
-            .await
-            .expect("failed to seed venue");
-    }
-    session::signed_in(dir).await;
-    let state = luma_lib::database::local::state::init_state_db_at(dir)
-        .await
-        .expect("failed to open venue cost fixture state database");
-    luma_lib::database::local::auth::set_session_item(&state.0, LAST_VENUE, "venue-0000")
-        .await
-        .expect("failed to seed venue preference");
-    db.0.close().await;
-    state.0.close().await;
-}
-
-fn heavy_fixture_dir(venues: usize) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("luma-gpui-venue-cost-heavy-{}", std::process::id()));
-    fs::remove_dir_all(&dir).ok();
-    fs::create_dir_all(&dir).expect("failed to create venue cost fixture directory");
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("failed to start venue cost fixture runtime")
-        .block_on(seed_many(&dir, venues));
-    dir
-}
-
-/// The same measurement over a card carrying a long list, which is the shape
-/// every content-rich dialog in the app actually has.
-#[test]
-#[ignore = "measurement, not a gate"]
-fn venue_dialog_frame_cost_with_a_long_list() {
-    const VENUES: usize = 200;
-    let dir = heavy_fixture_dir(VENUES);
-    let mut harness = paced_harness(&dir);
-    let out = harness.run(
-        &support::script(
-            r#"
-        until("the restored venue shell", (s) =>
-            s.find({ role: "button", label: "Pixel Venue 0000" }) !== undefined);
-        const shellFrom = app.frames(1).frame;
-        app.frames(24, { waitMs: 16 });
-        const shellTo = app.frames(1).frame;
-
-        app.click(app.snapshot().find({ role: "button", label: "Pixel Venue 0000" }));
-        until("the venue menu", (s) =>
-            s.find({ role: "row", label: "New venue…" }) !== undefined);
-        app.frames(12, { waitMs: 16 });
-        const settledFrom = app.frames(1).frame;
-        app.frames(24, { waitMs: 16 });
-        const settledTo = app.frames(1).frame;
-
-        // Only the flight itself: a wider window averages in the create route,
-        // which is a handful of controls and reads as the morph getting cheaper.
-        app.click(app.snapshot().find({ role: "row", label: "New venue…" }));
-        app.frames(12, { waitMs: 16 });
-        const flightTo = app.frames(1).frame;
-        app.frames(24, { waitMs: 16 });
-        const afterTo = app.frames(1).frame;
-        ({ shellFrom, shellTo, settledFrom, settledTo, flightTo, afterTo,
-           frames: app.timings().frames })
-        "#,
-        ),
-        GPU_LIVENESS_TIMEOUT,
-    );
-    let frames = out["frames"].as_array().unwrap();
-    let number = |key: &str| out[key].as_u64().unwrap();
-    println!("\n--- venue dialog frame cost, {VENUES} venues (pixel, motion on, 1280x800) ---");
-    let shell = support::cost::summarize(
-        frames,
-        number("shellFrom"),
-        number("shellTo"),
-        "shell, no dialog",
-    );
-    let browse = support::cost::summarize(
-        frames,
-        number("settledFrom"),
-        number("settledTo"),
-        "venue menu (list)",
-    );
-    let flight = support::cost::summarize(
-        frames,
-        number("settledTo"),
-        number("flightTo"),
-        "menu->create flight",
-    );
-    let create = support::cost::summarize(
-        frames,
-        number("flightTo"),
-        number("afterTo"),
-        "create route (settled)",
-    );
-    println!(
-        "the list costs  {:.2} ms/frame over the shell",
-        browse - shell
-    );
-    println!(
-        "the flight costs {:.2} ms/frame over the list it is leaving",
-        flight - browse
-    );
-    println!("…and lands on a route costing {create:.2} ms/frame\n");
 }

@@ -46,9 +46,9 @@ pub struct Head {
     /// The frame the head hangs in, in data space: the same pose the stage
     /// draws the beam from.
     mount: Mount,
-    /// How far pan and tilt reach either way from home, in degrees. Zero on
-    /// an axis the mode has no channel for.
-    reach: [f64; 2],
+    /// How far pan and tilt reach, `[lo, hi]` degrees from home. `[0, 0]`
+    /// on an axis the mode has no channel for.
+    travel: [[f64; 2]; 2],
 }
 
 impl Head {
@@ -61,27 +61,24 @@ impl Head {
         if moves == [false, false] {
             return None;
         }
-        let range = definition.focus_range();
-        Some(Self::with_range(
+        let travel = definition.travel();
+        Some(Self::with_travel(
             mount,
             std::array::from_fn(|axis| {
                 if moves[axis] {
-                    f64::from(range[axis])
+                    travel[axis].map(f64::from)
                 } else {
-                    0.0
+                    [0.0; 2]
                 }
             }),
         ))
     }
 
-    /// A head hung at `mount` whose pan and tilt each turn `range` degrees
-    /// end to end, centred on home.
+    /// A head hung at `mount` whose pan and tilt each turn over `travel`,
+    /// `[lo, hi]` degrees from home.
     #[must_use]
-    pub fn with_range(mount: Mount, range: [f64; 2]) -> Self {
-        Self {
-            mount,
-            reach: range.map(|degrees| degrees / 2.0),
-        }
+    pub fn with_travel(mount: Mount, travel: [[f64; 2]; 2]) -> Self {
+        Self { mount, travel }
     }
 
     /// Where the head points with pan and tilt at the middle of their ranges,
@@ -112,17 +109,13 @@ impl Head {
         let (sin_p, cos_p) = f64::from(direct.pan_rad()).sin_cos();
         let local = [sin_t * sin_p, sin_t * cos_p, -cos_t];
 
-        let [pan_reach, tilt_reach] = self.reach;
+        let [[pan_lo, pan_hi], [tilt_lo, tilt_hi]] = self.travel;
         let pan = f64::from(direct.pan_rad()).to_degrees();
         let previous = previous.map(f64::from);
         let pans = (-4..=4)
             .map(|turns| pan + 180.0 * f64::from(turns))
-            .filter(|p| p.abs() <= pan_reach)
-            .chain([
-                -pan_reach,
-                pan_reach,
-                previous[0].clamp(-pan_reach, pan_reach),
-            ]);
+            .filter(|p| (pan_lo..=pan_hi).contains(p))
+            .chain([pan_lo, pan_hi, previous[0].clamp(pan_lo, pan_hi)]);
 
         let candidates: Vec<([f64; 2], f64)> = pans
             .map(|pan| {
@@ -130,7 +123,7 @@ impl Head {
                 // `a sin t + b cos t` is its cosine to the aim at tilt `t`.
                 let (sin, cos) = pan.to_radians().sin_cos();
                 let (a, b) = (local[0] * sin + local[1] * cos, -local[2]);
-                let tilt = a.atan2(b).to_degrees().clamp(-tilt_reach, tilt_reach);
+                let tilt = a.atan2(b).to_degrees().clamp(tilt_lo, tilt_hi);
                 let (sin_t, cos_t) = tilt.to_radians().sin_cos();
                 ([pan, tilt], a * sin_t + b * cos_t)
             })
@@ -461,12 +454,14 @@ mod tests {
     /// A moving head with pan and tilt, `pan_max` and `tilt_max` degrees.
     fn mover(pan_max: u32, tilt_max: u32) -> FixtureDefinition {
         let channel = |name: &str, preset: &str| Channel {
+            lowered: None,
             name: name.into(),
             preset: Some(preset.into()),
             group: None,
             capabilities: vec![],
         };
         FixtureDefinition {
+            library: None,
             manufacturer: "Test".into(),
             model: "Mover".into(),
             type_: "Moving Head".into(),
@@ -652,8 +647,7 @@ mod tests {
     // -- move in black ------------------------------------------------------
 
     /// A clip on the one head, compiled on a one-beat-per-second clock.
-    fn layer(mut clip: p::Clip, z: i64) -> CompiledAnnotation {
-        clip.selection_seed = None;
+    fn layer(clip: p::Clip, z: i64) -> CompiledAnnotation {
         let cells = vec![p::Cell {
             id: "fx:0".into(),
             group: "movers".into(),

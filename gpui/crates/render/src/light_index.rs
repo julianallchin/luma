@@ -341,7 +341,9 @@ pub(crate) struct LightRest {
     pub color: [f32; 3],
     pub intensity: f32,
     pub cos_field: f32,
-    pub wash: f32,
+    /// Where the shared fog grid starts to carry this cone's haze, metres
+    /// from its lens ([`crate::fog_grid::handover`]).
+    pub handover: f32,
     pub gobo: f32,
     pub gobo_rotation: f32,
     /// Layer of this cone's shadow map, or negative when it has none.
@@ -362,9 +364,13 @@ pub(crate) struct LightRest {
     /// [`FixtureCone::lens_distance`](crate::frame::FixtureCone::lens_distance).
     /// Zero for a point source. `LightCore::position` stays the lens centre.
     pub lens_distance: f32,
+    /// Where this cone's cells start in the panel buffer
+    /// ([`crate::panel::pack`]), or zero when it has none. Like the shadow
+    /// slot, it rides through this module's reorder untouched.
+    pub panel: f32,
     /// Tail padding to the WGSL stride (the struct aligns to 16 bytes). A
     /// focus-dependent lens profile (beam waist) would take these words.
-    pub lens_reserved: [f32; 3],
+    pub lens_reserved: [f32; 2],
 }
 
 #[repr(C)]
@@ -392,7 +398,8 @@ struct IndexParams {
 #[derive(Clone, Copy, Default, Pod, Zeroable)]
 struct LightCull {
     rect: [u32; 4],
-    /// Analytic source-region bounds for broad washes; full rect otherwise.
+    /// Bounds of the region the per-pixel passes keep of a light the fog
+    /// grid takes over; full rect otherwise.
     near_rect: [u32; 4],
     apex_range: [f32; 4],
     dir_cos: [f32; 4],
@@ -501,12 +508,17 @@ pub(crate) struct LightIndexBindings {
     pub fragment_counters: wgpu::Buffer,
 }
 
-/// The viewport-sized half of the buffers, recreated only on resize.
+/// The viewport-sized half of the buffers, recreated only when a resize
+/// outgrows them (or leaves them more than twice too big).
 /// `tile_masks` is retained directly for consumers that compose their own
 /// bind group, and for the validation test's readback.
 struct SizedBuffers {
+    /// This frame's tile grid. The shaders index by it, never by the buffer
+    /// lengths, so buffers sized for a larger grid serve a smaller one.
     columns: u32,
     rows: u32,
+    /// Tiles and big tiles the buffers have room for.
+    capacity: (u64, u64),
     tile_masks: wgpu::Buffer,
     /// One f32 per tile: the depth `surface_fill` split the tile's buckets
     /// at, or a large sentinel for an unsplit tile.
@@ -878,14 +890,34 @@ impl LightIndex {
             self.source_to_sorted[*source as usize] = Some(sorted as u32);
         }
 
+        // A resize drag changes the grid every few frames. Growing with a
+        // sixteenth's headroom each way reallocates once per sixteenth of the
+        // viewport instead of once per tile crossed.
+        let need = (
+            u64::from(columns) * u64::from(rows),
+            u64::from(big_columns) * u64::from(big_rows),
+        );
+        let fits = |capacity: (u64, u64)| {
+            need.0 <= capacity.0 && need.1 <= capacity.1 && capacity.0 <= 2 * need.0
+        };
         if self
             .sized
             .as_ref()
-            .is_none_or(|sized| (sized.columns, sized.rows) != (columns, rows))
+            .is_none_or(|sized| !fits(sized.capacity))
         {
-            self.sized =
-                Some(self.allocate(pipelines, device, columns, rows, big_columns, big_rows));
+            let room = |n: u32| n + n.div_ceil(16);
+            self.sized = Some(self.allocate(
+                pipelines,
+                device,
+                room(columns),
+                room(rows),
+                room(columns).div_ceil(BIG_FACTOR),
+                room(rows).div_ceil(BIG_FACTOR),
+            ));
         }
+        let sized = self.sized.as_mut().expect("allocated above");
+        sized.columns = columns;
+        sized.rows = rows;
 
         let view = &prepared.view;
         let params = IndexParams {
@@ -914,8 +946,8 @@ impl LightIndex {
             .iter()
             .map(|(source, cone, extent)| {
                 let rest = rests[*source as usize];
-                let source_range = if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
-                    cone.source_reach(crate::fog_grid::SOURCE_OUTER)
+                let source_range = if rest.handover < crate::fog_grid::NEVER {
+                    cone.source_reach(rest.handover * crate::fog_grid::HANDOVER_BAND)
                 } else {
                     0.0
                 };
@@ -1060,6 +1092,10 @@ impl LightIndex {
         SizedBuffers {
             columns,
             rows,
+            capacity: (
+                u64::from(columns) * u64::from(rows),
+                u64::from(big_columns) * u64::from(big_rows),
+            ),
             build_bind_group: bind(
                 &pipelines.build_layout,
                 "light-index-build",
@@ -1156,7 +1192,7 @@ impl View {
         self.extent_for_bounds(min, max)
     }
 
-    // Native broad-wash integration intersects a cone with a range ball.
+    // Per-pixel integration up to the handover intersects a cone with a range ball.
     // The flat cone alone can be much wider than that ball. Tighten only the
     // source mask so full-light depth ordering and accumulation stay intact.
     fn source_extent_for(&self, cone: &SanitizedCone) -> Option<LightExtent> {
@@ -1495,7 +1531,6 @@ mod tests {
             color: Vec3::ONE,
             intensity: 1.0,
             cos_field,
-            wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,
@@ -1911,15 +1946,16 @@ mod tests {
                 .enumerate()
                 .map(|(i, _)| {
                     let mut rest = LightRest::zeroed();
-                    rest.wash = if i >= source_edge_start || i % 2 == 0 {
-                        0.9
-                    } else {
-                        0.0
-                    };
                     rest.gobo = if i < source_edge_start && i % 3 == 0 {
                         1.0
                     } else {
                         0.0
+                    };
+                    // The grid takes every other light and never a gobo.
+                    rest.handover = if (i >= source_edge_start || i % 2 == 0) && rest.gobo < 0.5 {
+                        crate::fog_grid::SOURCE_INNER
+                    } else {
+                        crate::fog_grid::NEVER
                     };
                     rest.haze_gain = 1.0;
                     rest
@@ -1940,7 +1976,9 @@ mod tests {
                 None,
             );
             let sized = index.sized.as_ref().expect("sized buffers");
-            let size = sized.tile_masks.size();
+            // This frame's planes; the buffer may have room for a larger grid.
+            let size =
+                MASK_PLANES as u64 * u64::from(sized.columns * sized.rows) * MASK_WORDS as u64 * 4;
             let readback = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("light-index-readback"),
                 size,
@@ -1970,10 +2008,10 @@ mod tests {
             let near_masks = &gpu_masks[words..2 * words];
             let mut clipped = lights.clone();
             for (light, rest) in clipped.iter_mut().zip(&rests) {
-                if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
+                if rest.handover < crate::fog_grid::NEVER {
                     light.range = finite(light.range, 0.05)
                         .clamp(0.05, 100.0)
-                        .min(crate::fog_grid::SOURCE_OUTER);
+                        .min(rest.handover * crate::fog_grid::HANDOVER_BAND);
                 }
             }
             // Sample actual spherical-cone support independently of the plane
@@ -2023,10 +2061,7 @@ mod tests {
                             0,
                             "near mask added a full-range rejection"
                         );
-                        if !standard_basis
-                            && rest.wash >= crate::fog_grid::BROAD_WASH
-                            && rest.gobo < 0.5
-                        {
+                        if !standard_basis && rest.handover < crate::fog_grid::NEVER {
                             let light = SanitizedCone::new(&clipped[source as usize]);
                             let in_rect = reference
                                 .view
@@ -2038,11 +2073,11 @@ mod tests {
                                 "vertical-camera fallback changed the original rectangle mask"
                             );
                         }
-                        if rest.wash < crate::fog_grid::BROAD_WASH || rest.gobo >= 0.5 {
+                        if rest.handover >= crate::fog_grid::NEVER {
                             assert_eq!(
                                 near_masks[at] & bit,
                                 gpu_masks[at] & bit,
-                                "a narrow or gobo cone was shortened"
+                                "a cone the grid never takes was shortened"
                             );
                         }
                     }

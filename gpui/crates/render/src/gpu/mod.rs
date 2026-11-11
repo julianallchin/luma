@@ -30,6 +30,7 @@ mod readback;
 mod renderer;
 mod scene_pipelines;
 mod stats;
+pub(crate) mod target_memory;
 mod targets;
 #[cfg(test)]
 mod tests;
@@ -106,9 +107,9 @@ const CAMERA_FAR: f32 = 2000.0;
 /// the keyboard dials that produced them do not port.
 pub(crate) struct Transport;
 impl Transport {
-    const BEAM_GAIN: f32 = 180.0;
+    /// The photometric scale of every cone (`photometry.rs`).
+    const BEAM_GAIN: f32 = crate::photometry::BEAM_GAIN;
     pub(crate) const WHITE_LEAK: f32 = 0.03;
-    pub(crate) const PHASE_G: f32 = 0.6;
     const NEAR_CLAMP: f32 = 0.06;
     /// Extinction per unit haze density, in 1/metres. One σ serves the whole
     /// transport: the haze pass integrates in-scatter against it and the
@@ -298,6 +299,8 @@ pub struct Renderer {
     surface_depth_cull: bool,
     upload_stats: UploadStats,
     targets: Option<Targets>,
+    /// Where `targets` and the post chain's scene are allocated.
+    target_memory: target_memory::TargetMemory,
     medium_cache: crate::medium::Cache,
     shadow_hierarchy: crate::shadow_hierarchy::Targets,
     /// The previous live frame's eye, target and field of view, to tell a
@@ -427,7 +430,7 @@ pub struct Gpu {
     composite_pipelines: [wgpu::RenderPipeline; 4],
     /// The composite pass writing scene-linear light for the post chain.
     composite_linear_pipeline: wgpu::RenderPipeline,
-    /// Exposure, lens glow, tone curve and glare (`post.rs`).
+    /// Exposure, tone curve and glare (`post.rs`).
     post: crate::post::Pipelines,
     /// Indexed by [`overlay_pipeline_index`]: the four output formats
     /// crossed with two topologies and two depth behaviours.

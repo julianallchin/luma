@@ -25,7 +25,24 @@ pub enum DistributeLayout {
     Span { from: f64, to: f64 },
     /// Packed body to body, centred `metres` from the face's **middle** —
     /// signed, so `-2.0` is two metres toward the face's negative-tangent end.
-    At { metres: f64 },
+    /// `across` is the other way over a surface, in metres off its middle:
+    /// with `metres` it names a point on a floor or a deck.
+    At {
+        metres: f64,
+        #[serde(default)]
+        across: f64,
+    },
+}
+
+impl DistributeLayout {
+    /// How far off the face's middle the row sits across it, in metres.
+    #[must_use]
+    pub fn across_m(self) -> f64 {
+        match self {
+            DistributeLayout::At { across, .. } => across,
+            _ => 0.0,
+        }
+    }
 }
 
 impl From<DistributeLayout> for Layout {
@@ -34,7 +51,7 @@ impl From<DistributeLayout> for Layout {
             DistributeLayout::Even => Layout::Even,
             DistributeLayout::Spacing { metres } => Layout::Spacing(metres),
             DistributeLayout::Span { from, to } => Layout::Span(from, to),
-            DistributeLayout::At { metres } => Layout::At(metres),
+            DistributeLayout::At { metres, .. } => Layout::At(metres),
         }
     }
 }
@@ -48,7 +65,10 @@ impl From<Layout> for DistributeLayout {
             Layout::Even => DistributeLayout::Even,
             Layout::Spacing(metres) => DistributeLayout::Spacing { metres },
             Layout::Span(from, to) => DistributeLayout::Span { from, to },
-            Layout::At(metres) => DistributeLayout::At { metres },
+            Layout::At(metres) => DistributeLayout::At {
+                metres,
+                across: 0.0,
+            },
         }
     }
 }

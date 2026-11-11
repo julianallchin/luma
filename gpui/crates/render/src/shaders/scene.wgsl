@@ -26,6 +26,12 @@ struct VsOut {
     @location(2) @interpolate(flat) instance: u32,
     @location(3) uv: vec2<f32>,
     @location(4) tangent: vec4<f32>,
+    // `world` again, taken inside the triangle. A pixel's centre can lie off
+    // a triangle that covers only some of its samples, and `world` there is
+    // a point off the surface: centimetres off a long thin one. Lighting
+    // wants the surface; derivatives want `world`, which is even across
+    // pixels.
+    @location(5) @interpolate(perspective, centroid) on_surface: vec3<f32>,
 };
 
 @vertex
@@ -41,6 +47,7 @@ fn vs_main(
     var out: VsOut;
     out.clip = globals.view_proj * world;
     out.world = world.xyz;
+    out.on_surface = world.xyz;
     out.normal = (inst.normal_matrix * vec4<f32>(normal, 0.0)).xyz;
     out.instance = instance;
     out.uv = uv;
@@ -119,6 +126,68 @@ fn specular_aa(n: vec3<f32>, roughness: f32) -> f32 {
     let kernel = min(2.0 * variance, 0.18);
     let alpha2 = roughness * roughness * roughness * roughness;
     return sqrt(sqrt(saturate(alpha2 + kernel)));
+}
+
+/// The lit share of `[x - w/2, x + w/2]` along a row of LEDs, each `fill`
+/// of its unit pitch and centred in it: the pulse train box-filtered over the
+/// pixel exactly, through its running integral.
+fn led_run(x: f32, w: f32, fill: f32) -> f32 {
+    return (led_run_integral(x + 0.5 * w, fill) - led_run_integral(x - 0.5 * w, fill)) / w;
+}
+
+fn led_run_integral(x: f32, fill: f32) -> f32 {
+    let whole = floor(x);
+    return whole * fill + clamp(x - whole - 0.5 * (1.0 - fill), 0.0, fill);
+}
+
+/// How much of this pixel an LED panel's LEDs cover, 0..1, at `uv` (in LED
+/// pitches) with the pixel's footprint `dx`, `dy` there. Up close it is the
+/// LED's own antialiased outline; as the LEDs near a pixel it becomes their
+/// area share, so the face is their average colour rather than bands where
+/// the pattern beats against the pixels. The same filtering as the floor
+/// grid (`grid.wgsl`), in the panel's own space.
+fn led_coverage(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, inst: Instance) -> f32 {
+    let code = u32(inst.flags.w + 0.5);
+    let shape = code & 3u;
+    let fill = inst.led.xy;
+    let cols = inst.led.z;
+    // The pixel's width in pitches along each axis.
+    let w = max(abs(dx) + abs(dy), vec2<f32>(1e-5));
+    var p = uv;
+    if code >= 4u && (i32(floor(p.y)) & 1) == 1 {
+        p.x -= 0.5;
+    }
+    // A pitch of two pixels still shows its LEDs; by one it is their average.
+    let average = smoothstep(vec2<f32>(0.4), vec2<f32>(0.9), w);
+    if shape == 1u {
+        // A rectangle is a row of runs times a column of them, each axis
+        // averaged on its own: a face seen edge on blurs its columns and
+        // keeps its rows. Clamping the run to the row keeps a staggered
+        // row's empty half pitch empty.
+        let x0 = clamp(p.x - 0.5 * w.x, 0.0, cols);
+        let x1 = clamp(p.x + 0.5 * w.x, 0.0, cols);
+        let across = (led_run_integral(x1, fill.x) - led_run_integral(x0, fill.x)) / w.x;
+        let down = led_run(p.y, w.y, fill.y);
+        return mix(across, fill.x, average.x) * mix(down, fill.y, average.y);
+    }
+    // The LED's outline in units of its own half size, where it is a unit
+    // circle or a unit hexagon with corners along u.
+    let q = abs(fract(p) - 0.5) / (0.5 * fill);
+    var d: f32;
+    var share: f32;
+    if shape == 2u {
+        d = length(q) - 1.0;
+        share = 0.785398 * fill.x * fill.y;
+    } else {
+        d = (max(q.y, 0.866025 * q.x + 0.5 * q.y) - 0.866025) / 0.866025;
+        share = 0.649519 * fill.x * fill.y;
+    }
+    let pixel = max(w.x / (0.5 * fill.x), w.y / (0.5 * fill.y));
+    var sharp = saturate(0.5 - d / pixel);
+    if p.x < 0.0 || p.x >= cols {
+        sharp = 0.0;
+    }
+    return mix(sharp, share, max(average.x, average.y));
 }
 
 fn brdf_ggx(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, f0: vec3<f32>, roughness: f32) -> vec3<f32> {
@@ -446,6 +515,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     if !front {
         n = -n;
     }
+    let face = n;
     var t = normalize(in.tangent.xyz - n * dot(n, in.tangent.xyz));
     if !front {
         t = -t;
@@ -456,14 +526,33 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     n = normalize(t * mapped.x + b * mapped.y + n * mapped.z);
 
     let mr = textureSample(metallic_roughness_map, material_sampler, in.uv);
+    // An LED panel paints its LEDs over its gap colour (`led_coverage`).
+    let uv_dx = dpdx(in.uv);
+    let uv_dy = dpdy(in.uv);
+    var lit = 1.0;
+    if inst.flags.w > 0.5 {
+        lit = led_coverage(in.uv, uv_dx, uv_dy, inst);
+    }
     var surface: Surface;
-    surface.base_color = inst.base_color.rgb
-        * textureSample(base_color_map, material_sampler, in.uv).rgb;
-    surface.metallic = inst.base_color.a * mr.b;
+    surface.base_color = mix(
+        inst.gap.rgb,
+        inst.base_color.rgb * textureSample(base_color_map, material_sampler, in.uv).rgb,
+        lit,
+    );
+    surface.metallic = mix(inst.gap.a, inst.base_color.a * mr.b, lit);
     // three clamps roughness to 0.0525 before squaring.
-    surface.roughness = specular_aa(n, max(inst.emissive.a * mr.g, 0.0525));
+    surface.roughness = specular_aa(n, max(mix(inst.led.w, inst.emissive.a * mr.g, lit), 0.0525));
     surface.ao = mix(1.0, textureSample(occlusion_map, material_sampler, in.uv).r, inst.flags.z);
-    surface.emissive = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb;
+    surface.emissive = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb * lit;
+    if inst.beam_axis.w > 0.5 {
+        // A lamp's face is as bright from here as the light its beam throws
+        // here: its intensity this way over the face as it is seen from
+        // here. Outside the beam it is dark, as a downlight is from the side.
+        // The face is what looks along the beam: a rim side-on to it is not.
+        let out = dot(inst.beam_axis.xyz, normalize(globals.camera_pos.xyz - in.on_surface));
+        surface.emissive *= max(dot(face, inst.beam_axis.xyz), 0.0)
+            * angular_profile(out, inst.beam.x, inst.beam.y) / max(out, 0.1);
+    }
     surface.n = n;
     surface.unevenness = 0.0;
     return shade(in, surface, dpdx(in.world), dpdy(in.world));
@@ -476,6 +565,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
 fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec4<f32> {
     let inst = instances[fragment.instance];
     var in = fragment;
+    in.world = fragment.on_surface;
     if inst.flags.x > 0.5 {
         in.world = ground_fragment(fragment.world);
     }
@@ -555,7 +645,13 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
         0,
     );
     let occlusion = ao * visibility.r;
-    out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion;
+    let reflected = reflect(-v, n);
+    let local = probe_light(in.world, n, reflected, roughness);
+    // The ambient is the house's bounce off the floor (`house.rs`). Where
+    // the local probes reach they have seen the lit floor and the lit stage
+    // themselves, so their diffuse light is the bounce and this gives way.
+    out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion
+        * (1.0 - local.weight);
     // The light the haze scatters (`haze_glow_sample.wgsl`) comes from every
     // side: a quarter of its fluence lands on a surface. Read a little off
     // the surface, in the air that lights it.
@@ -568,8 +664,6 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
     // absolute, the sky probe's radiance scaled by its intensity, and it
     // lights a room that has no sky probe at all.
     let sky_probe = environment_params.enabled > 0.5 && environment_params.intensity > 0.0;
-    let reflected = reflect(-v, n);
-    let local = probe_light(in.world, n, reflected, roughness);
     if sky_probe || local.weight > 0.0 {
         let dot_nv = saturate(dot(n, v));
         let fresnel = f_schlick(f0, 1.0, dot_nv);
@@ -668,6 +762,24 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             let q = in.world - core.position;
             let distance = length(q);
             if distance <= 1e-4 || distance >= core.range || rest.intensity <= 0.0 {
+                continue;
+            }
+            if rest.panel > 0.5 {
+                // A face of cells: its light and where on it that comes
+                // from are the panel's, not a cone's (`panel.wgsl`).
+                let lit = panel_light(rest.panel, rest.direction, rest.cos_beam, rest.cos_field, q);
+                let l = normalize(lit.source - q);
+                let dot_nl = saturate(dot(n, l));
+                if dot_nl <= 0.0 || lit.light.a <= 0.0 {
+                    continue;
+                }
+                // The range taper alone: the panel's light already falls
+                // with distance.
+                let taper = distance_attenuation(distance, core.range) * max(distance * distance, 0.01);
+                let irradiance = dot_nl * lit.light.rgb * rest.intensity * surface_clusters.shadow.z
+                    * taper * fixture_shadow_visibility(in.world, n, light_index);
+                out += irradiance * diffuse_color * RECIPROCAL_PI;
+                out += irradiance * brdf_ggx(n, v, l, f0, roughness) * masking;
                 continue;
             }
             let from_light = q / distance;

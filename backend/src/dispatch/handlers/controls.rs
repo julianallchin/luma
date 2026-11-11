@@ -73,7 +73,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO clips (id, uid, score_id, graph, graph_json, start, duration, seed,
                                 selection_json, blend_mode)
-             VALUES ('clip', ?, ?, '', ?, 0, 4, '1', '{\"expression\":\"all\"}', 'replace')",
+             VALUES ('clip', ?, ?, '', ?, 0, 4, '1', '{\"all\":true}', 'replace')",
         )
         .bind(&uid)
         .bind(&score)

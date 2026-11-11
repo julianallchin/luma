@@ -18,7 +18,7 @@ use luma_render::{
 use luma_scene::mesh::Material;
 use luma_scene::{
     environment::{CloudCover, VenueEnvironment, VenueHaze},
-    luminaire::Lens,
+    luminaire::{cone_from_opening, Lens, LensClass, Luminaire, LUMENS_PER_UNIT},
 };
 
 use crate::common::capture;
@@ -380,24 +380,32 @@ fn a_beam_stays_brighter_than_the_sky_behind_it() {
     // A white beam in light stage haze at dusk, raked up past the cube into
     // the sky upstage. Whatever the weather, the beam is the subject: it
     // must add light over the clouds, and a brighter overcast must not wash
-    // it out.
+    // it out. The sun sets behind the audience: facing a sun this low, the
+    // haze's forward glow (`haze_phase.rs`) outshines any beam, as it does
+    // at a real show.
     let mut renderer = Renderer::new().unwrap();
     let mut contrast = Vec::new();
     for clouds in CloudCover::ALL {
-        let mut frame = stage_view(outdoor(6.0, clouds));
+        let environment = outdoor(6.0, clouds);
+        let behind = environment.sun_azimuth_deg() + 180.0;
+        let mut frame = stage_view(environment.with_sun_azimuth(behind));
         frame.haze_density = 0.15;
         frame.haze_bounds =
             luma_scene::Aabb::new(Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 15.0));
         let dark = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+        // A stock moving head's spot, opened to 24 degrees.
+        let cone = cone_from_opening(Luminaire {
+            field_angle_deg: 24.0,
+            lumens: LensClass::Spot.output_lumens() / LUMENS_PER_UNIT,
+        });
         frame.fixture_cones.push(FixtureCone {
             position: Vec3::new(-3.0, 0.0, 0.5),
             range: 40.0,
             direction: Vec3::new(0.2, -0.6, 1.0).normalize(),
-            cos_beam: 8.0_f32.to_radians().cos(),
+            cos_beam: cone.cos_beam,
             color: Vec3::ONE,
-            intensity: 20.0,
-            cos_field: 12.0_f32.to_radians().cos(),
-            wash: 0.0,
+            intensity: cone.gain,
+            cos_field: cone.cos_field,
             gobo: 0,
             gobo_rotation: 0.0,
             haze_gain: 1.0,

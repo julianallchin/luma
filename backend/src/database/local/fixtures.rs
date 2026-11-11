@@ -22,7 +22,7 @@ pub async fn insert_fixture(
 ) -> Result<PatchedFixture, String> {
     let id = Uuid::new_v4().to_string();
     let venue_id = access.venue_id().to_owned();
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
 
     sqlx::query(
         "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned)
@@ -46,7 +46,7 @@ pub async fn insert_fixture(
 
     Ok(PatchedFixture {
         id,
-        uid,
+        uid: Some(uid),
         venue_id,
         universe,
         address,
@@ -70,7 +70,7 @@ pub async fn insert_fixture_row(
     row: &PatchedFixture,
 ) -> Result<(), String> {
     let venue_id = access.venue_id().to_owned();
-    let uid = access.principal().map(str::to_owned);
+    let uid = access.principal().to_owned();
     sqlx::query(
         "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -186,23 +186,6 @@ pub async fn update_fixture_pin(
     Ok(result.rows_affected())
 }
 
-/// Forget every hand-set address in the venue, so the next allocation derives
-/// them all. What the Auto Patch button means.
-///
-/// # Errors
-/// Fails if the write is refused.
-pub async fn clear_address_pins(access: &mut VenueAccess<'_, Write>) -> Result<u64, String> {
-    let venue_id = access.venue_id().to_owned();
-    let result = sqlx::query(
-        "UPDATE fixtures SET address_pinned = 0 WHERE venue_id = ? AND address_pinned <> 0",
-    )
-    .bind(venue_id)
-    .execute(&mut *access.connection())
-    .await
-    .map_err(|e| format!("Failed to clear address pins: {e}"))?;
-    Ok(result.rows_affected())
-}
-
 pub async fn update_fixture_label(
     access: &mut VenueAccess<'_, Write>,
     id: &str,
@@ -212,10 +195,18 @@ pub async fn update_fixture_label(
     let result = sqlx::query("UPDATE fixtures SET label = ? WHERE id = ? AND venue_id = ?")
         .bind(label)
         .bind(id)
-        .bind(venue_id)
+        .bind(&venue_id)
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to rename patched fixture: {}", e))?;
+    // A light's patch row and its node are one fixture with one name.
+    sqlx::query("UPDATE venue_nodes SET label = ? WHERE id = ? AND venue_id = ?")
+        .bind(label)
+        .bind(id)
+        .bind(&venue_id)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|e| format!("Failed to rename the fixture's node: {}", e))?;
     Ok(result.rows_affected())
 }
 

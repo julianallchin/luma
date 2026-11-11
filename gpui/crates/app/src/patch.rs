@@ -1,5 +1,11 @@
 //! The venue page: lights, placement and groups share one body.
 //!
+//! # One selection
+//!
+//! The stage, the fixture table, the footprint and the groups panel read and
+//! write [`Patch::selected`]. Nothing on the page has a mode that changes what
+//! a click on a fixture means.
+//!
 //! # One allocator, and it is not here
 //!
 //! Every address on this page came from the backend: `next_addresses` for a
@@ -16,14 +22,18 @@
 //! frame — which would take the caret with them mid-edit. A venue's patch is
 //! tens to hundreds of rows and this is a page, not a timeline.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
+use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::Focusable as _;
-use gpui::{div, px, AnyElement, Context, Entity, Point, SharedString, Subscription, Window};
+use gpui::{
+    div, px, AnyElement, Bounds, Context, Entity, Pixels, Point, SharedString, Subscription, Window,
+};
 
 use luma_lib::models::fixtures::PatchedFixture;
-use luma_lib::models::patch::{DmxRoute, OutputDevice, OutputPort, UniverseCell};
+use luma_lib::models::patch::{DmxRoute, OutputDevice, OutputPort};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
@@ -41,22 +51,28 @@ mod outputs;
 mod table;
 mod venue;
 
-/// What the header's chips hang.
+/// What the page under the stage is showing.
 ///
-/// Optional address-map and output-routing details.
+/// Four readings of the same rig: the fixtures as an inventory with its
+/// groups, the structure they hang on, the fixtures as channels in universes,
+/// and where each universe comes out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Panel {
-    Footprint,
-    Outputs,
+pub(crate) enum View {
+    Fixtures,
+    Stage,
+    Patch,
+    Output,
 }
 
-impl Panel {
-    pub(crate) const ALL: [Panel; 2] = [Panel::Footprint, Panel::Outputs];
+impl View {
+    pub(crate) const ALL: [View; 4] = [View::Fixtures, View::Stage, View::Patch, View::Output];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Panel::Footprint => "Footprint",
-            Panel::Outputs => "Outputs",
+            View::Fixtures => "Fixtures",
+            View::Stage => "Stage",
+            View::Patch => "Patch",
+            View::Output => "Output",
         }
     }
 }
@@ -71,6 +87,17 @@ pub(crate) enum Column {
     Label,
     Universe,
     Address,
+}
+
+/// What a click on a fixture's row does to the selection.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Pick {
+    /// Select this row and no other.
+    Only,
+    /// Add this row, or take it out.
+    Toggle,
+    /// Select the run from the last row clicked through this one.
+    Through,
 }
 
 /// The one cell being edited, and the live field in it.
@@ -108,14 +135,19 @@ pub(crate) struct Notice {
     until: u64,
 }
 
-/// A drag across the footprint strip: the fixture picked up, which of its
+/// A drag along a universe's strip: the fixture picked up, which of its
 /// channels was grabbed, and where the pointer is now.
 pub(crate) struct StripDrag {
     pub(crate) fixture: String,
     /// Zero-based channel of the fixture the press landed on, so the block
     /// lands where the pointer says rather than one edge of it.
     pub(crate) grabbed_channel: u16,
+    /// The universe whose strip the pointer is over, which need not be the
+    /// one the block was picked up from.
+    pub(crate) universe: u16,
     pub(crate) over: u16,
+    /// Let go, and waiting for the write and the rows that show it.
+    pub(crate) dropped: bool,
 }
 
 pub(crate) struct Patch {
@@ -124,38 +156,38 @@ pub(crate) struct Patch {
     pub(crate) venue_id: String,
     pub(crate) venue_name: String,
     pub(crate) stage: crate::stage::StagePage,
-    pub(crate) details_open: bool,
-    pub(crate) group_editor: Option<groups::Editor>,
-    /// Why the group being edited was refused — a name the backend will not
-    /// take — under its field until the next save or cancel.
+    /// The group name being typed, if one is.
+    pub(crate) naming: Option<groups::Naming>,
+    /// Why the name being typed was refused — one the backend will not take —
+    /// under its field until the next commit.
     pub(crate) group_refusal: Option<SharedString>,
+    /// A group write is on its way; the panel's controls wait for it.
     pub(crate) group_busy: bool,
-    pub(crate) repair_after_save: bool,
+    /// A group's menu, and the point it hangs from.
+    pub(crate) group_menu: Option<(String, Point<gpui::Pixels>)>,
     pub(crate) data: Option<PatchData>,
     /// The patch could not be read. The cause is in the log.
     pub(crate) load_failed: bool,
 
-    /// The universe the strip is showing, and its 512 cells.
-    pub(crate) strip_universe: u16,
-    pub(crate) cells: Vec<UniverseCell>,
+    pub(crate) view: View,
+    /// The patch grid's zoom, as an index into [`GRID_COLUMNS`].
+    pub(crate) grid_zoom: usize,
+    /// Where each universe's strip was last drawn, so a pointer on it can be
+    /// read as a channel.
+    pub(crate) strips: Rc<RefCell<BTreeMap<u16, Bounds<Pixels>>>>,
     pub(crate) drag: Option<StripDrag>,
-    /// The fixture a strip cell was clicked on, which is also a table selection.
-    pub(crate) strip_refusal: Option<SharedString>,
+    /// Why the last drop was refused, and the universe it was dropped in.
+    pub(crate) strip_refusal: Option<(u16, SharedString)>,
 
     /// The DMX devices the drivers can see, or why there are none.
     pub(crate) devices: Vec<OutputDevice>,
     pub(crate) devices_unavailable: Option<SharedString>,
     /// Which universe row has its device menu open.
     pub(crate) bind_menu: Option<i64>,
-    /// The one panel hanging off the header, if any. One at a time, because
-    /// they are three answers to "and where does this come out" and a page
-    /// showing all three at once is the stack of labelled panels this design
-    /// replaced.
-    pub(crate) panel: Option<Panel>,
-    /// Whether the footprint's universe picker has its menu down.
-    pub(crate) universe_menu: bool,
 
     pub(crate) selected: HashSet<String>,
+    /// The row a shift-click runs from: the last one clicked on its own.
+    pub(crate) anchor: Option<String>,
     pub(crate) editing: Option<Editing>,
     pub(crate) refusal: Option<Refusal>,
     /// The row menu, and the point it hangs from.
@@ -179,24 +211,23 @@ impl Patch {
             chat,
             venue_id,
             stage: crate::stage::StagePage::new(cx),
-            details_open: false,
-            group_editor: None,
+            naming: None,
             group_refusal: None,
             group_busy: false,
-            repair_after_save: false,
+            group_menu: None,
             venue_name,
             data: None,
             load_failed: false,
-            strip_universe: 1,
-            cells: Vec::new(),
+            view: View::Fixtures,
+            grid_zoom: 1,
+            strips: Rc::default(),
             drag: None,
             strip_refusal: None,
             devices: Vec::new(),
             devices_unavailable: None,
             bind_menu: None,
-            panel: None,
-            universe_menu: false,
             selected: HashSet::new(),
+            anchor: None,
             editing: None,
             refusal: None,
             menu: None,
@@ -214,63 +245,60 @@ impl Patch {
         self.rows().iter().find(|row| row.id == id)
     }
 
-    /// The group path a fixture sits on, deepest node first joined by ` / `.
-    ///
-    /// Read out of `list_group_tree` rather than derived: the derivation is the
-    /// backend's, and a second walk of the same facts here would be the second
-    /// grouping rule the gauntlet forbids.
-    pub(crate) fn group_path(&self, id: &str) -> Option<String> {
-        let data = self.data.as_ref()?;
-        let authored: Vec<_> = data
-            .groups
-            .iter()
-            .filter(|node| node.role.is_none() && node.fixtures.iter().any(|fixture| fixture == id))
-            .map(|node| node.label.as_str())
-            .collect();
-        if !authored.is_empty() {
-            return Some(authored.join(" · "));
-        }
-        let by_id: BTreeMap<&str, &luma_lib::models::groups::GroupTreeNode> =
-            data.groups.iter().map(|n| (n.id.as_str(), n)).collect();
-        // The deepest node holding it — the tree is parents-first, so the last
-        // match down the list is the leaf.
-        let leaf = data
-            .groups
-            .iter()
-            .rfind(|node| node.fixtures.iter().any(|f| f == id))?;
-        let mut path = vec![leaf.label.clone()];
-        let mut parent = leaf.parent_id.clone();
-        while let Some(id) = parent {
-            let Some(node) = by_id.get(id.as_str()) else {
-                break;
-            };
-            path.push(node.label.clone());
-            parent = node.parent_id.clone();
-        }
-        path.reverse();
-        Some(path.join(" / "))
+    /// The groups a fixture is in, in the panel's order.
+    pub(crate) fn groups_of(&self, id: &str) -> Vec<&luma_lib::models::groups::GroupTreeNode> {
+        self.data.as_ref().map_or_else(Vec::new, |data| {
+            data.groups
+                .iter()
+                .filter(|group| group.fixtures.iter().any(|fixture| fixture == id))
+                .collect()
+        })
     }
 
     /// The modes the fixture's definition offers, with each one's width.
-    pub(crate) fn modes(&self, row: &PatchedFixture) -> Vec<(String, usize)> {
+    /// Every mode the row's definition offers: name, width, and whether
+    /// Luma can light the fixture in it.
+    pub(crate) fn modes(&self, row: &PatchedFixture) -> Vec<(String, usize, bool)> {
         self.data
             .as_ref()
             .and_then(|data| data.definitions.get(&row.fixture_path))
             .map(|def| {
                 def.modes
                     .iter()
-                    .map(|mode| (mode.name.clone(), mode.channels.len()))
+                    .map(|mode| {
+                        let supported = def.supports_mode(&mode.name);
+                        (mode.name.clone(), mode.channels.len(), supported)
+                    })
                     .collect()
             })
             .unwrap_or_default()
     }
 
-    pub(crate) fn any_pinned(&self) -> bool {
-        self.rows().iter().any(|row| row.address_pinned)
+    /// Whether Luma can light `row` in its patched mode.
+    pub(crate) fn supported(&self, row: &PatchedFixture) -> bool {
+        self.data
+            .as_ref()
+            .and_then(|data| data.definitions.get(&row.fixture_path))
+            .is_none_or(|def| def.supports_mode(&row.mode_name))
+    }
+
+    /// How many cells make a line of a universe's grid at the current zoom.
+    pub(crate) fn grid_columns(&self) -> i64 {
+        GRID_COLUMNS[self.grid_zoom.min(GRID_COLUMNS.len() - 1)]
     }
 
     fn clear_edit(&mut self) {
         self.editing = None;
+    }
+
+    /// An edit to a cell is about its row, so a row outside the selection
+    /// becomes it. A row already in a larger selection leaves it alone.
+    fn select_edited(&mut self, fixture: &str) {
+        if !self.selected.contains(fixture) {
+            self.selected.clear();
+            self.selected.insert(fixture.to_string());
+            self.anchor = Some(fixture.to_string());
+        }
     }
 
     /// Park a sentence under the title for the reload this act is about to
@@ -326,13 +354,10 @@ impl Luma {
         };
         state.generation += 1;
         let generation = state.generation;
-        let universe = state.strip_universe;
         let data = self.library.patch_data(&venue_id);
-        let cells = self.library.universe_occupancy(&venue_id, universe);
         let devices = self.library.output_devices();
         cx.spawn(async move |this, cx| {
             let data = data.await;
-            let cells = cells.await;
             let devices = devices.await;
             this.update(cx, |this, cx| {
                 let Some(Body::Patch(state)) = this.workspace.body_mut(&target) else {
@@ -341,48 +366,7 @@ impl Luma {
                 if state.generation != generation {
                     return;
                 }
-                state.landed(data, cells, devices);
-                let repair = std::mem::take(&mut state.repair_after_save);
-                if repair {
-                    this.open_group_repair(cx);
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Re-read one universe's 512 cells, without disturbing the table.
-    pub(crate) fn show_universe(
-        &mut self,
-        venue_id: String,
-        universe: u16,
-        cx: &mut Context<Self>,
-    ) {
-        let target = Target::Venue {
-            venue: venue_id.clone(),
-        };
-        let Some(Body::Patch(state)) = self.workspace.body_mut(&target) else {
-            return;
-        };
-        state.strip_universe = universe;
-        state.strip_refusal = None;
-        state.universe_menu = false;
-        state.generation += 1;
-        let generation = state.generation;
-        let pending = self.library.universe_occupancy(&venue_id, universe);
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let cells = pending.await;
-            this.update(cx, |this, cx| {
-                let Some(Body::Patch(state)) = this.workspace.body_mut(&target) else {
-                    return;
-                };
-                if state.generation != generation {
-                    return;
-                }
-                state.cells = cells.unwrap_or_default();
+                state.landed(data, devices);
                 cx.notify();
             })
             .ok();
@@ -395,7 +379,6 @@ impl Patch {
     fn landed(
         &mut self,
         data: Result<PatchData, LibraryError>,
-        cells: Result<Vec<UniverseCell>, LibraryError>,
         devices: Result<Vec<OutputDevice>, LibraryError>,
     ) {
         // A load the notice did not ask for: whatever it says happened is not
@@ -416,14 +399,19 @@ impl Patch {
                 // order is nobody's business.
                 data.fixtures
                     .sort_by_key(|row| (row.universe, row.address, row.id.clone()));
-                // A universe that emptied out from under the strip: fall back
-                // to the first one in use rather than drawing 512 blanks and
-                // calling it a universe.
-                if !data.universes.is_empty() && !data.universes.contains(&self.strip_universe) {
-                    self.strip_universe = data.universes[0];
+                // The rows a dropped run was waiting for.
+                if self.drag.as_ref().is_some_and(|drag| drag.dropped) {
+                    self.drag = None;
                 }
                 self.selected
                     .retain(|id| data.fixtures.iter().any(|f| &f.id == id));
+                if self
+                    .anchor
+                    .as_ref()
+                    .is_some_and(|anchor| !data.fixtures.iter().any(|f| &f.id == anchor))
+                {
+                    self.anchor = None;
+                }
                 self.data = Some(data);
                 self.load_failed = false;
             }
@@ -432,7 +420,6 @@ impl Patch {
                 self.load_failed = true;
             }
         }
-        self.cells = cells.unwrap_or_default();
         match devices {
             Ok(devices) => {
                 self.devices = devices;
@@ -492,6 +479,7 @@ impl Luma {
         if state.refusal.as_ref().is_some_and(|r| r.fixture == fixture) {
             state.refusal = None;
         }
+        state.select_edited(&fixture);
         state.clear_edit();
         let name = row.label.clone().unwrap_or_else(|| row.model.clone());
         let editing = match column {
@@ -863,43 +851,23 @@ impl Luma {
         .detach();
     }
 
-    /// Auto patch. A venue holding pinned addresses is asked first, because
-    /// the answer discards them.
+    /// Auto patch: pack every address that was not set by hand around the
+    /// ones that were. Nothing a person typed or dragged is moved, so there
+    /// is nothing to ask first.
     pub(crate) fn auto_patch_venue(&mut self, venue_id: String, cx: &mut Context<Self>) {
-        let pinned = self
-            .patch_mut(&venue_id)
-            .is_some_and(|state| state.any_pinned());
-        if !pinned {
-            self.run_auto_patch(venue_id, cx);
-            return;
-        }
-        self.ask(
-            Confirm {
-                title: "Re-derive every address?".into(),
-                body: "This venue holds hand-set addresses. Auto patch derives \
-                       addresses from where fixtures hang and discards the \
-                       overrides it touches."
-                    .into(),
-                verb: "Auto patch".into(),
-                action: Action::AutoPatch {
-                    venue_id: venue_id.into(),
-                },
-            },
-            cx,
-        );
-    }
-
-    pub(crate) fn run_auto_patch(&mut self, venue_id: String, cx: &mut Context<Self>) {
+        let kept = self.patch_mut(&venue_id).map_or(0, |state| {
+            state.rows().iter().filter(|row| row.address_pinned).count()
+        });
         let pending = self.library.auto_patch(&venue_id);
         cx.spawn(async move |this, cx| {
             let report = pending.await;
             this.update(cx, |this, cx| {
                 let notice: SharedString = match report {
                     Ok(report) => {
-                        let mut line = format!(
-                            "Auto patch moved {}, discarded {} overrides",
-                            report.moved, report.overrides_discarded
-                        );
+                        let mut line = format!("Auto patch moved {}", report.moved);
+                        if kept > 0 {
+                            line.push_str(&format!(", kept {kept} hand-set"));
+                        }
                         for note in &report.notes {
                             line.push_str(" · ");
                             line.push_str(&note.message);
@@ -927,21 +895,45 @@ impl Luma {
         &mut self,
         venue_id: String,
         fixture: String,
-        extend: bool,
+        pick: Pick,
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = self.patch_mut(&venue_id) {
             state.clear_edit();
-            if !state.group_busy {
-                state.group_editor = None;
-            }
-            if extend {
-                if !state.selected.remove(&fixture) {
-                    state.selected.insert(fixture);
+            match pick {
+                Pick::Only => {
+                    state.selected.clear();
+                    state.selected.insert(fixture.clone());
+                    state.anchor = Some(fixture);
                 }
-            } else {
-                state.selected.clear();
-                state.selected.insert(fixture);
+                Pick::Toggle => {
+                    if !state.selected.remove(&fixture) {
+                        state.selected.insert(fixture.clone());
+                    }
+                    state.anchor = Some(fixture);
+                }
+                // The run is read down the table as it is drawn, from the
+                // anchor, which stays where it was so a second shift-click
+                // re-aims the same run.
+                Pick::Through => {
+                    let rows = state.rows();
+                    let end = rows.iter().position(|row| row.id == fixture);
+                    let start = state
+                        .anchor
+                        .as_ref()
+                        .and_then(|anchor| rows.iter().position(|row| &row.id == anchor))
+                        .or(end);
+                    if let (Some(start), Some(end)) = (start, end) {
+                        let run: HashSet<String> = rows[start.min(end)..=start.max(end)]
+                            .iter()
+                            .map(|row| row.id.clone())
+                            .collect();
+                        state.selected = run;
+                        if state.anchor.is_none() {
+                            state.anchor = Some(fixture);
+                        }
+                    }
+                }
             }
         }
         let selected = self
@@ -980,9 +972,14 @@ impl Luma {
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = self.patch_mut(&venue_id) {
+            state.select_edited(&fixture);
             state.mode_menu = Some((fixture, at));
         }
-        cx.notify();
+        let selected = self
+            .patch_mut(&venue_id)
+            .map(|state| state.selected.clone())
+            .unwrap_or_default();
+        self.highlight_venue_lights(selected, cx);
     }
 
     pub(crate) fn close_patch_menus(&mut self, venue_id: String, cx: &mut Context<Self>) {
@@ -990,15 +987,50 @@ impl Luma {
             state.menu = None;
             state.mode_menu = None;
             state.bind_menu = None;
+            state.group_menu = None;
         }
         cx.notify();
     }
 
-    // -- the footprint strip ---------------------------------------------------
+    // -- the universe strips ---------------------------------------------------
 
-    pub(crate) fn grab_strip_cell(
+    /// Show the fixtures as an inventory, or as channels in universes.
+    pub(crate) fn show_patch_view(&mut self, venue_id: String, view: View, cx: &mut Context<Self>) {
+        if let Some(state) = self.patch_mut(&venue_id) {
+            state.view = view;
+            state.clear_edit();
+            state.drag = None;
+            state.menu = None;
+            state.mode_menu = None;
+            state.bind_menu = None;
+        }
+        cx.notify();
+    }
+
+    /// Make the patch grid's cells larger (`closer`) or smaller.
+    pub(crate) fn zoom_patch_grid(
         &mut self,
         venue_id: String,
+        closer: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(state) = self.patch_mut(&venue_id) {
+            state.grid_zoom = if closer {
+                (state.grid_zoom + 1).min(GRID_COLUMNS.len() - 1)
+            } else {
+                state.grid_zoom.saturating_sub(1)
+            };
+            state.drag = None;
+        }
+        cx.notify();
+    }
+
+    /// Pick a fixture's block up by the channel under the pointer.
+    pub(crate) fn grab_strip_block(
+        &mut self,
+        venue_id: String,
+        fixture: String,
+        universe: u16,
         address: u16,
         cx: &mut Context<Self>,
     ) {
@@ -1006,39 +1038,42 @@ impl Luma {
             return;
         };
         state.strip_refusal = None;
-        let Some(cell) = state
-            .cells
-            .iter()
-            .find(|cell| cell.address == address)
-            .cloned()
-        else {
+        let Some(row) = state.row(&fixture) else {
             return;
         };
-        let Some(fixture) = cell.fixture_id.clone() else {
-            state.drag = None;
-            cx.notify();
-            return;
-        };
+        let grabbed_channel = u16::try_from(i64::from(address) - row.address)
+            .unwrap_or(0)
+            .min(u16::try_from(row.num_channels - 1).unwrap_or(0));
         state.selected.clear();
         state.selected.insert(fixture.clone());
+        state.anchor = Some(fixture.clone());
         state.drag = Some(StripDrag {
             fixture,
-            grabbed_channel: cell.channel,
+            grabbed_channel,
+            universe,
             over: address,
+            dropped: false,
         });
-        cx.notify();
+        let selected = state.selected.clone();
+        self.highlight_venue_lights(selected, cx);
     }
 
-    pub(crate) fn drag_strip_to(&mut self, venue_id: String, address: u16, cx: &mut Context<Self>) {
+    pub(crate) fn drag_strip_to(
+        &mut self,
+        venue_id: String,
+        universe: u16,
+        address: u16,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(state) = self.patch_mut(&venue_id) {
-            if let Some(drag) = state.drag.as_mut() {
-                if drag.over == address {
-                    return;
-                }
-                drag.over = address;
-            } else {
+            let Some(drag) = state.drag.as_mut().filter(|drag| !drag.dropped) else {
+                return;
+            };
+            if drag.over == address && drag.universe == universe {
                 return;
             }
+            drag.over = address;
+            drag.universe = universe;
         }
         cx.notify();
     }
@@ -1049,16 +1084,22 @@ impl Luma {
         let Some(state) = self.patch_mut(&venue_id) else {
             return;
         };
-        let Some(drag) = state.drag.take() else {
+        let Some(drag) = state.drag.as_mut().filter(|drag| !drag.dropped) else {
             return;
         };
-        let universe = i64::from(state.strip_universe);
+        // The run stays drawn where it was let go until the write answers.
+        // Clearing the drag here would put it back where it started for the
+        // frames the write and the reload take.
+        drag.dropped = true;
+        let strip = drag.universe;
+        let universe = i64::from(strip);
         let start = i64::from(drag.over) - i64::from(drag.grabbed_channel);
-        let fixture = drag.fixture;
+        let fixture = drag.fixture.clone();
         if state
             .row(&fixture)
             .is_some_and(|row| row.universe == universe && row.address == start)
         {
+            state.drag = None;
             cx.notify();
             return;
         }
@@ -1071,10 +1112,14 @@ impl Luma {
                 Ok(()) => this.reload_patch(venue_id, cx),
                 Err(error) => {
                     let Some(message) = refusal(&error) else {
+                        if let Some(state) = this.patch_mut(&venue_id) {
+                            state.drag = None;
+                        }
                         return this.report_failure("The fixture was not moved", error, cx);
                     };
                     if let Some(state) = this.patch_mut(&venue_id) {
-                        state.strip_refusal = Some(message);
+                        state.drag = None;
+                        state.strip_refusal = Some((strip, message));
                     }
                     this.select_occupant(venue_id, universe, start, cx);
                     cx.notify();
@@ -1083,40 +1128,10 @@ impl Luma {
             .ok();
         })
         .detach();
+        cx.notify();
     }
 
     // -- outputs ---------------------------------------------------------------
-
-    /// Show one of the header's panels, or put the one that is up away.
-    pub(crate) fn toggle_patch_panel(
-        &mut self,
-        venue_id: String,
-        panel: Panel,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(state) = self.patch_mut(&venue_id) {
-            state.panel = (state.panel != Some(panel)).then_some(panel);
-            state.universe_menu = false;
-            state.bind_menu = None;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn close_patch_panel(&mut self, venue_id: String, cx: &mut Context<Self>) {
-        if let Some(state) = self.patch_mut(&venue_id) {
-            state.panel = None;
-            state.universe_menu = false;
-            state.bind_menu = None;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn toggle_universe_menu(&mut self, venue_id: String, cx: &mut Context<Self>) {
-        if let Some(state) = self.patch_mut(&venue_id) {
-            state.universe_menu = !state.universe_menu;
-        }
-        cx.notify();
-    }
 
     pub(crate) fn open_bind_menu(
         &mut self,
@@ -1195,69 +1210,58 @@ pub(crate) const NUMBER_FIELD_WIDTH: f32 = 56.0;
 // The page
 // ---------------------------------------------------------------------------
 
-/// Render the active task in the narrow venue panel.
-pub(crate) fn patch(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    venue::render(state, app)
+/// The venue page beneath the stage. `stage` is the structure the builder
+/// holds, for the view that lists it.
+pub(crate) fn patch(
+    state: &Patch,
+    stage: Option<&crate::stage::StageView>,
+    app: &Entity<Luma>,
+) -> AnyElement {
+    venue::render(state, stage, app)
 }
 
-pub(super) fn details(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .child(band(state, app))
-        .child(table::table(state, app))
-        .children(
-            state
-                .menu
-                .as_ref()
-                .map(|(fixture, at)| table::row_menu(state, fixture, *at, app)),
-        )
-        .children(
-            state
-                .mode_menu
-                .as_ref()
-                .map(|(fixture, at)| table::mode_menu(state, fixture, *at, app)),
-        )
-        .into_any_element()
-}
+/// Cells to a line of a universe's grid, from the smallest cells to the
+/// largest. Each divides 512, so every line is full.
+const GRID_COLUMNS: [i64; 3] = [128, 64, 32];
 
-/// Title, what the patch holds, and the things a person came here to do.
+/// What the table holds, what was just done, and the page's own acts.
 fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
     let auto = app.clone();
     let for_auto = state.venue_id.clone();
     div()
         .flex_shrink_0()
         .h(px(BAND_HEIGHT))
-        .px(px(20.0))
+        .px(px(12.0))
         .flex()
         .items_center()
         .gap(px(8.0))
-        .border_b_1()
-        .border_color(luma_ui::glass::hairline(0.07))
+        .child(luma_ui::float::segmented().children(View::ALL.map(|view| {
+            let shown = app.clone();
+            let venue = state.venue_id.clone();
+            luma_ui::float::segment(view.label(), state.view == view, view.label())
+                .id(SharedString::from(format!("patch-view-{}", view.label())))
+                .on_click(move |_, _, cx| {
+                    let venue = venue.clone();
+                    shown.update(cx, |this, cx| this.show_patch_view(venue, view, cx));
+                })
+                .agent_node(Role::Toggle, view.label())
+                .agent_focused(state.view == view)
+        })))
         .child(
             div()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .mr(px(12.0))
-                .child(
-                    div()
-                        .text_size(px(15.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(ladder::foreground())
-                        .child("Patch"),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(ladder::foreground_alpha(0.55))
-                        .child(subtitle(state))
-                        .agent_node(Role::Text, subtitle(state)),
-                ),
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(11.5))
+                .text_color(ladder::foreground_alpha(0.55))
+                .child(subtitle(state))
+                .agent_node(Role::Text, subtitle(state)),
         )
-        .child(div().flex_1().min_w_0())
-        .children(Panel::ALL.map(|panel| panel_chip(state, panel, app)))
+        .when(state.view == View::Patch, |band| {
+            band.child(zoom_button(state, false, app))
+                .child(zoom_button(state, true, app))
+        })
+        .child(add_button(app))
         .child(
             luma_ui::float::btn("Auto patch", "patch-auto")
                 .id("patch-auto")
@@ -1269,55 +1273,49 @@ fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
         )
 }
 
-/// A chip in the band, and the float it hangs when it is lit.
-fn panel_chip(state: &Patch, panel: Panel, app: &Entity<Luma>) -> impl IntoElement {
-    let open = state.panel == Some(panel);
-    let toggled = app.clone();
-    let venue = state.venue_id.clone();
-    let label = panel.label();
-    div()
-        .relative()
-        .flex_shrink_0()
-        .child(
-            luma_ui::float::chip()
-                .id(SharedString::from(format!("patch-panel-{label}")))
-                .when(open, |chip| {
-                    chip.bg(luma_ui::glass::card_selected_bg())
-                        .text_color(ladder::foreground())
-                })
-                .on_click(move |_, _, cx| {
-                    let venue = venue.clone();
-                    toggled.update(cx, |this, cx| this.toggle_patch_panel(venue, panel, cx));
-                })
-                .child(label)
-                .agent_node(Role::Toggle, label)
-                .agent_focused(open),
-        )
-        .when(open, |slot| slot.child(panel_float(state, panel, app)))
+/// Add a fixture or a piece of structure: the one palette both come from.
+fn add_button(app: &Entity<Luma>) -> impl IntoElement {
+    let open = app.clone();
+    luma_ui::float::btn("Add", "stage-add")
+        .id("stage-add")
+        .child(luma_ui::float::key_hint_text("A", ""))
+        .on_click(move |_, window, cx| {
+            open.update(cx, |this, cx| this.stage_open_chooser_focused(window, cx));
+        })
+        .agent_node(Role::Button, "Add element")
 }
 
-fn panel_float(state: &Patch, panel: Panel, app: &Entity<Luma>) -> AnyElement {
-    let dismissed = app.clone();
-    let venue = state.venue_id.clone();
-    let body = match panel {
-        Panel::Footprint => footprint::footprint(state, app),
-        Panel::Outputs => outputs::outputs(state, app),
+/// One step of the patch grid's zoom, off at the end it cannot pass.
+fn zoom_button(state: &Patch, closer: bool, app: &Entity<Luma>) -> impl IntoElement {
+    let (icon, label, key) = if closer {
+        (
+            luma_ui::icons::IconName::Plus,
+            "Larger cells",
+            "patch-zoom-in",
+        )
+    } else {
+        (
+            luma_ui::icons::IconName::Minus,
+            "Smaller cells",
+            "patch-zoom-out",
+        )
     };
-    luma_ui::float::anchored_below(
-        SharedString::from(format!("patch-panel-float-{}", panel.label())),
-        luma_ui::CONTROL_HEIGHT,
-        luma_ui::float::Dismiss::on_press_out(move |_, cx| {
+    let at_end = if closer {
+        state.grid_zoom + 1 >= GRID_COLUMNS.len()
+    } else {
+        state.grid_zoom == 0
+    };
+    let zoomed = app.clone();
+    let venue = state.venue_id.clone();
+    luma_ui::float::icon_btn(icon, key)
+        .id(key)
+        .when(at_end, |button| button.opacity(0.35))
+        .on_click(move |_, _, cx| {
             let venue = venue.clone();
-            dismissed.update(cx, |this, cx| this.close_patch_panel(venue, cx));
-        }),
-        luma_ui::float::popover_card()
-            .w(px(PANEL_WIDTH))
-            .p(px(14.0))
-            .gap(px(10.0))
-            .child(body)
-            .agent_node(Role::Card, panel.label())
-            .into_any_element(),
-    )
+            zoomed.update(cx, |this, cx| this.zoom_patch_grid(venue, closer, cx));
+        })
+        .agent_node(Role::Button, label)
+        .agent_disabled(at_end)
 }
 
 /// The line under the title: what the last act did, or what the patch holds.
@@ -1331,12 +1329,15 @@ fn subtitle(state: &Patch) -> SharedString {
     let Some(data) = state.data.as_ref() else {
         return "Reading the patch…".into();
     };
-    format!(
+    let mut line = format!(
         "{} · {}",
         plural(data.fixtures.len(), "fixture"),
         plural(data.universes.len(), "universe"),
-    )
-    .into()
+    );
+    if !state.selected.is_empty() {
+        line.push_str(&format!(" · {} selected", state.selected.len()));
+    }
+    line.into()
 }
 
 /// `n thing`, `n things`. One helper rather than an `s` at each call site,
@@ -1349,11 +1350,6 @@ pub(crate) fn plural(count: usize, noun: &str) -> String {
     }
 }
 
-/// One row of chrome, a shade taller than a dialog's band because it carries a
-/// title and a subtitle rather than one line of controls.
-const BAND_HEIGHT: f32 = 62.0;
-
-/// Wide enough for a 32-column footprint grid at 8 px a cell plus the card's
-/// own inset — the widest of the three panels, and they share a width so
-/// switching between them does not move the float.
-const PANEL_WIDTH: f32 = 332.0;
+/// The row of chrome over the table, and over the groups beside it, so the
+/// two lists start on one line.
+pub(crate) const BAND_HEIGHT: f32 = 44.0;

@@ -8,13 +8,8 @@ publish = false
 # No windowing, no gpui: the device is ours, and every frame lands in a texture.
 # Presentation lives here too: `viewport` and `share` hand finished frames to
 # the app, whose `visualizer` puts them on screen.
-# The golden renderers have no tests of their own; their output is what the
-# `render` test binary checks. No test binary is linked for them.
-[[bin]]
-name = "render-goldens"
-path = "src/bin/render-goldens.rs"
-test = false
-
+# The golden renderer has no tests of its own; its output is what the
+# `render` test binary checks. No test binary is linked for it.
 [[bin]]
 name = "render-contract-goldens"
 path = "src/bin/render-contract-goldens.rs"
@@ -22,6 +17,9 @@ test = false
 
 [dependencies]
 luma-scene = { path = "../scene" }
+# The build a library fixture's `Definition` carries: its meshes, joints and
+# cells, which the frame builder draws. Serde and glam only.
+luma-fixture = { path = "../../../backend/crates/luma-fixture" }
 glam = "0.30"
 wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
@@ -46,6 +44,7 @@ objc2 = "0.6"
 objc2-metal = { version = "0.3", features = [
     "MTLAllocation",
     "MTLDevice",
+    "MTLHeap",
     "MTLPixelFormat",
     "MTLResource",
     "MTLTexture",

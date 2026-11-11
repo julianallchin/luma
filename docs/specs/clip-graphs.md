@@ -1,8 +1,5 @@
 # Clip graphs
 
-Build spec. Branch `clip-graphs`, baseline `6ebfb8f4`. Julian approved the
-direction on 2026-09-28. The calls he did not settle are in section 11.
-
 Every clip owns one small graph. The inspector shows that graph. Agents write
 it as Python. This spec replaces forms, sources, events-on-sources and the
 form presets. It keeps the tensor runtime, the aim blending, the one curve
@@ -579,7 +576,7 @@ range. What it reads is the host's: in a score, the venue's live control
 `name`, set from Live, MIDI or OSC (a control exists by being
 named; one nothing has set reads 0); in a Perform pattern, a value of that
 pattern keyed by the node's id, so a rename keeps its bindings. Into a
-clock input (`every`, `duration`) it is a speed, a live clock (section 5.5);
+clock input (`every`, `duration`) it is a speed, a live clock (section 5.4);
 it reaches no fixed input, which shapes the clip's heads. Setting a value
 never recompiles:
 `PreparedGraph::with_controls` binds a `ControlSource` the control kernel
@@ -805,7 +802,7 @@ cap stays.
 {"clips": {"3f24…": {
   "name": "Chase",
   "start": 32.0, "duration": 8.0, "seed": 6348896133488684926,
-  "selection": {"expression": "led_bars_vertical"},
+  "selection": {"groups": ["2f6c1d0e-led-bars-vertical"]},
   "z_index": 0, "blend_mode": "replace",
   "graph": {
     "version": 2,
@@ -824,11 +821,11 @@ cap stays.
 Rules: an empty input is absent. A wire is `{"node": id}`. A list is a JSON
 array of numbers and wires; a bare 3-array reads as a vector, a color or a
 list of three numbers, by the input's definition. Settings at their
-default are still written. `selection_seed` stays as it is. The Rust type:
+default are still written. The Rust type:
 
 ```rust
 pub struct Clip { pub name: String, pub start: f64, pub duration: f64, pub seed: u64,
-    pub selection_seed: Option<u64>, pub selection: Selection, pub z_index: i64,
+    pub selection: Selection, pub z_index: i64,
     pub blend_mode: BlendMode, pub graph: ClipGraph }
 pub struct ClipGraph { pub version: u32, pub nodes: BTreeMap<String, Node> }
 pub struct Node { pub kind: Kind, pub settings: BTreeMap<String, String>, pub inputs: BTreeMap<String, Input> }
@@ -856,10 +853,8 @@ create table backup.clips_pre_clip_graphs_20260929 as select * from public.clips
 create table backup.drafts_pre_clip_graphs_20260929 as select * from public.drafts;
 ```
 
-`graph` and `inputs_json` stay in place tonight and are not read by new code.
-A follow-up migration pair (`20260930000000_drop_form_columns.sql`) drops them
-after the upload is verified (section 8). Reason: sqlx runs every pending
-migration at launch, before the converter could run.
+`graph` and `inputs_json` are still on the table and still synced. No code
+reads them, and `rows.rs` writes them empty.
 
 `rows.rs` maps `name` ↔ `clips.name` and `graph` ↔ `clips.graph_json`.
 `drafts.base_json` / `state_json` hold whole `Score` documents and convert
@@ -869,7 +864,7 @@ need no change. Redeploy the sync rules after the Postgres migration so
 PowerSync picks up the new columns.
 
 Version: `graph.version` in the JSON. A future shape bumps it and converts
-once, offline, like this migration. No load-time compatibility layer.
+once, offline. No load-time compatibility layer.
 
 ---
 
@@ -940,33 +935,7 @@ for each head and time:
    section 0). Inputs of another clock make their own layer; the layers and
    the inputs with no clock multiply.
 
-### 5.4 Delete and reuse
-
-`backend/crates/patterns/src/`:
-
-| Delete | Reuse (unchanged or trimmed) | New |
-|---|---|---|
-| `forms/` (all nine files; move `clock_table.rs`, `noise.rs` geometry helpers into `clip_graph/`) | `tensor.rs`, `runtime/mod.rs`, `runtime/lighting.rs`, `prepared.rs`, `prepared/clip_range.rs`, `clip_range.rs` | `clip_graph/mod.rs` (types, JSON) |
-| `sources.rs` | `graph.rs` (Graph, Node, Binding, Definition, Library, Primitive; delete `Author`, `Preset`, `Input::author`, `promotable`) | `clip_graph/definitions.rs` (2.6) |
-| `recipes.json`, `field_ops.rs`, `signals.rs` (move `coherent_noise` into `clip_graph/noise.rs`), `color.rs::definition`, `envelope.rs` editor-only ops if unused by gpui after phase 4 | `catalog.rs` (registers kernels + `band_energy`, `clip_range`, `output` only) | `clip_graph/check.rs` |
-| `runtime/kernels.rs` arms for the generic primitives | `curve.rs`, `color.rs::{Gradient, ColorStop}`, `color_space.rs`, `aim.rs`, `blend.rs`, `clock.rs`, `selection.rs`, `features.rs`, `spatial.rs` (`threshold`, `epoch_seed`), `value_noise.rs`, `inference.rs` | `clip_graph/heads.rs` (Units pipeline; takes `basis`, `least_spread`, `major_axis`, `MirrorPlane::fold`, `unit_direction` from `mapping.rs`) |
-| `mapping.rs` types `MappingSpec`, `MappingSource`, `Span`, `AxisPlane`, `Mapping::resolve/leans/mirrored`; `spatial.rs` `Mapping`, `Coordinate` | `value.rs` keeps `Signal, Number, Beats, Proportion, Degrees, Seconds, Color, Vector, Gradient, Lighting`; adds `Points`; deletes the source and mapping variants | `clip_graph/lower.rs`, `clip_graph/kernels.rs` |
-| `presets.rs` form presets; `bin/pattern-eval.rs`; `examples/node_reference.rs`; tests `channel_vectors.rs`, `envelopes.rs`, `foundation_compositions.rs`, `signal_output.rs`, `validation.rs` | `score.rs` (`Clip` gains `name`, `graph`; `validate_clip` calls the checker) | `presets.rs` + `presets.json` rewritten (clip presets, curves, gradients, bands) |
-| | | `clip_graph/summary.rs` (7.6) |
-
-`backend/src/`: delete `node_graph/lighting.rs` and the `models::node_graph`
-arg types the sheet used; keep `rig_uv.rs` (venue binding).
-Adapt `services/graph_scores.rs`, `services/composable_patterns.rs::preview`
-(previews a preset graph), `eval/lighting.rs::compile_clip`,
-`database/local/scores/rows.rs`, `sync/schema.rs`,
-`agent_execution/track_host/score.rs` (adds `clip_check`, full 12-channel
-render), `agent_execution/bindings/providers/nodes.rs` (13 definitions +
-presets binding), `dispatch/handlers/scores.rs` (definitions and presets
-queries for the UI).
-
----
-
-### 5.5 Live clocks (2026-11-06)
+### 5.4 Live clocks (2026-11-06)
 
 A clock table is a line of knots, each a beat and the turns counted there,
 read straight between them and on past either end at the period there. A
@@ -1140,8 +1109,8 @@ edit.add_clip(aim(direction=(0, 0.643, -0.766),
 ### 6.6 Prompts and skills
 
 `luma.md`, `python-tool.md` and the `node-cards` and `composing-patterns`
-skills are rewritten from sections 1, 2, 6 and 9. `node-cards` becomes the
-node reference; `composing-patterns` becomes the effect catalog (section 9)
+skills are written from sections 1, 2, 6 and 8. `node-cards` becomes the
+node reference; `composing-patterns` becomes the effect catalog (section 8)
 plus the working order. Delete every mention of forms, `inputs=`,
 `definition(form)["inputs"]` defaults, sources, `events`, `same_as`, grain,
 `width_relative`, lean.
@@ -1276,107 +1245,7 @@ when present; `still` when none apply. Example: `line · every 2`.
 
 ---
 
-## 8. Migration
-
-One-time, offline, idempotent. Never at load time. The library was converted
-in place on 2026-09-29 (form clips → version 1), 2026-09-30 (→ versions 2
-and 3) and 2026-10-01 (math products, fronts), through guarded `UPDATE`s on
-the app database so PowerSync carried them to Supabase. Every stored clip is
-now version 3, and this build reads no other version. The converters, parity
-checks and apply tools were deleted after the last run; git history has
-them. The tables below record what each conversion meant.
-
-### 8.2 Mapping
-
-Old top level → nodes:
-
-| Old | New |
-|---|---|
-| `color@1 {color, brightness, fade}` | `color(color, brightness, alpha=fade)` |
-| `aim@1 {base, direction, point, lean, horizontal, vertical, axis, fade}` | `aim(base, direction\|point, yaw=horizontal, pitch=vertical, alpha=fade, heads=mirror(axis.mirror) when present)` |
-| `strobe.constant@1 {rate, fade}` | `strobe(rate, alpha=fade)` |
-| clip `blend_mode`, `seed`, `selection`, `z_index`, `start`, `duration` | unchanged |
-
-Old values → inputs:
-
-| Old value | New |
-|---|---|
-| `number, proportion, beats, degrees, position, seconds` | number |
-| `color`, `vector`, `choice` | color, vector, setting |
-| `time {points (numbers), events, phase, gain}` | `clock` (8.3) → `time(clock, phase)` → `curve(kind number, shape = points with v normalized `(v − min)/(max − min)`, low = min × gain, high = max × gain)`. Constant curve (min = max): low = high = v × gain. |
-| `time {points (colors), ...}` | color keyframes: the same points with `v = i/(n−1)` and a gradient whose stops are the colors at the points' x, eases kept on the shape. Exact for linear segments; a hold ease stays a hold. |
-| `time {gradient, curve, ...}` | `curve(kind color, shape = curve, gradient)` |
-| `phase`, `gain` as sources | phase → a wire into `time.phase`; gain → low and high each become a curve with the gain source's coordinate and shape, `low = min × [g_low, g_high]`, `high = max × [g_low, g_high]` |
-| `events {same_as: X}` | the same clock node as X (linking) |
-| `space {axis, curve\|gradient, offset, width, width_relative, boundary, grain, gain}` | heads = `split(by)` for span fixture/group, then `group(size)` for grain, then `mirror(normal, offset)` for `axis.mirror`; `space(heads, direction, offset', width', kind, wrap = boundary == wrap)`; `curve(space, shape', low = gain × min, high = gain × max)` or a color curve for a gradient |
-| `axis.source` | `u`→line (1,0,0); `v`→line (0,1,0); `z`→line (0,0,1); `vector{direction}`→line direction; `major_axis`→line empty direction; `order`→order; `radial`/`angle`→radial/angle with `plane`: auto→empty, up_down→(0,0,1), front_back→(0,−1,0), left_right→(1,0,0), custom→normal; `random`→`shuffle()` + kind order |
-| `width`, `width_relative` | `w = width` when absolute. Relative: `gap = min(w × every/duration, 0.8 if overrun else 4)`, `w = gap/(1 − gap)` if overrun else `gap`, with every/duration from the offset's clock at clip start. Overrun = boundary clip and the offset curve has no hold. |
-| `offset` (a time source, values `off` 0–1) | start-anchored: `new = off × (1 + w·[overrun]) − w/2·[overrun] − w/2`; applied to the curve's low and high |
-| wrapped line stroke crossing once (`boundary wrap`, offset ramp 0 → 1 or 1 → 0, absolute width) | as an overrun stroke: `wrap = no`, offset −w … 1, so the pill enters and leaves instead of starting half on each end (decision 42) |
-| shape auto-reverse | when the old offset curve is monotone decreasing, the shape's points are flipped (`x → 1 − x`, eases mirrored); otherwise unchanged and logged as approximate when the shape is asymmetric |
-| `random {events, grain, coverage, level}` | `k` (8.3); `h = shuffle(group(size), k)`; `s = space(h, kind order, offset 0, width = coverage)`; `curve(s, "On", low 0, high = level)`; a level source → a wire into `high` |
-| `noise {speed, scale, contrast, range, grain, independent, key}` | `n = noise(group(size), speed, scale, contrast)`; `curve(n, "Ramp up", low = range[0], high = range[1])`; `independent` → scale 0.02; node id = old `key` or input path (keeps the salt) |
-| `audio {from_hz, to_hz, floor f, threshold th, gain}` | `a = audio(from, to)`; shape `[[0, f], [1, 1]]` when th = 0, else `[[0, 0, "hold"], [th, f + (1 − f)·th], [1, 1]]`; low 0, high = gain |
-| aim `lean` constant non-zero | folded into `direction`: `direction' = aim::lean(direction, lean, |lean|)` (exact for a constant direction) |
-| aim `lean` = space with curve and gain g (Fan) | `yaw = curve(space(...), shape, low = −g/2, high = g/2)`; approximate (lean toward a stage vector vs yaw in the aim frame) |
-| aim `lean` = radial space with growing gain (Bloom) | `base = away`, `point = curve(time(), "Ramp up", low = (c, 0, z + 40), high = (c, 0, z + 6))` with `c, z` the selection centroid; approximate |
-| aim `axis.mirror` | `mirror(normal, offset)` into `aim.heads` |
-| `fade` (proportion or time over clip) | `alpha` value or `curve(time(), shape)` |
-
-### 8.3 Clocks
-
-| Old `events` | New |
-|---|---|
-| absent at the root | no clock |
-| `every 0`, no life | no clock (once over the clip, hold) |
-| `every 0`, life L | `clock(every = clip duration, duration = L)` |
-| `every E`, no life | `clock(every = E)` |
-| `every E`, life L | `clock(every = E, duration = L)` |
-| sources on every/life | wires into `clock.every` / `clock.duration` |
-| nested source without events | inherits: the same clock node as its parent |
-
-### 8.4 Unmappable and approximate
-
-Hard (the converter refuses the run and lists the clips): a `space` gain
-source on a color gradient; a vector time source with more than two distinct
-points whose path is not a straight line; a `time` curve with both numbers
-and colors; a clip that fails the new checker after conversion.
-
-Approximate (converted, listed with counts in `report.md`): Fan and Bloom
-leans; `independent` noise (a different random stream, same look); spatial
-noise (the field is now 4-D; same statistics); relative width with a
-varying every or life (taken at clip start); non-monotone offset with an
-asymmetric shape (no auto-reverse); overlap winners when color or alpha
-varies per event on the brightness clock (the effect now includes them).
-
-### 8.5 Graph version 2: bands to shifted spaces (2026-09-30)
-
-Every version 1 graph in `clips.graph_json` and in `drafts` documents was
-converted, and each clip was played before and after on the stand-in rig
-(1/8 beat steps) and sorted into exact, edge-only (a head exactly on a band's
-end) and approximate.
-
-A version 1 band read `x = (a − offset) / width` (the difference wrapped
-first on a ring) and gave the curve's low outside [0, 1]. That is
-`space(shift=offset, length=width)` plus a pill edge on the curve. Per space,
-with `S` the shape of each curve that reads it:
-
-| v1 band | v2 |
-|---|---|
-| offset 0, width 1 | drop the inputs |
-| offset and width numbers, inside 0..1, not wrapped | `S` placed on [offset, offset + width], 0 outside (jumps); no space inputs |
-| any other | `shift` = the offset and `length` = the width, unchanged (numbers or the same wires, eases kept); `S` gains jumps to 0 at x 0 and x 1 where it is not already 0 there |
-
-No node is added, no ease is inverted and ids stay as they are. A color
-curve over a band (black outside) is refused (none in the 2026-09-30 copy).
-Dry run on a copy, 2026-09-30: 5,609 clips, 0 refused, 0 checker errors;
-5,270 play exactly as before; 339 read audio and were checked but not
-played (no analyzed track on the stand-in rig); node counts unchanged for
-all. Run it on a copy; applying it needs Julian's approval.
-
----
-
-## 9. Effect catalog
+## 8. Effect catalog
 
 This becomes the `composing-patterns` skill and the shipped clip presets.
 Shapes named here are curve presets (`v` 0–1): On `[[0,1],[1,1]]`, Ramp up,
@@ -1486,116 +1355,7 @@ usual pairing.
 
 ---
 
-## 10. Build plan
-
-Five agents, one file area each. Nobody edits another agent's files; needs
-across areas are met by the contracts in this spec, not by waiting. Format
-only touched files. Run only the tests you changed. Commit only your own
-files.
-
-| Agent | Owns |
-|---|---|
-| A patterns | `backend/crates/patterns/**` |
-| B backend | `backend/src/**` except `agent/prompts/**`; `backend/migrations/*`; `supabase/migrations/*`; `deploy/powersync/sync-config.yaml` |
-| C python | `backend/python/luma_exec/**`; `backend/src/agent/prompts/*.md`; `resources/skills/**`; `scripts/headless/mcp_smoke.ts`, `mcp-client.ts` |
-| D gpui | `gpui/crates/app/**`; `gpui/crates/ui/**`; `gpui/crates/agent/**` |
-| E migration | the one-time converter, parity check and apply tool (section 8; deleted after the run) |
-
-### Phase 1 (A first, 1–2 h): model and checker
-
-A: `clip_graph/{mod,definitions,check,summary}.rs`, JSON round trip,
-`Clip { name, graph }`, `presets.json` rewritten from section 9 (clip
-presets, curves, gradients, bands), `presets.rs`. Commit as soon as it
-compiles so B, C, D read the real types. Tests: JSON round trip for every
-preset; one test per checker rule in 3.1 asserting the message of 3.2;
-`definitions()` defaults pass the checker for every kind; `summary()` for
-three presets.
-
-B, C, D, E start at once from this spec (the JSON in section 4 and the
-definitions in 2.6 are the contract).
-
-### Phase 2 (parallel): lowering, backend, python, UI
-
-A: `heads.rs`, `lower.rs`, `kernels.rs`, delete list 5.4, `catalog.rs`
-trimmed, `score.rs::validate_clip` → checker + `PreparedGraph::new`. Tests
-(behaviour, not constants): every preset lowers and gives non-zero light or
-aim on a 12-head stand-in rig; stroke: with offset 0 and width 0.5, exactly
-the low half of a line is lit, and with wrap on, a stroke past 1 lights heads
-near 0; shuffle: `round(w × n)` units lit, the same set within an event, a
-different set in the next; curve outside gives low, color outside gives
-black; overlap: two events, the brighter wins, equal brightness → the newer;
-two clocks on color and brightness are independent; mirror flips yaw sign
-for folded heads and Kaleidoscope's four quadrants match; Turning line lights
-two opposite arms; Speed-up chase's event count grows; random: two nodes with
-the same settings differ, one linked node is equal.
-
-B: migrations, `rows.rs`, `schema.rs`, `graph_scores.rs`, `compile_clip`,
-`composable_patterns::preview`, `track_host/score.rs` (`clip_check`, 12-channel render
-with channel names), `bindings/providers/nodes.rs` (definitions) and a
-`presets` binding. Delete `node_graph/lighting.rs`. Tests: row round trip
-with name and graph; `save_score` diff writes `graph_json` only when the
-graph changed; `clip_check` returns the checker text; `score_render` tensor
-has 12 channels.
-
-C: `clip.py`, `score.py`, `track.py` (`output.aim`, `output.strobe`),
-`bindings.py` (bare names, `luma.presets`), prompts, skills,
-`mcp_smoke.ts` rewritten for the new API. Tests (`luma_exec/tests/`):
-builder JSON equals the section 4 example for Chase; linking gives one node;
-`graph.source()` round-trips every preset (build → source → exec → equal
-JSON); `definition()` defaults build; `add_clip` without a name raises;
-`preset("Chase")` inherits the name.
-
-D: `sheet/graph.rs` (new), `sheet.rs`, `browser.rs`, `picker.rs`,
-`document.rs`, `track_editor.rs` label, `fades.rs` on alpha; delete
-`sheet/form.rs`. Tests (`clip_graph.test.js`): selecting a Chase shows the
-name field and the Clock, Time, Curve, Space, Curve and Color cards left to
-right with a wire into each input; "Over time" on Brightness of a Wash inserts Time and Curve
-cards and the stored graph gains two nodes; switching the space kind segment
-stores the setting; dragging a curve point stores new points; a wire dragged
-from Clock 1 onto a second time's clock shares one clock; renaming stores
-`name` and the timeline header shows it; the fade handle writes an alpha
-curve; undo after a drag restores the graph in one step.
-
-E: converter with unit tests per row of 8.2 and 8.3 (fixed JSON in →
-expected graph out, then the checker passes), the SQL writer, the apply tool,
-the parity tool, the old-build export step scripted.
-
-### Phase 3: integrate
-
-1. One agent (B) builds everything: `cargo check --manifest-path
-   gpui/Cargo.toml --workspace --all-targets`, backend crate tests for the
-   touched crates, `gpui/test` for `clip_graph.test.js`, the Python tests.
-2. E runs the parity check on a copy of the live database and posts
-   `report.md`. Zero hard differences is the gate.
-3. End-to-end agent run: rebuild `backend/target/debug/luma-cli`; run
-   `scripts/headless/mcp_smoke.ts`, which must: `open` a track, run a cell
-   that builds "Kick chase" (`audio` on width, `clock` every 1), `check`,
-   read `view.output.aim` and `view.output.values`, `apply`, read the clip
-   back and print `clip.graph.source()`, then run a wrong cell
-   (`brightness=time()`) and show the 3.2 error text. All steps pass; no
-   "skip".
-4. The migration (section 8), with Julian's go before Supabase and the app
-   database were written.
-5. Relaunch `luma-app` natively on Sway after the final build. Open a score,
-   select a migrated Chase, see the graph; scrub playback; resize the clip.
-6. Regenerate the www node reference from `definitions()` (follow-up, not
-   tonight).
-
-### Acceptance
-
-- Workspace check and all touched tests green.
-- Parity report: 0 hard, approximations listed with counts.
-- Local: every clip has a name and a `graph_json`; `ps_crud` empty after
-  relaunch; `integrity_check` ok.
-- Supabase: counts match, history rows present, no rejected uploads.
-- MCP end-to-end run passes with the new API and shows one checker error
-  with an example.
-- `luma-app` running natively, plays the migrated score, inspector shows the
-  graph, timeline shows names.
-
----
-
-## 11. Decision log
+## 9. Decision log
 
 One line each; the alternative after "alt:".
 

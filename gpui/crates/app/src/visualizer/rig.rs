@@ -117,6 +117,7 @@ impl Visualizer {
             posed: false,
             drag: None,
             fly: None,
+            tour: None,
             pointer_locked: false,
             fly_speed: 1.0,
             pivot_dot: None,
@@ -129,12 +130,10 @@ impl Visualizer {
             venue_environment: VenueEnvironment::default(),
             render_controls: RenderControls::new(environment),
             settings: Default::default(),
+            settings_page: Default::default(),
             presentation: false,
             bottom_bar_visible: false,
             settings_motion: RefCell::new(settings::DockMotion::new(cx.reduce_motion())),
-            selection_motion: SelectionMotion::new(cx.reduce_motion()),
-            selection_card_side: None,
-            selection_card_last: None,
             environment_saving: false,
             environment_edited: false,
             environment_pending: Rc::default(),
@@ -147,6 +146,8 @@ impl Visualizer {
             reduced_motion: cx.reduce_motion(),
             exporting: false,
             build: None,
+            rigging: false,
+            work_light: luma_scene::environment::WORK_LIGHT,
             stage: Rc::default(),
         }
     }
@@ -166,10 +167,30 @@ impl Visualizer {
         self.render_controls.set_environment(self.environment());
     }
 
-    /// Preview and authoring use the same saved room. Selecting a score
-    /// changes its fixtures' output, not the time of day or the house lights.
-    fn environment(&self) -> VenueEnvironment {
-        self.venue_environment
+    /// The room as it is lit on screen. Previewing a score uses the saved
+    /// room: selecting one changes its fixtures' output, not the time of day
+    /// or the house lights. Rigging uses the same room under a work light of
+    /// its own, which is never saved, and the camera walkthrough keeps a
+    /// dark room lit enough to look around — see [`Self::tour_lit`].
+    pub(crate) fn environment(&self) -> VenueEnvironment {
+        if self.rigging {
+            self.venue_environment.lit_at(self.work_light)
+        } else {
+            self.tour_lit(self.venue_environment)
+        }
+    }
+
+    /// Whether the page under the stage is the one the room is built on.
+    /// Arriving there turns the work light back to where it starts.
+    pub(super) fn set_rigging(&mut self, rigging: bool) {
+        self.rigging = rigging;
+        self.set_work_light(luma_scene::environment::WORK_LIGHT);
+    }
+
+    /// Turn the work light the room is rigged under.
+    pub(crate) fn set_work_light(&mut self, fraction: f32) {
+        self.work_light = fraction;
+        self.render_controls.set_environment(self.environment());
     }
 
     /// Light this stage with a different score, without rebuilding it.
@@ -345,6 +366,7 @@ impl Visualizer {
         });
         let mut stage = self.stage.borrow_mut();
         stage.definitions = definitions;
+        stage.lights = luma_lib::stage_render::StageLights::new(&rig.fixtures, &rig.definitions);
         stage.strobes = FixtureStrobes::new(&rig);
         stage.lasers = rig.lasers.clone();
         stage.scene = Some(scene);
@@ -447,6 +469,8 @@ pub(crate) fn scene(
                     mode_name: f.mode_name.clone(),
                     pos: node.position.map(|v| v as f32),
                     rot: node.rotation.map(|v| v as f32),
+                    aim: luma_scene::venue::ANGLE_PARAMS
+                        .map(|key| node.params.get(key).copied().unwrap_or(0.0) as f32),
                 })
             })
             .collect(),

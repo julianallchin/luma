@@ -42,8 +42,7 @@ const lastButton = (label) => app.snapshot().findAll({ role: "button", label }).
 
 function openPatch() {
   nav.patch("Test Venue");
-  nav.step("patch details", "button", "Patch details");
-  // Takeover, and the stage off: the table is nine columns beside a rail.
+  // The stage off: the table is seven columns beside the groups.
   nav.agentOff();
   nav.stageOff();
   until("the patch table", (s) => s.find({ role: "row", label: "Mover 0" }) !== undefined);
@@ -80,35 +79,76 @@ test("a refused address leaves the row where it was", () => {
   expect(app.snapshot().findAll({ role: "row" }).filter((n) => n.focused).map((n) => n.label)).toEqual(["Mover 0"]);
 });
 
-// The footprint strip shows the collision the allocator computed, and the
-// universe chips tell 1 from 17.
-test("the footprint reports a collision and the universes it holds", { fixture: { sql: EXTRAS } }, () => {
-  openPatch();
-  const collisions = () => texts().filter((l) => l.startsWith("Collision at"));
-  app.click(app.snapshot().find({ role: "toggle", label: "Footprint" }));
-  until("the footprint", (s) => s.find({ role: "select", label: "Universe 1" }) !== undefined);
+const showPatch = () => {
+  nav.step("the patch view", "toggle", "Patch");
+  until("the universes", (s) => s.find({ role: "card", label: "Universe 1 channels" }) !== undefined);
   app.frames(4);
-  // The clash covers 5–12 across movers at 1–8 and 9–16: one run, not eight
-  // cells.
-  expect(collisions()).toEqual(["Collision at 1:5–12"]);
+};
+const block = (name) => app.snapshot().findAll({ role: "button" }).find((n) => n.label.startsWith(`${name} at `));
+const blockStart = (name) => Number(block(name).label.match(/:(\d+)–/)[1]);
 
-  app.click(app.snapshot().find({ role: "select", label: "Universe 1" }));
-  until("the universe menu", (s) => s.find({ role: "button", label: "Universe 17" }) !== undefined);
-  expect(app.snapshot().findAll({ role: "button" }).map((n) => n.label).filter((l) => l.startsWith("Universe ")))
-    .toEqual(["Universe 1", "Universe 17"]);
-  // Universe 17 is a different strip, and it is not colliding.
-  app.click(app.snapshot().find({ role: "button", label: "Universe 17" }));
-  until("the seventeenth universe", (s) => s.find({ role: "select", label: "Universe 17" }) !== undefined);
+// The patch view shows every universe as a strip, with the collision the
+// allocator computed on the one that has it.
+test("the patch view shows each universe and the collision on it", { fixture: { sql: EXTRAS } }, () => {
+  openPatch();
+  showPatch();
+  const strips = app.snapshot().findAll({ role: "card" }).map((n) => n.label).filter((l) => l.endsWith(" channels"));
+  expect(strips).toEqual(["Universe 1 channels", "Universe 17 channels"]);
+  // The clash covers 5–12 across movers at 1–8 and 9–16: one run, not eight
+  // cells, and none on universe 17.
+  expect(texts().filter((l) => l.startsWith("Collision at"))).toEqual(["Collision at 1:5–12"]);
+  assert(block("Far 1").label.startsWith("Far 1 at 17:1–"), `Far 1 is drawn at ${block("Far 1").label}`);
+});
+
+// The grid's zoom changes how many cells make a line, and they stay square.
+test("zooming the patch grid makes its cells larger and keeps them square", () => {
+  openPatch();
+  showPatch();
+  const grid = () => app.snapshot().find({ role: "card", label: "Universe 1 channels" }).bounds;
+  const before = grid();
+  nav.step("zoom in", "button", "Larger cells");
+  until("a taller grid", () => grid().height > before.height * 1.5);
+  const after = grid();
+  // Half as many across, so twice as many down: four times the height.
+  assert(Math.abs(after.height / before.height - 4) < 0.3, `grew ${after.height / before.height} times`);
+  assert(Math.abs(after.width / 32 - after.height / 16) < 1, "the larger cells are not square");
+});
+
+// A block dragged along its strip is re-addressed by as many channels as it
+// was carried, and a drop onto another fixture is refused where it stood.
+test("dragging a block re-addresses the fixture, and a collision is refused", () => {
+  openPatch();
+  showPatch();
+  // A universe is a grid 64 cells across, and the cells are square.
+  const grid = app.snapshot().find({ role: "card", label: "Universe 1 channels" }).bounds;
+  const perChannel = grid.width / 64;
+  assert(Math.abs(grid.height / 8 - perChannel) < 1, `cells are ${perChannel} by ${grid.height / 8}`);
+  const before = blockStart("Mover 3");
+  app.drag(block("Mover 3"), { dx: 30 * perChannel, dy: 0 }, { steps: 8 });
+  until("the block to move", () => blockStart("Mover 3") !== before);
   app.frames(4);
-  expect(collisions()).toEqual([]);
+  const moved = blockStart("Mover 3") - before;
+  assert(moved > 28 && moved < 32, `carried 30 channels, moved ${moved}`);
+  // The table reads the same address.
+  nav.step("the fixtures view", "toggle", "Fixtures");
+  until("the table", (s) => s.find({ role: "row", label: "Mover 3" }) !== undefined);
+  expect(reading("Mover 3 address = ")).toBe(String(before + moved));
+
+  showPatch();
+  const stood = blockStart("Mover 3");
+  const back = (blockStart("Mover 0") - stood) * perChannel;
+  app.drag(block("Mover 3"), { dx: back, dy: 0 }, { steps: 8 });
+  until("the refusal", (s) => s.findAll({ role: "text" }).some((n) => n.label.includes("collides with")));
+  app.frames(4);
+  expect(blockStart("Mover 3")).toBe(stood);
 });
 
 // Universes 1 and 17 resolve to different rows — asserted on what the page
 // resolved, not on the formula that used to alias them.
 test("universe one and seventeen are different outputs", { fixture: { sql: EXTRAS } }, () => {
   openPatch();
-  app.click(app.snapshot().find({ role: "toggle", label: "Outputs" }));
-  until("the outputs table", (s) => s.findAll({ role: "row" }).some((n) => n.label.startsWith("Universe 1 →")));
+  nav.step("the output view", "toggle", "Output");
+  until("the outputs", (s) => s.findAll({ role: "row" }).some((n) => n.label.startsWith("Universe 1 →")));
   app.frames(4);
   const rows = rowLabels().filter((l) => l.startsWith("Universe "));
   const one = rows.find((l) => l.startsWith("Universe 1 →")).slice("Universe 1 →".length);
@@ -130,29 +170,32 @@ test("universe one and seventeen are different outputs", { fixture: { sql: EXTRA
 // drawing an empty room.
 test("adding an output on a host with no DMX output says why", () => {
   openPatch();
-  app.click(app.snapshot().find({ role: "toggle", label: "Outputs" }));
-  until("the outputs table", (s) => s.find({ role: "button", label: "Add output to universe 1" }) !== undefined);
+  nav.step("the output view", "toggle", "Output");
+  until("the outputs", (s) => s.find({ role: "button", label: "Add output to universe 1" }) !== undefined);
   app.click(app.snapshot().find({ role: "button", label: "Add output to universe 1" }));
   until("the device menu", (s) => s.findAll({ role: "text" }).some((n) => n.label.includes("not running on this host")));
 });
 
-// Auto Patch re-derives, asks before discarding an override, and says how
-// much it moved.
-test("auto patch moves and reports", () => {
+// Auto Patch packs the rig around an address set by hand, and says how much
+// it moved and how much it kept.
+test("auto patch packs around a hand-set address and reports", () => {
   openPatch();
-  // Pin one address by hand so Auto Patch has an override to ask about.
+  // Set one address by hand, and move another out of the way without
+  // pinning it being the point: only the first is the operator's.
   typeAddress("Mover 1", reading("Mover 1 address = "), "100");
   until("the moved row", (s) => s.findAll({ role: "text" }).some((n) => n.label === "Mover 1 address = 100"));
   app.frames(4);
 
   app.click(app.snapshot().find({ role: "button", label: "Auto patch" }));
-  until("the confirmation", (s) => s.findAll({ role: "text" }).some((n) => n.label.startsWith("Re-derive")));
-  app.click(lastButton("Auto patch"));
   until("the report", (s) => s.findAll({ role: "text" }).some((n) => n.label.startsWith("Auto patch moved")));
   app.frames(6);
-  expect(texts().find((l) => l.startsWith("Auto patch moved"))).toContain("discarded 1 overrides");
-  // It moved the pinned row back, which is the whole claim.
-  assert(reading("Mover 1 address = ") !== "100", "auto patch left the override in place");
+  // Nothing was asked: a hand-set address is not something it takes.
+  expect(app.snapshot().find({ role: "card", label: "Confirm dialog" })).toBe(undefined);
+  expect(texts().find((l) => l.startsWith("Auto patch moved"))).toContain("kept 1 hand-set");
+  expect(reading("Mover 1 address = ")).toBe("100");
+  // The rest closed the gap it left: three fixtures of eight channels, from 1.
+  const others = ["Mover 0", "Mover 2", "Mover 3"].map((name) => Number(reading(`${name} address = `))).sort((a, b) => a - b);
+  expect(others).toEqual([1, 9, 17]);
 });
 
 // Unpatching takes the light out of the room too, so it asks first.
@@ -248,35 +291,53 @@ test("a wider mode asks before it moves the fixture", { fixture: { files: { "fix
   assert(reading("Mover 0 address = ") !== before, "it repatched without moving");
 });
 
-test("venue groups are editable in the narrow panel", { fixture: { window: [1100, 900] } }, () => {
-  const included = () => app.snapshot().findAll({ role: "checkbox" }).filter((n) => n.focused).map((n) => n.label);
+const picked = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.focused).map((n) => n.label);
+const groupOf = (row) => reading(`${row} group = `);
+
+// The panel has no edit mode: a group takes the selection when it is made,
+// its box puts fixtures in and takes them out at once, and its row selects
+// what it holds.
+test("groups write as they are ticked and select what they hold", { fixture: { window: [1100, 900] } }, () => {
   nav.patch("Test Venue");
   until("the lights", (s) => s.find({ role: "row", label: "Mover 0" }));
   nav.step("a light", "row", "Mover 0");
-  nav.step("make a group", "button", "Group selected lights");
-  app.key("f r o n t space w a s h");
-  nav.step("save the group", "button", "Save group");
-  until("the saved group", (s) => s.find({ role: "row", label: "Group front wash" }));
-  nav.step("edit the group", "button", "Edit group front wash");
-  expect(included()).toEqual(["Include Mover 0"]);
-  nav.step("include another", "checkbox", "Include Mover 1");
-  nav.step("save the membership", "button", "Save group");
-  until("saved", (s) => s.find({ role: "button", label: "Edit group front wash" }));
-  nav.step("rename the group", "button", "Edit group front wash");
-  app.key("secondary-a b a c k space w a s h");
-  nav.step("save the rename", "button", "Save group");
+  nav.step("make a group", "button", "New group");
+  app.key("f r o n t space w a s h enter");
+  until("the new group", (s) => s.find({ role: "row", label: "Group front wash" }));
+  until("the group on its fixture", () => groupOf("Mover 0").includes("front wash"));
+  assert(!groupOf("Mover 1").includes("front wash"), "the group took a fixture nobody selected");
+
+  nav.step("another light", "row", "Mover 1");
+  nav.step("put it in", "checkbox", "Put 1 selected fixture in front wash");
+  until("the second member", () => groupOf("Mover 1").includes("front wash"));
+
+  // A fixture's row stayed a row the whole time.
+  nav.step("the group", "button", "Select group front wash");
+  until("the group's fixtures", () => picked().length === 2);
+  expect(picked()).toEqual(["Mover 0", "Mover 1"]);
+
+  app.click(app.snapshot().find({ role: "row", label: "Group front wash" }), { button: "right" });
+  until("the group menu", (s) => s.find({ role: "button", label: "Rename" }) !== undefined);
+  app.click(app.snapshot().find({ role: "button", label: "Rename" }));
+  until("the name field", (s) => s.find({ role: "input", label: "Group name" }) !== undefined);
+  app.key("secondary-a b a c k space w a s h enter");
   until("renamed", (s) => s.find({ role: "row", label: "Group back wash" }));
-  nav.step("verify", "button", "Edit group back wash");
-  expect(included()).toEqual(["Include Mover 0", "Include Mover 1"]);
-  nav.step("cancel", "button", "Cancel group edit");
-  until("the builder", (s) => s.find({ role: "button", label: "Add element" }));
+  until("the new name on its fixtures", () => groupOf("Mover 1").includes("back wash"));
+
+  nav.step("one light", "row", "Mover 0");
+  nav.step("take it out", "checkbox", "Take 1 selected fixture out of back wash");
+  until("one member fewer", () => !groupOf("Mover 0").includes("back wash"));
+  assert(groupOf("Mover 1").includes("back wash"), "the other member left with it");
 });
 
-test("fixture table edits and scene controls share selection", () => {
+test("the table, the groups and the stage share one selection", () => {
   nav.patch("Test Venue");
-  // The old per-kind tabs are gone.
-  expect(app.snapshot().findAll({ role: "toggle" }).filter((n) => ["Stage", "Fixtures", "Groups"].includes(n.label)).length).toBe(0);
-  nav.step("a fixture", "row", "Mover 0");
+  // There is no second table of the same fixtures.
+  expect(app.snapshot().find({ role: "button", label: "Patch details" })).toBe(undefined);
+  // The first click on a name selects its row; the second edits the name.
+  nav.step("a fixture", "text", "Mover 0 label = Mover 0");
+  until("the row picked", () => picked().includes("Mover 0"));
+  expect(picked()).toEqual(["Mover 0"]);
   nav.step("rename it", "text", "Mover 0 label = Mover 0");
   app.key("secondary-a w a s h space 1 enter");
   until("renamed", (s) => s.find({ role: "row", label: "wash 1" }));
@@ -286,23 +347,22 @@ test("fixture table edits and scene controls share selection", () => {
   nav.step("edit the address", "text", "wash 1 address = 1");
   app.key("secondary-a 6 5 enter");
   until("the address saved", (s) => s.find({ role: "text", label: "wash 1 address = 65" }));
-  nav.step("edit a group", "button", "Edit group right movers");
-  nav.step("include the fixture", "checkbox", "Include wash 1");
-  nav.step("save the membership", "button", "Save group");
-  nav.step("patch details", "button", "Patch details");
-  nav.agentOff();
-  nav.stageOff();
-  until("the same address in the patch", (s) => s.find({ role: "text", label: "wash 1 address = 65" }));
-  nav.step("close the patch", "button", "Close patch details");
-  nav.step("another fixture", "row", "Mover 1");
-  nav.step("back to the fixture", "row", "wash 1");
-  nav.step("verify the group", "button", "Edit group right movers");
-  expect(app.snapshot().find({ role: "checkbox", label: "Include wash 1" }).focused).toBe(true);
-  nav.step("cancel", "button", "Cancel group edit");
+  // The edits left the row selected, so the group box is about it.
+  nav.step("put it in a group", "checkbox", "Put 1 selected fixture in right movers");
+  until("the group on its row", () => groupOf("wash 1").includes("right movers"));
+
+  // Shift takes the run between two rows, read down the table.
+  nav.step("the first row", "text", "Mover 1 label = Mover 1");
+  app.click(app.snapshot().find({ role: "text", label: "Mover 3 label = Mover 3" }), { modifiers: ["shift"] });
+  until("the run", () => picked().length === 3);
+  expect(picked()).toEqual(["Mover 1", "Mover 2", "Mover 3"]);
+
+  nav.step("the group", "button", "Select group right movers");
+  until("the group's fixtures", () => picked().includes("wash 1"));
   expect(reading("wash 1 address = ")).toBe("65");
 });
 
-test("render settings follow the venue across a score and a reopen", () => {
+test("the room's light follows the venue across a reopen, and rigging has its own", () => {
   const sun = () => app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("Time of day = "))?.label;
   nav.patch("Test Venue");
   nav.step("the view settings", "toggle", "Render settings");
@@ -311,48 +371,67 @@ test("render settings follow the venue across a score and a reopen", () => {
   // The room is venue truth: it sits on the venue page.
   nav.step("outdoor", "toggle", "Outdoor");
   until("the sun", () => sun() !== undefined);
-  const before = sun();
+  // The Rig page is lit to work by; its dial is its own.
+  const working = sun();
   app.drag(app.snapshot().find({ role: "slider", label: "Time of day" }), { dx: 0, dy: -20 }, { steps: 12 });
+  assert(sun() !== working, "the drag did not turn the work light");
+  // Escape puts away a group name being typed, and makes no group.
+  nav.step("name a group", "button", "New group");
+  until("the name field", (s) => s.find({ role: "input", label: "Group name" }));
+  app.key("d r a f t escape");
+  until("the field closed", (s) => !s.find({ role: "input", label: "Group name" }));
+  app.frames(4);
+  expect(app.snapshot().find({ role: "row", label: "Group draft" })).toBe(undefined);
+  // A score is looked at in the room's own light, which the work light left alone.
+  nav.track("Aurora");
+  until("the score's sun", () => sun() !== undefined && sun() !== working);
+  const before = sun();
+  app.drag(app.snapshot().find({ role: "slider", label: "Time of day" }), { dx: 0, dy: 20 }, { steps: 12 });
   const changed = sun();
   assert(changed !== before, "the drag did not change the time of day");
-  app.key("escape");
-  until("the settings closed", (s) => !s.find({ role: "card", label: "Render settings" }));
-  // Escape closes the popover above a draft first, then the draft.
-  nav.step("draft a group", "button", "Create group");
-  nav.step("the view over the draft", "toggle", "Render settings");
-  until("the view open", (s) => s.find({ role: "card", label: "Render settings" }));
-  app.key("escape");
-  until("the view closed above the draft", (s) => !s.find({ role: "card", label: "Render settings" }) && s.find({ role: "button", label: "Save group" }));
-  app.key("escape");
-  until("the draft closed", (s) => !s.find({ role: "button", label: "Save group" }));
-  nav.track("Aurora");
-  nav.step("the score's view settings", "toggle", "Render settings");
-  until("the score's sun", () => sun() !== undefined);
-  expect(sun()).toBe(changed);
-  app.key("escape");
   nav.leaveVenue("Test Venue");
   nav.venuePage("Test Venue");
   until("the loaded room", (s) => s.find({ role: "toggle", label: "Frame stats" }));
-  nav.step("the reopened settings", "toggle", "Render settings");
-  until("the saved sun", () => sun() !== undefined);
-  expect(sun()).toBe(changed);
+  // Back on the Rig page the work light is where it starts.
+  until("the work light", () => sun() === working);
+  nav.track("Aurora");
+  until("the saved sun", () => sun() === changed);
 });
 
+// A clip selects a group by its id: a rename leaves the clip on it, and
+// deleting it is asked about first, with what uses it.
 test(
-  "the missing-group dialog repairs saved score selectors",
+  "a clip follows its group through a rename, and deleting it says what uses it",
   {
     fixture: {
-      clips: [{ pattern: "a", name: "Lost", start: 0, end: 2, preset: "Chase", selection: "lost_wash" }],
+      clips: [{ pattern: "a", name: "Chase", start: 0, end: 2, preset: "Chase", groups: ["group-left"] }],
     },
   },
   () => {
+    const texts = () => app.snapshot().findAll({ role: "text" }).map((n) => n.label);
     nav.patch("Test Venue");
-    nav.step("repair", "button", "Resolve missing groups");
-    until("the dialog", (s) => s.find({ role: "card", label: "Group repair dialog" }));
-    nav.step("a replacement", "toggle", "Use group left_movers");
-    nav.step("apply the repair", "button", "Fix affected scores");
-    until("resolved", (s) => !s.find({ role: "button", label: "Resolve missing groups" }) && !s.find({ role: "button", label: "Fix affected scores" }));
-    expect(library.score().clips.a.selection.expression).toBe("left_movers");
+    const groupMenu = (name, item) => {
+      until("the group", (s) => s.find({ role: "row", label: `Group ${name}` }));
+      app.click(app.snapshot().find({ role: "row", label: `Group ${name}` }), { button: "right" });
+      until("the group menu", (s) => s.find({ role: "button", label: item }) !== undefined);
+      app.click(app.snapshot().find({ role: "button", label: item }));
+    };
+    // The row says the group is used before anyone asks to delete it.
+    until("the group's use", (s) => s.find({ role: "row", label: "Group left movers" }));
+    groupMenu("left movers", "Rename");
+    until("the name field", (s) => s.find({ role: "input", label: "Group name" }));
+    app.key("secondary-a h o u s e space l e f t enter");
+    until("the renamed group", (s) => s.find({ role: "row", label: "Group house left" }));
+    expect(library.score().clips.a.selection).toEqual({ groups: ["group-left"] });
+
+    groupMenu("house left", "Delete group");
+    until("the question", () => texts().includes("Delete group?"));
+    const asked = texts().find((label) => label.startsWith("It is used"));
+    expect(asked).toContain("1 time across 1 score");
+    expect(asked).toContain("Deleting this group will break them");
+    app.click(app.snapshot().findAll({ role: "button", label: "Delete group" }).at(-1));
+    until("the group gone", (s) => !s.find({ role: "row", label: "Group house left" }));
+    expect(library.score().clips.a.selection).toEqual({ groups: ["group-left"] });
   },
 );
 
@@ -416,7 +495,8 @@ test("view settings persist per device and per venue", () => {
   const toggled = (name) => app.snapshot().find({ role: "toggle", label: name })?.focused ?? null;
   const openView = () => {
     nav.step("the view settings", "toggle", "Render settings");
-    until("the view panel", (s) => s.find({ role: "card", label: "Render settings" }) !== undefined && scrub("Render scale (%)") !== undefined);
+    nav.step("its view page", "toggle", "View");
+    until("the view page", (s) => s.find({ role: "card", label: "Render settings" }) !== undefined && scrub("Render scale (%)") !== undefined);
   };
   const all = () => ({ grid: toggled("Grid"), gizmos: toggled("Gizmos"), scale: value("Render scale (%)"), density: value("Haze density") });
 

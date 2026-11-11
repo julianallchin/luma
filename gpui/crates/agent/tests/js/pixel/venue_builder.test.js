@@ -31,13 +31,13 @@ function dropAt(fx, fy) {
   app.frames(8);
 }
 
-// The objects list's element rows. With a renderer the room is a canvas, and
+// The stage view's element rows. With a renderer the room is a canvas, and
 // a point pick there is the camera's gesture too, so a test selects a piece
 // off this list.
 const elements = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("Element "));
 function showObjects() {
-  if (elements().length === 0) nav.step("the objects list", "toggle", "Stage objects");
-  until("the objects list", () => elements().length > 0);
+  if (elements().length === 0) nav.step("the stage view", "toggle", "Stage");
+  until("the stage elements", () => elements().length > 0);
 }
 // Select a piece placed since `before` (a list of labels).
 function selectNew(before) {
@@ -73,6 +73,8 @@ function open() {
 function arm(row) {
   nav.step("add element", "button", "Add element");
   until("the dialog", (s) => s.find({ role: "input", label: "Search elements" }) !== undefined);
+  const offer = row.startsWith("Luma ") ? "Add fixtures" : "Add stage pieces";
+  nav.step(offer, "toggle", offer);
   // The first word: a whole token, so the library's own search matches it.
   app.type(app.snapshot().find({ role: "input", label: "Search elements" }), row.split(" ")[0]);
   nav.step(`the ${row} row`, "row", row);
@@ -103,9 +105,6 @@ test("a refused run is red and an accepted one is not", { timeoutMs: 120000 }, (
   open();
   showObjects();
   const existing = elements().map((n) => n.label);
-  // A press outside an open float is eaten by its dismissal: close it first.
-  nav.step("the objects list", "toggle", "Stage objects");
-  until("the objects list to close", () => elements().length === 0);
   // Two stubs along the floor leave a gap between their ends: only a run
   // with something to reach can be refused. Stubs, because a landing through
   // the deck in the middle of the room is refused.
@@ -189,27 +188,4 @@ test("a held fixture draws a body over the face it is aimed at", { timeoutMs: 12
   // A housing at this range covers thousands of pixels; the mark over it is
   // a five-pixel dot, orders of magnitude less.
   expect(image.diff(empty, held)).toBeGreaterThan(0.0002);
-});
-
-test("the selected object card follows a camera orbit", { timeoutMs: 120000 }, () => {
-  open();
-  until("the stage", (s) => s.find({ role: "toggle", label: "Stage objects" }) !== undefined);
-  nav.step("objects", "toggle", "Stage objects");
-  app.frames(12, { waitMs: 60 });
-  const element = until("an element", (s) => s.findAll({ role: "row" }).find((n) => n.label.startsWith("Element ")))
-    .findAll({ role: "row" }).find((n) => n.label.startsWith("Element "));
-  nav.step("select element", "row", element.label);
-  app.frames(12, { waitMs: 60 });
-  const card = () => app.snapshot().find({ role: "card", label: "Selected object" });
-  until("the object card", () => card() !== undefined);
-  const beforeCard = card().bounds;
-  const room = app.snapshot().find({ role: "card", label: "Stage" }).bounds;
-  const cameraBefore = camera();
-  // Grab open room below the card: a press on the card is the card's, not the
-  // camera's.
-  const below = beforeCard.y + beforeCard.height;
-  app.drag({ x: room.x + room.width * 0.5, y: (below + room.y + room.height) / 2 }, { dx: 110, dy: 35 }, { steps: 10 });
-  app.frames(12, { waitMs: 60 });
-  assert(camera() !== cameraBefore, "the drag did not orbit");
-  assert(JSON.stringify(card().bounds) !== JSON.stringify(beforeCard), "the card stayed fixed while the camera orbited");
 });

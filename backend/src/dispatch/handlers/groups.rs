@@ -4,7 +4,6 @@ use crate::database::local::venue_graph::rig_changed;
 use crate::dispatch::handlers::fixtures::require_changed;
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
-use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{FixtureGroup, GroupTreeNode};
 use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
@@ -37,31 +36,13 @@ pub async fn delete_group(services: &AppServices, id: String) -> Result<(), Comm
 // Hierarchy and selection
 // -----------------------------------------------------------------------------
 
-pub async fn preview_selection_query(
-    services: &AppServices,
-    venue_id: String,
-    query: String,
-    seed: Option<u64>,
-) -> Result<Vec<PatchedFixture>, CommandError> {
-    let mut access =
-        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    let resolved = groups_service::resolve_selection(
-        &services.fixtures_root,
-        &mut access,
-        &Selection::new(query.trim()),
-        seed.unwrap_or(groups_service::PREVIEW_SEED),
-    )
-    .await?;
-    Ok(resolved.into_iter().map(|r| r.fixture).collect())
-}
-
 /// The frame that answers "which heads is this?": every head the selection
 /// matches open and white, the rest of the rig dark — see
 /// [`stage_render::highlight`].
 ///
 /// A [`UniverseState`] rather than a fixture list because the answer is
-/// head-accurate — [`preview_selection_query`] above collapses a match to whole
-/// fixtures and so cannot picture a group that owns half a bar.
+/// head-accurate: a list of whole fixtures cannot picture a group that owns
+/// half a bar.
 pub async fn highlight_selection(
     services: &AppServices,
     venue_id: String,
@@ -137,6 +118,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::dispatch::{dispatch, AppServices};
+    use crate::models::selection::Selection;
 
     /// A deck with a `bottom` that sits on the floor and a `top` a fixture or a
     /// tower can clamp to. Real geometry: a stub would pin half the answer.
@@ -165,7 +147,7 @@ mod tests {
             &services.fixtures_root,
             &mut access,
             "head-set",
-            &[fixture.clone()],
+            &[(fixture.clone(), groups_db::WHOLE_FIXTURE)],
             true,
         )
         .await
@@ -184,7 +166,10 @@ mod tests {
             &services.fixtures_root,
             &mut access,
             "head_set",
-            &[fixture.clone(), fixture],
+            &[
+                (fixture.clone(), groups_db::WHOLE_FIXTURE),
+                (fixture, groups_db::WHOLE_FIXTURE),
+            ],
             true,
         )
         .await
@@ -200,6 +185,65 @@ mod tests {
                 .unwrap();
         assert_eq!(after_id, member_id);
         access.commit().await.unwrap();
+    }
+
+    /// A named group can hold single cells, a replacement moves only the rows
+    /// that changed, and a cell past the fixture's last is refused.
+    #[tokio::test]
+    async fn a_named_group_holds_cells() {
+        use super::{groups_db, groups_service, VenueAccess, VenueResource, Write};
+        let (_dir, services, venue) = rig().await;
+        let nodes = tree(&services, &venue).await;
+        let fixture = nodes[0]["fixtures"][0].as_str().unwrap().to_string();
+        let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
+            .await
+            .unwrap();
+        let rows = |members: Vec<groups_db::Membership>, group: &str| {
+            let mut heads: Vec<i64> = members
+                .into_iter()
+                .filter(|m| m.group_id == group)
+                .map(|m| m.head_index)
+                .collect();
+            heads.sort();
+            heads
+        };
+        let saved = groups_service::set_named_group(
+            &services.fixtures_root,
+            &mut access,
+            "first_cell",
+            &[(fixture.clone(), 0)],
+            false,
+        )
+        .await
+        .unwrap();
+        let members = groups_db::venue_memberships(&mut access).await.unwrap();
+        assert_eq!(rows(members, &saved.id), vec![0]);
+
+        let whole = groups_service::set_named_group(
+            &services.fixtures_root,
+            &mut access,
+            "first_cell",
+            &[
+                (fixture.clone(), 0),
+                (fixture.clone(), groups_db::WHOLE_FIXTURE),
+            ],
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(whole.id, saved.id);
+        let members = groups_db::venue_memberships(&mut access).await.unwrap();
+        assert_eq!(rows(members, &saved.id), vec![groups_db::WHOLE_FIXTURE]);
+
+        let refused = groups_service::set_named_group(
+            &services.fixtures_root,
+            &mut access,
+            "too_far",
+            &[(fixture, 999)],
+            false,
+        )
+        .await;
+        assert!(refused.unwrap_err().contains("no cell 999"));
     }
 
     #[tokio::test]
@@ -252,7 +296,10 @@ mod tests {
             .unwrap()["id"]
             .as_str()
             .unwrap();
-        assert_eq!(selection(&services, &venue, "front_wash").await, 1);
+        assert_eq!(
+            selection(&services, &venue, &Selection::groups([id])).await,
+            1
+        );
         dispatch(
             &services,
             "save_venue_group",
@@ -320,9 +367,16 @@ mod tests {
         .unwrap();
         assert_eq!(before, tree(&services, &venue).await);
     }
+    /// A clip selects a group by its id: renaming the group changes neither
+    /// the clip nor what it lights, and deleting it leaves the clip lighting
+    /// nothing, still counted against the group it named.
     #[tokio::test]
-    async fn missing_selectors_can_be_recreated_or_replaced_through_score_history() {
+    async fn a_clip_follows_its_group_through_a_rename_and_counts_against_it() {
         let (_dir, services, venue) = rig().await;
+        let group = tree(&services, &venue).await[0].clone();
+        let id = group["id"].as_str().unwrap();
+        let members = group["fixtures"].as_array().unwrap().len();
+        assert!(members > 0);
         let uid: Option<String> = sqlx::query_scalar("SELECT uid FROM venues WHERE id=?")
             .bind(&venue)
             .fetch_one(&services.db.0)
@@ -330,7 +384,7 @@ mod tests {
             .unwrap();
         let track = uuid::Uuid::new_v4().to_string();
         let score = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO tracks (id,uid,track_hash,file_path) VALUES (?,?,'repair-test','/tmp/repair.wav')").bind(&track).bind(&uid).execute(&services.db.0).await.unwrap();
+        sqlx::query("INSERT INTO tracks (id,uid,track_hash,file_path) VALUES (?,?,'usage-test','/tmp/usage.wav')").bind(&track).bind(&uid).execute(&services.db.0).await.unwrap();
         sqlx::query("INSERT INTO scores (id,uid,track_id,venue_id) VALUES (?,?,?,?)")
             .bind(&score)
             .bind(&uid)
@@ -339,79 +393,44 @@ mod tests {
             .execute(&services.db.0)
             .await
             .unwrap();
+        let chosen = Selection::groups([id]);
         sqlx::query(
             "INSERT INTO clips (id,uid,score_id,graph_json,graph,start,duration,seed,selection_json,blend_mode)
-             VALUES (?2 || ':flash',?1,?2,'{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}','',0,4,'0',
-                     '{\"expression\":\"missing_wash\"}','replace')",
+             VALUES (?2 || ':flash',?1,?2,'{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}','',0,4,'0',?3,'replace')",
         )
         .bind(uid.clone().unwrap_or_default())
         .bind(&score)
+        .bind(chosen.to_value().to_string())
         .execute(&services.db.0)
         .await
         .unwrap();
-        let missing = dispatch(&services, "missing_venue_groups", &json!({"venueId":venue}))
-            .await
-            .unwrap();
-        assert_eq!(missing[0]["name"], "missing_wash");
-        assert_eq!(missing[0]["scores"], json!([score]));
+        let usage = || async {
+            dispatch(&services, "venue_group_usage", &json!({"venueId":venue}))
+                .await
+                .unwrap()
+        };
+        let used = json!([{
+            "groupId": id, "clips": 1, "scores": [score],
+            "performPatterns": [], "performCells": 0,
+        }]);
+        assert_eq!(usage().await, used);
+
         dispatch(
             &services,
-            "resolve_venue_group",
-            &json!({"venueId":venue,"missing":"missing_wash","replacement":null,"fixtures":[]}),
+            "save_venue_group",
+            &json!({"venueId":venue,"groupId":id,"label":"renamed","added":[],"removed":[]}),
         )
         .await
         .unwrap();
-        assert_eq!(
-            dispatch(&services, "missing_venue_groups", &json!({"venueId":venue}))
-                .await
-                .unwrap(),
-            json!([])
-        );
-        let rows = tree(&services, &venue).await;
-        let restored = rows
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|g| g["name"] == "missing_wash")
-            .unwrap();
-        dispatch(&services, "delete_group", &json!({"id":restored["id"]}))
+        assert_eq!(at(&tree(&services, &venue).await, id)["name"], "renamed");
+        assert_eq!(selection(&services, &venue, &chosen).await, members);
+        assert_eq!(usage().await, used);
+
+        dispatch(&services, "delete_group", &json!({"id":id}))
             .await
             .unwrap();
-        let replacement = rows
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|g| !g["fixtures"].as_array().unwrap().is_empty())
-            .unwrap()["name"]
-            .as_str()
-            .unwrap();
-        dispatch(&services,"resolve_venue_group",&json!({"venueId":venue,"missing":"missing_wash","replacement":replacement,"fixtures":[]})).await.unwrap();
-        assert_eq!(
-            dispatch(&services, "missing_venue_groups", &json!({"venueId":venue}))
-                .await
-                .unwrap(),
-            json!([])
-        );
-        let stored: String =
-            sqlx::query_scalar("SELECT selection_json FROM clips WHERE id = ? || ':flash'")
-                .bind(&score)
-                .fetch_one(&services.db.0)
-                .await
-                .unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&stored).unwrap()["expression"],
-            replacement
-        );
-        let authored: Option<String> =
-            sqlx::query_scalar("SELECT authored_at FROM scores WHERE id = ?")
-                .bind(&score)
-                .fetch_one(&services.db.0)
-                .await
-                .unwrap();
-        assert!(
-            authored.is_some(),
-            "a repair is an edit, and the score says so"
-        );
+        assert_eq!(selection(&services, &venue, &chosen).await, 0);
+        assert_eq!(usage().await, used);
     }
     /// What one identity left cached does not answer for the next: after a
     /// reset the rig is read from the rows again, and the control values are
@@ -423,7 +442,7 @@ mod tests {
         let venue = venue(&services).await;
         let stage = place(&services, &venue, "stage", DECK, None, None, 0.0, 0.0).await;
         hang(&services, &venue, &stage, 2.0).await;
-        assert_eq!(selection(&services, &venue, "all").await, 1);
+        assert_eq!(selection(&services, &venue, &Selection::All).await, 1);
         services.controls.venue(&venue).set("drop", 1.0);
 
         // The rows change under the cache, as the next identity's would.
@@ -434,7 +453,7 @@ mod tests {
             .unwrap();
         drop(services.reset_identity().await);
 
-        assert_eq!(selection(&services, &venue, "all").await, 0);
+        assert_eq!(selection(&services, &venue, &Selection::All).await, 0);
         assert_eq!(services.controls.venue(&venue).value("drop"), 0.0);
     }
     async fn tree(services: &AppServices, venue: &str) -> Value {
@@ -449,15 +468,14 @@ mod tests {
             .find(|g| g["id"] == id)
             .unwrap()
     }
-    async fn selection(services: &AppServices, venue: &str, query: &str) -> usize {
-        dispatch(
-            services,
-            "preview_selection_query",
-            &json!({"venueId":venue,"query":query,"seed":null}),
-        )
-        .await
-        .unwrap()
-        .as_array()
+    /// How many fixtures `selection` matches in `venue`.
+    async fn selection(services: &AppServices, venue: &str, selection: &Selection) -> usize {
+        use super::{groups_service, Read, VenueAccess, VenueResource};
+        let mut access = VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(venue))
+            .await
+            .unwrap();
+        groups_service::resolve_selection(&services.fixtures_root, &mut access, selection)
+            .await
         .unwrap()
         .len()
     }

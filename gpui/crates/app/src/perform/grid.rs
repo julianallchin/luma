@@ -25,7 +25,7 @@ use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::{glass, ladder, radius};
 
 use super::surface::{self, Edit, Rect, View};
-use super::{group_label, Named, Part, PartKind, Perform};
+use super::{Named, Part, PartKind, Perform};
 use crate::workspace::Target;
 use crate::Luma;
 
@@ -662,7 +662,7 @@ fn pattern_face(
             effect
                 .groups
                 .iter()
-                .map(|group| group_label(group))
+                .map(|group| state.group_name(group))
                 .collect::<Vec<_>>()
                 .join(" + ")
         });
@@ -670,7 +670,7 @@ fn pattern_face(
     let subtitle = pattern.map(|pattern| {
         let place = places
             .clone()
-            .unwrap_or_else(|| group_label(&pattern.selection.expression));
+            .unwrap_or_else(|| state.selection_name(&pattern.selection));
         let how = match pattern.graph.pad().map(|pad| pad.kind) {
             Some(LiveInputKind::Button(press)) if press.mode == PressMode::Flash => " · flash",
             Some(_) => "",

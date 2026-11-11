@@ -104,6 +104,10 @@ pub(super) struct FrameSample {
     /// because a discarded frame's timings never reach a sample any other way.
     pub(super) worker_finished: u64,
     pub(super) worker_last_signalled_ms: f32,
+    /// Whether this prepaint submitted a frame. It does not while an earlier
+    /// one is still in flight: the row's camera and transport time were then
+    /// never rendered, and `submitted_serial` is still the earlier frame's.
+    pub(super) submitted: bool,
     /// Identity of this row's requested camera, transport time and dimensions.
     pub(super) submitted_serial: u64,
     /// Delivered image, which can belong to an earlier request.
@@ -190,10 +194,9 @@ pub(super) struct FrameSample {
     pub(super) shared_surface: bool,
     /// Whether a completed frame reached the screen on this prepaint.
     ///
-    /// **False rows are recorded too.** The stage submits a frame every
-    /// prepaint but only sometimes has one to show, and recording only the
-    /// deliveries would make a 345 ms outage look like one slow frame instead
-    /// of forty silent ones. Everything measured before submission is still valid
+    /// **False rows are recorded too.** The stage only sometimes has a frame
+    /// to show, and recording only the deliveries would make a 345 ms outage
+    /// look like one slow frame instead of forty silent ones. Everything measured before submission is still valid
     /// on a ghost row; everything measured on the way back is `None`.
     pub(super) delivered: bool,
     /// Whether this submission displaced an older frame that never reached the

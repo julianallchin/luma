@@ -30,9 +30,8 @@
 //! window, so a coverage costs a plane some of its rung. Whether that is worth
 //! paying is decided by **what the plane carries**, not by where it sits:
 //!
-//! - the window's one root fill is [`glass`], and the sidebar lifts off it with
-//!   a [`tone_column`] wash rather than a plane of its own — chrome, so the
-//!   blur is the point;
+//! - the window's one root fill is [`glass`] — chrome, so the blur is the
+//!   point;
 //! - the workspace panel is [`crate::ladder::background`], **opaque** — it
 //!   carries instrument surfaces, and a waveform read through a blurred
 //!   desktop is a waveform you cannot read;
@@ -418,40 +417,6 @@ pub fn card_cursor_bg() -> Hsla {
 #[must_use]
 pub fn card_bg() -> Hsla {
     ink(0.05)
-}
-
-/// Coverage of the sidebar's tone column over the shell root.
-///
-/// Barely there on purpose: the sidebar is *not* a plane of its own on a
-/// blurred window — see [`tone_column`].
-pub const TONE_COLUMN_ALPHA: f32 = 0.05;
-
-/// The sidebar's tone: a wash over the shell root, not a fill of its own.
-///
-/// # The blur is a window property, not an element's
-///
-/// A blurred sidebar is three things together, and painting any of them alone
-/// gets nothing:
-///
-/// 1. the window composites blurred ([`window_background_appearance`]),
-/// 2. the shell **root** paints [`glass`] — one translucent fill across the
-///    whole window, which is the only surface the desktop shows through,
-/// 3. the sidebar paints *this* over that root, plus a `border_r` of
-///    [`hairline`], and **no background of its own**.
-///
-/// Step 3 is the counter-intuitive one. An opaque sidebar rung would be a
-/// slab sitting on the blur rather than a region of it; a *translucent* rung
-/// would land on the root's own tone and vanish. Only a wash lifts what is
-/// already behind it, which is what "one blurred pane, subtly divided" has to
-/// mean. The column is a tone, and the border is the division.
-///
-/// The gotcha in step 1: gpui's macOS backend tears the `NSVisualEffectView`
-/// out of the hierarchy whenever the appearance is set to anything but
-/// `Blurred`, so a theme swap must **re-push** it — see
-/// [`window_background_appearance`].
-#[must_use]
-pub fn tone_column() -> Hsla {
-    wash(TONE_COLUMN_ALPHA)
 }
 
 /// How the window must be composited for [`glass`] to mean anything.

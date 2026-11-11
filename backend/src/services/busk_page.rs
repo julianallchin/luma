@@ -48,6 +48,7 @@ pub struct RigFixture {
 
 #[derive(Clone, Debug)]
 pub struct RigGroup {
+    pub id: String,
     pub name: String,
     pub fixtures: Vec<String>,
 }
@@ -143,7 +144,7 @@ impl Rig {
             .chain(
                 self.role_groups()
                     .chain(self.place_groups())
-                    .map(|group| group.name.as_str()),
+                    .map(|group| group.id.as_str()),
             )
             .take(MOST_GROUPS)
             .collect()
@@ -159,14 +160,19 @@ impl Rig {
     }
 }
 
-/// `groups` as one selection; `all` when there are none.
-fn either<'a>(groups: impl Iterator<Item = &'a RigGroup>) -> String {
-    let names: Vec<&str> = groups.map(|group| group.name.as_str()).collect();
-    if names.is_empty() {
-        "all".into()
+/// `groups` as one selection; the whole rig when there are none.
+fn either<'a>(groups: impl Iterator<Item = &'a RigGroup>) -> Selection {
+    let ids: Vec<&str> = groups.map(|group| group.id.as_str()).collect();
+    if ids.is_empty() {
+        Selection::All
     } else {
-        names.join(" | ")
+        Selection::groups(ids)
     }
+}
+
+/// `group` alone.
+fn only(group: &RigGroup) -> Selection {
+    Selection::groups([group.id.as_str()])
 }
 
 fn members_of(group: &RigGroup) -> BTreeSet<&str> {
@@ -190,7 +196,7 @@ struct Effect {
 /// The busk page `rig` gets, called `name`, its patterns from z `bottom` up.
 pub fn make(rig: &Rig, name: String, bottom: i64) -> Busk {
     let colored = either(COLORED.iter().filter_map(|role| rig.role_group(*role)));
-    let effects = |names: &[&str], selection: &str, below: bool| -> Vec<Effect> {
+    let effects = |names: &[&str], selection: &Selection, below: bool| -> Vec<Effect> {
         names
             .iter()
             .filter_map(|name| presets().clip(name))
@@ -402,15 +408,13 @@ fn hits(rig: &Rig) -> Vec<PerformPattern> {
     )]);
     let strobes = rig
         .role_group(FixtureRole::Strobe)
-        .map_or("all", |group| group.name.as_str());
-    let blinders = rig
-        .role_group(FixtureRole::Blinder)
-        .map(|group| group.name.as_str());
+        .map_or(Selection::All, only);
+    let blinders = rig.role_group(FixtureRole::Blinder).map(only);
     [
-        strobe.map(|graph| hold("Strobe", strobes, graph.clone())),
-        blinders.map(|group| strike("Blinder", group)),
-        Some(strike("White", "all")),
-        Some(hold("Black", "all", black)),
+        strobe.map(|graph| hold("Strobe", &strobes, graph.clone())),
+        blinders.map(|group| strike("Blinder", &group)),
+        Some(strike("White", &Selection::All)),
+        Some(hold("Black", &Selection::All, black)),
     ]
     .into_iter()
     .flatten()
@@ -426,7 +430,7 @@ fn flash_pad() -> Node {
 }
 
 /// `graph` with a pad that plays it while held.
-fn hold(name: &str, selection: &str, graph: ClipGraph) -> PerformPattern {
+fn hold(name: &str, selection: &Selection, graph: ClipGraph) -> PerformPattern {
     let mut graph = graph.with_pad();
     if let Some(pad) = graph.pad() {
         graph.nodes.insert(pad.node, flash_pad());
@@ -437,7 +441,7 @@ fn hold(name: &str, selection: &str, graph: ClipGraph) -> PerformPattern {
 /// Full white struck by each press of its pad and fading out over a beat,
 /// however long the pad is held: a clock of presses, so hits pressed fast
 /// overlap, each fading on its own.
-fn strike(name: &str, selection: &str) -> PerformPattern {
+fn strike(name: &str, selection: &Selection) -> PerformPattern {
     let fade = presets().curve("Ramp down").expect("the shipped Ramp down");
     let graph = ClipGraph::new([
         ("pad".to_owned(), flash_pad()),
@@ -467,7 +471,7 @@ fn strike(name: &str, selection: &str) -> PerformPattern {
 /// fader into each of its clocks; taking the color below when `below`, else
 /// by the preset's blend. Its live color is its own, for when Select gives
 /// it one.
-fn effect(preset: &ClipPreset, selection: &str, below: bool) -> Effect {
+fn effect(preset: &ClipPreset, selection: &Selection, below: bool) -> Effect {
     let mut graph = preset.graph.clone().with_pad();
     let color = live_color(&mut graph);
     let speed = speed(&mut graph);
@@ -545,14 +549,17 @@ fn speed(graph: &mut ClipGraph) -> Option<String> {
     Some(fader)
 }
 
-fn pattern(name: &str, selection: &str, blend_mode: BlendMode, graph: ClipGraph) -> PerformPattern {
+fn pattern(
+    name: &str,
+    selection: &Selection,
+    blend_mode: BlendMode,
+    graph: ClipGraph,
+) -> PerformPattern {
     PerformPattern {
         id: uuid::Uuid::new_v4().to_string(),
         venue_id: String::new(),
         name: name.to_owned(),
-        selection: Selection {
-            expression: selection.to_owned(),
-        },
+        selection: selection.clone(),
         z_index: 0,
         blend_mode,
         seed: uuid::Uuid::new_v4().as_u64_pair().0,

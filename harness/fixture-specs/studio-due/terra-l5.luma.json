@@ -1,0 +1,51 @@
+{
+ "format": "luma-fixture/0",
+ "meta": {
+  "id": "studio-due/terra-l5",
+  "name": "Studio Due Terra L5",
+  "manufacturer": "Studio Due",
+  "model": "Terra L5",
+  "category": "architectural",
+  "description": "This is a Studio Due Terra L5 inground architectural luminaire, a single fixed product with no moving parts. The housing is a short cylinder about 0.19 m across and 0.16 m tall, set flush into the ground with no yoke or arm. A thin flat stainless bezel about 0.19 m across caps the top, with four countersunk screws around its edge. Under a flat round glass disc about 0.11 m across sit four circular LED cells in a loose diamond, spaced about a quarter of the disc diameter apart. The body is probably plain black, though a stepped stainless variant may exist. All four cells dim and mix as one RGBW(+W) group.",
+  "provenance": {
+   "source": "depence+haiku-record import",
+   "archetype": "arch_disc",
+   "dims_src": "mesh",
+   "import": {"from": "depence", "old_id": "7d70975d-182e-4e2f-a45b-6a3d17486103"},
+   "sources": []
+  }
+ },
+ "template": "luminaire",
+ "dims": {"size": [0.19, 0.0825, 0.19]},
+ "materials": {},
+ "rig": {
+  "mount": {"type": "none", "legs": 0},
+  "joints": {"spin": [], "slide": []},
+  "body": {
+   "shape": "can",
+   "profile": "step2",
+   "step": {"at": 0.9, "r": 1.4},
+   "lens_d": 0.11,
+   "outline": "round",
+   "w": 0.19,
+   "len": 0.0825,
+   "d": 0.19,
+   "off": 0.0,
+   "tilt_y": 0.08
+  }
+ },
+ "faces": [
+  {
+   "on": "front",
+   "root": {
+    "cell": true,
+    "outline": "circle",
+    "fill": 0.58,
+    "layout": {"kind": "rings", "counts": [5], "radii": [0.7]},
+    "child": {"outline": "circle", "fill": 1, "emitter": {"kind": "lens", "colour": "rgbw"}}
+   }
+  }
+ ],
+ "cells": {"count": 1, "emitters": 5},
+ "sources": [{"cell_ranges": [[0, 0]]}]
+}
