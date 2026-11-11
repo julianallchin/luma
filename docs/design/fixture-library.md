@@ -159,12 +159,13 @@ and the selection cage is its box. `.qxf` fixtures draw exactly as before.
 
 ## Search
 
-`services::fixtures::catalogue` lists the library's fixtures and then the
-`.qxf` files no library fixture aliases (`aliases.qlc_path`), so one product is
-offered once, as the library fixture; among equally near matches a library
-fixture comes first. A library entry carries its modes, footprints and
-quality, and the add-element dialog's preview shows them. The aliased `.qxf`
-files stay on disk for the venues that use them.
+`services::fixtures::catalogue` lists the library's fixtures and one `.qxf`:
+the ILDA laser projector (`models::fixtures::LASER_PROJECTOR_PATH`), which the
+library does not carry. No other `.qxf` is offered while a library is present;
+a tree with no library beside it is searched as QLC+ alone. A library entry
+carries its modes, footprints and quality, and the add dialog's preview shows
+them under a render of the fixture. The `.qxf` files stay on disk for the
+venues that use them.
 
 ## What lowering still loses (step 4: the engine upgrade)
 

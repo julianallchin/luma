@@ -273,13 +273,19 @@ async fn auto_patch_writes_physical_order_through_to_the_rows() {
     let after = stored(&pool).await;
     assert_ne!(before, after, "auto-patch changed nothing at all");
     assert!(report.moved > 0);
+    // The one hand-set address is where it was, still pinned, and nothing
+    // was packed onto it.
+    let pinned = |rows: &[(String, i64, i64, bool)]| -> Vec<(String, i64, i64)> {
+        rows.iter()
+            .filter(|(.., pinned)| *pinned)
+            .map(|(id, universe, address, _)| (id.clone(), *universe, *address))
+            .collect()
+    };
+    assert_eq!(pinned(&before).len(), 1);
     assert_eq!(
-        report.overrides_discarded, 1,
-        "the one hand-set address was the one override"
-    );
-    assert!(
-        after.iter().all(|(_, _, _, pinned)| !pinned),
-        "auto-patch left a pin behind"
+        pinned(&before),
+        pinned(&after),
+        "auto-patch moved or unpinned a hand-set address"
     );
 
     // The movers were hung back-to-front; the addresses they ended up with run
@@ -323,7 +329,7 @@ async fn a_pinned_address_survives_an_allocation_and_the_rest_flow_around_it() {
 }
 
 #[tokio::test]
-async fn each_run_lands_in_its_own_universe() {
+async fn each_run_is_one_block_and_the_rig_packs_into_one_universe() {
     let (_dir, pool) = seeded().await;
     let mut access = read(&pool).await;
     let allocation = plan(&mut access, &fixtures_root()).await.expect("plan");
@@ -343,7 +349,7 @@ async fn each_run_lands_in_its_own_universe() {
         .collect();
     assert_eq!(movers.len(), 1);
     assert_eq!(bars.len(), 1);
-    assert!(movers.is_disjoint(&bars));
+    assert_eq!(movers, bars, "a rig that fits in one universe uses one");
 }
 
 // ---------------------------------------------------------------------------
@@ -599,6 +605,7 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
                 mode_name: "18 Channel",
                 count: 2,
                 layout: Layout::At(if step < 2 { -2.0 } else { -3.0 }),
+                across_m: 0.0,
                 label_prefix: None,
             };
             let report = distribute(&mut access, &fixtures_root(), request.clone())
@@ -704,21 +711,23 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
 /// Every slot the allocator offers has to survive the door it will be carried
 /// through.
 ///
-/// The rig here is packed sequentially into universe 1 — what one-at-a-time
-/// adds write, and what a venue looks like until somebody presses Auto Patch —
-/// so the stored patch and the derived one genuinely disagree. An offer
-/// computed against the derivation alone lands in a hole the rule left in
-/// universe 1 that a row is sitting in, and [`admit`] refuses it.
+/// The rig here is packed sequentially into universe 1 in the reverse of
+/// creation order — a venue nobody has pressed Auto Patch on — so the stored
+/// patch and the derived one genuinely disagree. An offer computed against
+/// the derivation alone lands on a channel a row is sitting in, and [`admit`]
+/// refuses it.
 #[tokio::test]
 async fn every_offered_slot_is_one_admit_accepts_even_before_an_auto_patch() {
     let (_dir, pool) = seeded().await;
     {
-        // Repack: consecutive in universe 1, in creation order, nothing pinned.
+        // Repack: consecutive in universe 1, last made first, nothing pinned.
         let mut address = 1i64;
         let mut access = write(&pool).await;
         for row in fixtures_db::get_patched_fixtures(&mut access)
             .await
             .expect("patch")
+            .into_iter()
+            .rev()
         {
             fixtures_db::update_fixture_address(&mut access, &row.id, 1, address, false)
                 .await
@@ -732,12 +741,16 @@ async fn every_offered_slot_is_one_admit_accepts_even_before_an_auto_patch() {
     let occupancy = occupancy(&mut access).await.expect("occupancy");
     // The rule and the rows disagree, or this would prove nothing.
     let derived = plan(&mut access, &fixtures_root()).await.expect("plan");
+    let stored = fixtures_db::get_patched_fixtures(&mut access)
+        .await
+        .expect("patch");
     assert!(
-        derived
-            .assignments
-            .iter()
-            .any(|a| a.footprint.universe() != 1),
-        "the rule spreads the runs over universes; the rows are all in one"
+        derived.assignments.iter().any(|a| {
+            stored
+                .iter()
+                .any(|row| row.id == a.fixture && row.address != i64::from(a.footprint.address()))
+        }),
+        "the rule orders the rig by where it hangs; the rows do not"
     );
 
     for run in [None, Some("run-downstage"), Some("run-upstage")] {
@@ -918,4 +931,44 @@ fn paperwork(
             )
         })
         .collect()
+}
+
+/// A floor is a surface, not a line: lights at one distance along it and
+/// different distances across it are beside each other, not in each other's
+/// way, and each sits at the point it was asked for.
+#[tokio::test]
+async fn lights_on_the_floor_land_where_asked_and_only_collide_in_place() {
+    use crate::services::distribute::{distribute, Request};
+    use luma_scene::distribute::Layout;
+
+    let (_dir, pool) = seeded().await;
+    let mut access = write(&pool).await;
+    let at = |across_m: f64| Request {
+        host_node: None,
+        host_socket: None,
+        fixture_path: "Chauvet/Chauvet-Rogue-R2-Spot.qxf",
+        mode_name: "18 Channel",
+        count: 1,
+        layout: Layout::At(1.5),
+        across_m,
+        label_prefix: None,
+    };
+    let mut placed = Vec::new();
+    for across in [2.0, -3.0] {
+        let report = distribute(&mut access, &fixtures_root(), at(across))
+            .await
+            .unwrap();
+        assert!(report.refusal.is_none(), "{report:?}");
+        placed.push((report.fixtures[0].id.clone(), across));
+    }
+    let graph = crate::venue_graph::graph(&mut access).await.unwrap();
+    for (id, across) in &placed {
+        let params = &graph.node(id).unwrap().params;
+        assert_eq!((params.get("u", 0.0), params.get("v", 0.0)), (1.5, *across));
+    }
+    // The same point again is taken.
+    let again = distribute(&mut access, &fixtures_root(), at(2.0))
+        .await
+        .unwrap();
+    assert!(again.refusal.is_some(), "{again:?}");
 }

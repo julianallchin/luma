@@ -62,12 +62,14 @@ function settle(what, pred) {
   throw new Error(`never settled on ${what}: ${app.snapshot().nodes.map((n) => `${n.role}:${n.label}`).join(", ")}`);
 }
 
-// The add-element dialog is the only way into place mode. The query brings a
-// row into view: the list is longer than the card, and a click on a clipped
-// row is a refusal. The first word is a whole token the search matches.
+// The add-element dialog is the only way into place mode. It offers fixtures
+// or stage pieces; the query brings a row into view: the list is longer than
+// the card, and a click on a clipped row is a refusal. The first word is a
+// whole token the search matches.
 function arm(row) {
   press("Add element");
   until("the dialog", (s) => s.findAll({ role: "input", label: "Search elements" }).length > 0);
+  pick(row.startsWith("Luma ") ? "Add fixtures" : "Add stage pieces");
   app.type(app.snapshot().find({ role: "input", label: "Search elements" }), row.split(" ")[0]);
   until("the row", (s) => {
     const n = s.findAll({ role: "row" }).find((n) => n.label === row);
@@ -195,11 +197,14 @@ test("the dialog arms a ghost and escape puts it down", () => {
   expect(marks("Ghost ")).toEqual([]);
   press("Add element");
   until("the dialog", (s) => s.findAll({ role: "input", label: "Search elements" }).length > 0);
-  const rows = app.snapshot().findAll({ role: "row" }).map((n) => n.label);
-  // A stick and a tower are two catalog rows over one generator, and
-  // fixtures are in the same list as catalog pieces.
-  expect(rows).toContain("Truss · tower");
-  expect(rows).toContain("Luma Mover");
+  const rows = () => app.snapshot().findAll({ role: "row" }).map((n) => n.label);
+  // Opened from the fixture list, it offers fixtures and no structure.
+  until("the fixtures", () => rows().includes("Luma Mover"));
+  assert(!rows().includes("Truss · tower"), "the fixture list offered structure");
+  // A stick and a tower are two catalog rows over one generator.
+  pick("Add stage pieces");
+  expect(rows()).toContain("Truss · tower");
+  assert(!rows().includes("Luma Mover"), "the piece list offered a fixture");
   app.click(app.snapshot().find({ role: "row", label: "Truss · straight" }));
   app.frames(6);
   // A held piece owns the pointer: the surface exists only while it does.
@@ -474,23 +479,23 @@ test("an empty venue takes the first piece from the button alone", { fixture: { 
   app.key("escape");
 });
 
-// A fixture carried onto the floor is a row too: the face is whatever the ray
-// met, and the popover opens on it, within the spec's 32 px of the click.
-test("a fixture dropped on the floor opens the row popover where it landed", () => {
+// A fixture put down on the floor is one light where the pointer was, with
+// no popover in between, and the hand keeps the next one. Two lights cannot
+// share a place, so a second one landing is a second place.
+test("fixtures dropped on the floor land one by one where they are dropped", () => {
   open();
   arm("Luma Mover");
+  const before = patched();
   const pane = app.snapshot().find({ role: "card", label: "Stage drop surface" });
-  const at = { x: pane.bounds.x + pane.bounds.width * 0.42, y: pane.bounds.y + pane.bounds.height * 0.78 };
-  app.drag(at, { dx: 1, dy: 0 }, { steps: 2 });
-  until("the popover", (s) => s.findAll({ role: "slider" }).some((n) => n.label.startsWith("stage-count = ")));
-  app.frames(8);
-  const card = app.snapshot().find({ role: "card", label: "Row popover" }).bounds;
-  // Distance to the nearest point of the card.
-  const dx = Math.max(card.x - at.x, at.x - (card.x + card.width), 0);
-  const dy = Math.max(card.y - at.y, at.y - (card.y + card.height), 0);
-  expect(one("On ")).toContain("floor");
-  expect(Math.hypot(dx, dy) <= 32).toBe(true);
-  expect(marks("Station ").length).toBeGreaterThan(0);
+  for (const fx of [0.3, 0.6]) {
+    const was = patched();
+    app.drag({ x: pane.bounds.x + pane.bounds.width * fx, y: pane.bounds.y + pane.bounds.height * 0.78 }, { dx: 1, dy: 0 }, { steps: 2 });
+    settle("the light to land", () => patched() > was);
+    app.frames(8);
+    expect(app.snapshot().findAll({ role: "card", label: "Row popover" }).length).toBe(0);
+  }
+  expect(patched()).toBe(before + 2);
+  app.key("escape");
 });
 
 // `A` opens the dialog, escape closes it, `A` opens it again: a close path
@@ -538,7 +543,7 @@ test("the element list removes immediately and undo restores it", () => {
   const fixtures = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("Mover "));
   until("the fixture inventory", () => fixtures().length > 0);
   const fixtureCount = fixtures().length;
-  nav.step("objects", "toggle", "Stage objects");
+  nav.step("the stage view", "toggle", "Stage");
   const elements = () => app.snapshot().findAll({ role: "row" }).filter((n) => n.label.startsWith("Element "));
   until("the stage elements", () => elements().length > 0);
   const before = elements().length;
@@ -547,16 +552,13 @@ test("the element list removes immediately and undo restores it", () => {
   app.frames(6);
   // Immediate: no confirmation, because undo is the way back.
   expect(app.snapshot().find({ role: "card", label: "Confirm dialog" })).toBe(undefined);
-  nav.step("the remaining objects", "toggle", "Stage objects");
   until("the element removed", () => elements().length < before);
-  app.key("escape");
-  // A light never outlives its place: the lights hung on the element go
-  // with it, and undo brings them back with their patch rows.
-  until("the fixture inventory after removal", () => fixtures().length <= fixtureCount);
   app.action("luma::Undo");
-  until("the restored fixtures", () => fixtures().length === fixtureCount);
-  nav.step("the restored objects", "toggle", "Stage objects");
   until("the restored elements", () => elements().length === before);
+  // A light never outlives its place, and undo brought back any that went
+  // with the element, patch rows and all.
+  nav.step("the fixtures view", "toggle", "Fixtures");
+  until("the restored fixtures", () => fixtures().length === fixtureCount);
 });
 
 // A light deleted from the room leaves the patch with it, and undo brings the
@@ -581,7 +583,8 @@ test("a light's tilt drags, sticks and undoes", () => {
   nav.stage("Test Venue");
   nav.agentOff();
   until("the fixture inventory", (s) => s.findAll({ role: "row" }).some((n) => n.label === "Mover 0"));
-  nav.step("a light", "row", "Mover 0");
+  // By its name: the middle of a row is its address cells, which edit.
+  nav.step("a light", "text", "Mover 0 label = Mover 0");
   until("the aim rows", (s) => s.findAll({ role: "slider" }).some((n) => n.label.startsWith("stage-tilt = ")));
   valueBox("stage-pan");
   const before = settled("stage-tilt");

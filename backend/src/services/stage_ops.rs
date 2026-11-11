@@ -719,6 +719,7 @@ impl<'a> Stage<'a> {
                 mode_name,
                 count,
                 layout: layout.into(),
+                across_m: layout.across_m(),
                 label_prefix,
             },
         )
@@ -768,9 +769,17 @@ impl<'a> Stage<'a> {
             )));
         };
         let (path, mode) = (member.fixture_path.clone(), member.mode_name.clone());
+        // The row is one line across the face: on a floor, the lights at
+        // another depth are not in it and are left where they stand.
+        let across_m = graph
+            .node(member_node_id)
+            .map_or(0.0, |node| node.params.get("v", 0.0));
         let siblings: Vec<String> = graph
             .nodes()
             .filter(|node| node.kind == NodeKind::Fixture)
+            .filter(|node| {
+                (node.params.get("v", 0.0) - across_m).abs() < distribute_service::ROW_LINE_M
+            })
             .filter(|node| {
                 graph.edge(&node.id).is_some_and(|sibling| {
                     sibling.parent == edge.parent && sibling.their_socket == edge.their_socket
@@ -797,6 +806,7 @@ impl<'a> Stage<'a> {
                 mode_name: &mode,
                 count,
                 layout: layout.into(),
+                across_m,
                 label_prefix: None,
             },
         )

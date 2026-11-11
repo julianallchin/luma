@@ -863,10 +863,8 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
             if let (Some(selected), Some(Body::Patch(page))) =
                 (selected, this.workspace.active_body_mut())
             {
-                if page.selected != selected && !page.group_busy {
-                    page.group_editor = None;
-                }
                 page.selected = selected;
+                page.anchor = None;
             }
             match place {
                 Some(ReleaseAct::Place(at)) => this.stage_click_room(at, cx),

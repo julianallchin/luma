@@ -56,9 +56,6 @@ pub(super) fn visualizer(build: Option<crate::stage::Build>, pick: PickSnapshot)
         presentation: false,
         bottom_bar_visible: false,
         settings_motion: RefCell::new(settings::DockMotion::new(true)),
-        selection_motion: SelectionMotion::new(true),
-        selection_card_side: None,
-        selection_card_last: None,
         environment_saving: false,
         environment_edited: false,
         environment_pending: Rc::default(),
@@ -71,6 +68,8 @@ pub(super) fn visualizer(build: Option<crate::stage::Build>, pick: PickSnapshot)
         reduced_motion: true,
         exporting: false,
         build,
+        rigging: false,
+        work_light: luma_scene::environment::WORK_LIGHT,
         stage: Rc::new(RefCell::new(Stage {
             displayed_pick: Some(pick),
             ..Default::default()

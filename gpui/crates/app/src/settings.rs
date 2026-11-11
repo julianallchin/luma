@@ -252,6 +252,16 @@ impl Luma {
         self.reload_settings(cx);
     }
 
+    /// The settings page on DMX Output: where output is turned on, from the
+    /// venue page that needs it on.
+    pub(crate) fn open_output_settings(&mut self, cx: &mut Context<Self>) {
+        self.open_settings(cx);
+        if let Some(state) = &mut self.settings {
+            state.tab = Tab::Output;
+        }
+        cx.notify();
+    }
+
     /// The menu's "About Luma": the page, on its About section.
     pub(crate) fn open_about(&mut self, cx: &mut Context<Self>) {
         self.open_settings(cx);

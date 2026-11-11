@@ -67,17 +67,16 @@ test(
 
 test("the fullscreen venue has no centre bar and restores the authoring controls", { fixture: { window: [1200, 800] } }, () => {
   nav.patch("Test Venue");
-  until("the venue controls", () => peek("toggle", "Stage objects"));
-  expect(peek("card", "Visualizer toolbar") !== undefined).toBe(true);
+  until("the venue controls", () => peek("button", "Add element"));
   app.click(peek("button", "Fullscreen visualizer"));
   until("fullscreen", () => peek("button", "Exit fullscreen"));
   expect(peek("card", "Visualizer toolbar")).toBe(undefined);
-  expect(peek("toggle", "Stage objects")).toBe(undefined);
+  expect(peek("button", "Add element")).toBe(undefined);
   // Authoring keys do nothing while presenting.
   app.key("a w e delete");
   expect(peek("input", "Search elements")).toBe(undefined);
   app.key("escape");
-  until("the controls restored", () => peek("toggle", "Stage objects"));
+  until("the controls restored", () => peek("button", "Add element"));
 });
 
 test("fullscreen passes through intermediate geometry and reverses during entry", { fixture: { motion: true, motion_scale: 4 } }, () => {

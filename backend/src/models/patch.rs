@@ -84,8 +84,6 @@ impl From<&Note> for PatchNote {
 pub struct AutoPatchReport {
     /// How many fixtures ended up somewhere other than where they were.
     pub moved: usize,
-    /// How many hand-set addresses it discarded on the way.
-    pub overrides_discarded: usize,
     pub notes: Vec<PatchNote>,
 }
 

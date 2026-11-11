@@ -15,16 +15,16 @@ A window shows one venue. Its **Rig** mode (key `1`) is where you build it: the 
 
 ## Patch Fixtures
 
-The patch table lists each fixture with its **Model**, **Mode**, **Universe**, **Address**, the **Channels** it uses and its **Group**.
+The patch table lists each fixture with its **Model**, **Mode**, **Universe**, **Address**, the **Channels** it uses and its **Groups**.
 
 You add lights on the stage, not in the table. Every light has a place on the stage. When you place a light, it gets a row in the patch table. When you delete a light, its row goes too.
 
 1. Choose the **Mode**. The mode sets how many DMX channels the fixture uses and what each channel does. Choose the mode that is set on the real fixture.
-2. Set the **Universe** and **Address**, or let Luma pick them. **Auto patch** assigns addresses for you.
+2. Set the **Universe** and **Address**, or let Luma pick them. **Auto patch** assigns addresses for you. It addresses each truss in order along its length and packs the trusses one after another, so a rig that fits in one universe uses one universe.
 
-The backend assigns every address. The patch page shows an error when the backend refuses an address. If the venue holds addresses you set by hand, **Auto patch** asks before it moves them.
+The backend assigns every address. The patch page shows an error when the backend refuses an address. **Auto patch** keeps the addresses you set by hand and packs the other fixtures around them.
 
-The **Footprint** chip shows each universe as 512 cells. Drag a fixture's block to give it a new address.
+Switch the page from **Fixtures** to **Patch** to see each universe as a grid of 512 cells, one for each channel. Each fixture fills as many cells as it has channels. Drag a fixture to give it a new address, or onto another universe to move it there. **Output** lists each universe, how full it is and where it is sent, beside the DMX devices this computer can see.
 
 A universe has 512 channels. A fixture that uses 16 channels and starts at address 33 uses channels 33 to 48.
 
@@ -36,9 +36,10 @@ The **Outputs** chip lists each universe and where it goes. **Add output** sends
 
 The stage in Rig is the only place where you set positions.
 
-- Press **A**, or **Add element** on the stage, to open the add-element dialog. It lists the stage pieces and the fixture library in one search.
+- Press **A**, or **Add**, to open the add dialog. It offers **Fixtures** or **Stage pieces**; **Tab** switches between them, and the preview shows the one under the cursor.
 - Choose a piece, such as a truss, and place it.
-- Choose a fixture and place it on a piece, such as a truss. Luma ships a library of QLC+ fixture definitions.
+- Choose a fixture and click a piece, such as a truss, to lay a row along it. Click the floor to stand one light there; click again for the next. The fixtures come from the Luma fixture library.
+- A light on the floor moves with the gizmo like a piece does. A light on a truss moves with its row.
 - **W** and **E** switch the gizmo between move and rotate. **⌘D** duplicates the selection. **F** frames it.
 - Delete a piece, and the lights on it are deleted too. **⌘Z** brings them back.
 - A piece snaps to a socket first, then to the surface under the cursor, then to the ground grid.

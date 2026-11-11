@@ -186,23 +186,6 @@ pub async fn update_fixture_pin(
     Ok(result.rows_affected())
 }
 
-/// Forget every hand-set address in the venue, so the next allocation derives
-/// them all. What the Auto Patch button means.
-///
-/// # Errors
-/// Fails if the write is refused.
-pub async fn clear_address_pins(access: &mut VenueAccess<'_, Write>) -> Result<u64, String> {
-    let venue_id = access.venue_id().to_owned();
-    let result = sqlx::query(
-        "UPDATE fixtures SET address_pinned = 0 WHERE venue_id = ? AND address_pinned <> 0",
-    )
-    .bind(venue_id)
-    .execute(&mut *access.connection())
-    .await
-    .map_err(|e| format!("Failed to clear address pins: {e}"))?;
-    Ok(result.rows_affected())
-}
-
 pub async fn update_fixture_label(
     access: &mut VenueAccess<'_, Write>,
     id: &str,

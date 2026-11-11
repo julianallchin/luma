@@ -44,5 +44,5 @@ mod scene;
 pub(crate) use build::Build;
 pub(crate) use inspector::selection_controls;
 pub(crate) use layer::build_layer;
-pub(crate) use page::{controls, StagePage};
+pub(crate) use page::{controls, elements, StagePage, StageView};
 pub(crate) use scene::install;

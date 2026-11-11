@@ -238,18 +238,43 @@ pub(crate) struct Aimed {
     pub(crate) hit: Option<SurfaceHit>,
 }
 
+/// Which of the two things a venue is built from the add-element dialog is
+/// offering: the lights, or the structure they hang on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Offer {
+    #[default]
+    Fixtures,
+    Pieces,
+}
+
+impl Offer {
+    pub(crate) const ALL: [Offer; 2] = [Offer::Fixtures, Offer::Pieces];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Offer::Fixtures => "Fixtures",
+            Offer::Pieces => "Stage pieces",
+        }
+    }
+}
+
 /// The add-element dialog's own state.
 ///
 /// The query lives in the [`luma_ui::text_input::TextInput`] the page owns —
-/// an editor is an entity and this is not — so all that is here is where the
-/// keyboard is. Rows are derived from the catalog and the venue every frame
-/// rather than cached: they are a pure function of a query over data already
-/// in memory, and a cache of one would be a second answer to the same
-/// question.
+/// an editor is an entity and this is not — so all that is here is what is
+/// offered and where the keyboard is. Rows are derived from the catalog and
+/// the venue every frame rather than cached: they are a pure function of a
+/// query over data already in memory, and a cache of one would be a second
+/// answer to the same question.
 #[derive(Debug, Default)]
 pub(crate) struct Choosing {
+    pub(crate) offer: Offer,
     /// Which row the keyboard is on, as an index into what the query left.
     pub(crate) cursor: usize,
+    /// How far the preview has been turned, in its own steps.
+    pub(crate) turn: i32,
+    /// A drag turning the preview: where it started, and the turn it had.
+    pub(crate) turning: Option<(gpui::Pixels, i32)>,
 }
 
 /// A row of fixtures being fitted to one face, previewed live.

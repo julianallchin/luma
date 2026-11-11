@@ -202,9 +202,11 @@ const DOCK_WIDTH: f32 = 40.;
 /// panel's cached region with it, since a cached region is not measured.
 pub(crate) const ENVIRONMENT_PANEL_WIDTH: f32 = 260.;
 
-/// The room itself, beside the stage on the venue tab: indoor or outdoor, the sun and the
-/// haze. These are venue truth, saved on the venue row, so they live with the
-/// venue and not with the render settings, which are about the picture.
+/// The column beside the stage on the venue tab. With a piece selected it is
+/// that piece's placement; with nothing selected it is the room itself: indoor
+/// or outdoor, the sun and the haze. Those are venue truth, saved on the venue
+/// row, so they live with the venue and not with the render settings, which
+/// are about the picture.
 ///
 /// The panel is drawn in a cached region of its own, not with the stage, so the
 /// stage's frames do not reach it: a switch that is still sliding asks for its
@@ -214,6 +216,27 @@ pub(crate) fn environment_panel(
     app: &Entity<Luma>,
     window: &mut Window,
 ) -> AnyElement {
+    // A selected piece takes the column: its placement is what is being
+    // edited, and the room is what is edited when nothing in it is.
+    let selection = state
+        .build
+        .as_ref()
+        .and_then(|build| crate::stage::selection_controls(build, app));
+    if let Some(controls) = selection {
+        return column(
+            "Placement",
+            div()
+                .id("scene-object-controls")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .px(px(12.))
+                .pb(px(12.))
+                .child(controls),
+        )
+        .agent_node(Role::Card, "Selected object")
+        .into_any_element();
+    }
     let environment = state.venue_environment();
     let rows = div()
         .id("venue-environment-scroll")
@@ -240,6 +263,13 @@ pub(crate) fn environment_panel(
     if state.settings_motion.borrow().switching() {
         window.request_animation_frame();
     }
+    column("Environment", rows)
+        .agent_node(Role::Card, "Venue environment")
+        .into_any_element()
+}
+
+/// The column beside the stage: a title over whatever it is showing.
+fn column(title: &'static str, body: impl IntoElement) -> Div {
     div()
         .flex_none()
         .w(px(ENVIRONMENT_PANEL_WIDTH))
@@ -257,11 +287,9 @@ pub(crate) fn environment_panel(
                 .px(px(12.))
                 .py(px(8.))
                 .text_size(px(12.5))
-                .child("Environment"),
+                .child(title),
         )
-        .child(rows)
-        .agent_node(Role::Card, "Venue environment")
-        .into_any_element()
+        .child(body)
 }
 
 /// The Debug page: the reflection probes, their debug balls, and the
@@ -326,8 +354,11 @@ impl Render for LightDrag {
     }
 }
 
+/// The room's light dial: the venue's own light, saved with it — or, on the
+/// Rig page, the work light the room is built under, which is not.
 fn light_slider(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
-    let environment = state.venue_environment();
+    let environment = state.environment();
+    let rigging = state.rigging;
     let tooltip = {
         let mut motion = state.settings_motion.borrow_mut();
         let visible = motion.knob_hovered || motion.light_dragging;
@@ -467,6 +498,13 @@ fn light_slider(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                 - (f32::from(event.event.position.y - event.bounds.top()) - 6.) / 100.)
                 .clamp(0., 1.);
             app.update(cx, |this, cx| {
+                if rigging {
+                    if let Some(state) = this.visualizer_mut() {
+                        state.set_work_light(fraction);
+                    }
+                    cx.notify();
+                    return;
+                }
                 this.set_visualizer_environment(
                     if indoor {
                         VenueEnvironment::indoor(fraction)

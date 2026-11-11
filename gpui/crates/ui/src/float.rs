@@ -389,6 +389,40 @@ pub fn checkbox(checked: bool) -> Div {
 
 const CHECKBOX: f32 = 16.0;
 
+/// A [`checkbox`] over a set that only part of is in: a dash in the box, which
+/// is neither the tick nor the hole.
+pub fn checkbox_partial() -> Div {
+    div()
+        .flex_none()
+        .size(rpx(CHECKBOX))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(rpx(radius::CHIP))
+        .bg(glass::ink(0.16))
+        .text_color(ladder::foreground())
+        .child(Icon::new(IconName::Minus).size(rpx(CHECK)))
+}
+
+/// A word that belongs to a row — a group a fixture is in — small enough to
+/// sit several to a table cell. The caller gives it an id and a click when it
+/// leads somewhere.
+pub fn tag(label: impl Into<SharedString>) -> Div {
+    div()
+        .flex_none()
+        .h(rpx(TAG_HEIGHT))
+        .px(rpx(6.0))
+        .flex()
+        .items_center()
+        .rounded(rpx(radius::CHIP))
+        .bg(glass::ink(0.08))
+        .text_size(rpx(11.0))
+        .text_color(ladder::foreground_alpha(0.8))
+        .child(label.into())
+}
+
+const TAG_HEIGHT: f32 = 18.0;
+
 // ---------------------------------------------------------------------------
 // Key caps
 // ---------------------------------------------------------------------------
@@ -530,6 +564,22 @@ pub fn btn(label: impl Into<SharedString>, _fade_key: impl Into<SharedString>) -
         })
         .fade_hover()
         .child(label.into())
+}
+
+/// [`btn`] with a glyph for a label: square, so the glyph sits in its middle.
+pub fn icon_btn(icon: IconName, _fade_key: impl Into<SharedString>) -> Div {
+    btn_shape()
+        .w(rpx(32.0))
+        .px(rpx(0.0))
+        .text_color(ladder::foreground_alpha(0.72))
+        .bg(glass::wash(0.0))
+        .hover(|style| {
+            style
+                .text_color(ladder::foreground_alpha(1.0))
+                .bg(glass::ink(0.06))
+        })
+        .fade_hover()
+        .child(Icon::new(icon).size(rpx(14.0)))
 }
 
 /// The one emphasised button: a near-white fill with near-black text — the

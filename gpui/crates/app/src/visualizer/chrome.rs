@@ -54,8 +54,8 @@ pub(crate) fn visualizer(
     };
     let venue = venue_tools.is_some();
     let body = body(state, app, library);
-    let floating = overlay_toolbar(state, app, venue_tools, transport);
-    state.bottom_bar_visible = floating.is_some();
+    let (floating, bar) = overlay_toolbar(state, app, venue_tools, transport);
+    state.bottom_bar_visible = bar;
     // The stage renders every frame, so nothing else has to ask for the
     // frames the popovers' exits play over.
     state.fps_panel.tick_close(state.reduced_motion);
@@ -109,27 +109,6 @@ pub(crate) fn visualizer(
                     ..ladder::primary()
                 })
         });
-    let selection_target = state.selection_card_position(pane.size);
-    let selection = if venue {
-        state
-            .build
-            .as_ref()
-            .and_then(|build| crate::stage::selection_controls(build, app))
-    } else {
-        None
-    };
-    let selection_at = if selection.is_some() {
-        let at = state.selection_motion.sample(
-            Vec2::new(f32::from(selection_target.x), f32::from(selection_target.y)),
-            Instant::now(),
-        );
-        Point::new(px(at.x), px(at.y))
-    } else {
-        state.selection_motion.since = None;
-        // A press that closed the card (Remove) never sees its release.
-        state.stage.borrow_mut().selection_card_held = false;
-        selection_target
-    };
     // The pivot of the last orbit or wheel step, fading out.
     let pivot_dot = state.pivot_dot_at(Instant::now()).map(|(at, fade)| {
         let radius = PIVOT_DOT_SIZE / 2.;
@@ -195,63 +174,7 @@ pub(crate) fn visualizer(
                 .child(fullscreen_button(state.presentation, app))
                 .when(matches!(state.status, Status::Live), |d| {
                     d.child(settings::trigger(state, app))
-                })
-                .children(selection.map(|controls| {
-                    let stage = Rc::clone(&state.stage);
-                    let held = Rc::clone(&state.stage);
-                    luma_ui::float::popover_card()
-                        .occlude()
-                        .w(px(280.))
-                        .p(px(10.))
-                        .child(
-                            div()
-                                .id("scene-object-controls")
-                                .max_h(px(210.))
-                                .overflow_y_scroll()
-                                .child(controls),
-                        )
-                        .child(
-                            canvas(
-                                move |bounds, _, _| {
-                                    stage.borrow_mut().selection_card_size = bounds.size;
-                                    bounds
-                                },
-                                move |_, bounds, window, _| {
-                                    let pressed = Rc::clone(&held);
-                                    window.on_mouse_event(
-                                        move |event: &gpui::MouseDownEvent, phase, _, _| {
-                                            if phase.capture()
-                                                && event.button == gpui::MouseButton::Left
-                                                && bounds.contains(&event.position)
-                                            {
-                                                pressed.borrow_mut().selection_card_held = true;
-                                            }
-                                        },
-                                    );
-                                    let released = Rc::clone(&held);
-                                    window.on_mouse_event(
-                                        move |event: &gpui::MouseUpEvent, phase, _, _| {
-                                            if phase.capture()
-                                                && event.button == gpui::MouseButton::Left
-                                            {
-                                                released.borrow_mut().selection_card_held = false;
-                                            }
-                                        },
-                                    );
-                                },
-                            )
-                            .absolute()
-                            .inset_0(),
-                        )
-                        .agent_node(Role::Card, "Selected object")
-                        .map(|card| {
-                            div()
-                                .absolute()
-                                .left(selection_at.x)
-                                .top(selection_at.y)
-                                .child(luma_ui::float::frosted_card(card))
-                        })
-                })),
+                }),
         )
         .children(state.audition.as_ref().map(audition_badge))
         .agent_node(
@@ -303,13 +226,15 @@ fn overlay_toolbar(
     app: &Entity<Luma>,
     venue_tools: Option<AnyElement>,
     transport: Option<AnyElement>,
-) -> Option<AnyElement> {
+) -> (Option<AnyElement>, bool) {
     let gizmo = !state.presentation
         && matches!(state.status, Status::Live)
         && state.selection_gizmo_space() != luma_scene::gizmo::GizmoSpace::DISABLED;
+    // The builder's dialogs float over the picture whether or not there is a
+    // bar under them; the bar is only a transport or a gizmo's two modes.
     let venue_tools = venue_tools.filter(|_| matches!(state.status, Status::Live));
-    if venue_tools.is_none() && transport.is_none() && !gizmo {
-        return None;
+    if transport.is_none() && !gizmo {
+        return (venue_tools, false);
     }
     let current = state.gizmo_mode;
     let mode = |label: &'static str, mode: GizmoMode| {
@@ -326,44 +251,43 @@ fn overlay_toolbar(
             })
             .agent_node(Role::Toggle, label)
     };
-    Some(
-        div()
-            .absolute()
-            .bottom(TOOLBAR_OVERLAY_BOTTOM)
-            .left_0()
-            .right_0()
-            .flex()
-            .justify_center()
-            .child(
-                luma_ui::float::popover_card()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(4.))
-                    .p(px(4.))
-                    // The bar, not the centring row it sits in: an opaque
-                    // surface over the viewport owns the pointer it covers
-                    // (see [`listen`]), and the row is air either side of it.
-                    .occlude()
-                    .children(venue_tools)
-                    .children(transport)
-                    // The two gizmo modes are one choice, so they share one
-                    // track. Zoom is the wheel's (and `=`/`-`), not a button's
-                    // — a camera verb with a pointer gesture needs no chrome.
-                    //
-                    // The mode switch uses the same joint freedoms as the
-                    // handles, including mixed selections with no shared frame.
-                    .when(gizmo, |bar| {
-                        bar.child(
-                            luma_ui::float::segmented()
-                                .child(mode("Translate", GizmoMode::Translate))
-                                .child(mode("Rotate", GizmoMode::Rotate)),
-                        )
-                    })
-                    .map(luma_ui::float::frosted_card),
-            )
-            .agent_node(Role::Card, "Visualizer toolbar")
-            .into_any_element(),
-    )
+    let bar = div()
+        .absolute()
+        .bottom(TOOLBAR_OVERLAY_BOTTOM)
+        .left_0()
+        .right_0()
+        .flex()
+        .justify_center()
+        .child(
+            luma_ui::float::popover_card()
+                .flex_row()
+                .items_center()
+                .gap(px(4.))
+                .p(px(4.))
+                // The bar, not the centring row it sits in: an opaque
+                // surface over the viewport owns the pointer it covers
+                // (see [`listen`]), and the row is air either side of it.
+                .occlude()
+                .children(transport)
+                // The two gizmo modes are one choice, so they share one
+                // track. Zoom is the wheel's (and `=`/`-`), not a button's
+                // — a camera verb with a pointer gesture needs no chrome.
+                //
+                // The mode switch uses the same joint freedoms as the
+                // handles, including mixed selections with no shared frame.
+                .when(gizmo, |bar| {
+                    bar.child(
+                        luma_ui::float::segmented()
+                            .child(mode("Translate", GizmoMode::Translate))
+                            .child(mode("Rotate", GizmoMode::Rotate)),
+                    )
+                })
+                .map(luma_ui::float::frosted_card),
+        )
+        .children(venue_tools)
+        .agent_node(Role::Card, "Visualizer toolbar")
+        .into_any_element();
+    (Some(bar), true)
 }
 
 /// What says the stage is playing a hovered preset, not the score: the
