@@ -73,6 +73,8 @@ function open() {
 function arm(row) {
   nav.step("add element", "button", "Add element");
   until("the dialog", (s) => s.find({ role: "input", label: "Search elements" }) !== undefined);
+  const offer = row.startsWith("Luma ") ? "Add fixtures" : "Add stage pieces";
+  nav.step(offer, "toggle", offer);
   // The first word: a whole token, so the library's own search matches it.
   app.type(app.snapshot().find({ role: "input", label: "Search elements" }), row.split(" ")[0]);
   nav.step(`the ${row} row`, "row", row);

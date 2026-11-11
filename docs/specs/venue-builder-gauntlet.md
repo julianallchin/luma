@@ -49,7 +49,8 @@ packed one after another in solve order, so a rig that fits in one universe
 uses one; a block that would cross 512 rolls whole to the next universe and the
 blocks after it follow. Collisions and overflow are **refused**, never
 truncated. Patch-page edits override; auto-patch re-derives from placement,
-dropping overrides for fixtures it touches and reporting how many moved. **Out
+keeps every override where it is, packs the rest around them and reports how
+many moved and how many it kept. **Out
 of scope:** Art-Net binding (B5), sACN, RDM, UI.
 
 **Evidence and acceptance.** `cargo test -p luma-scene`, plus the `(node,

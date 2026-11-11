@@ -1,5 +1,5 @@
-//! The add-element dialog: the catalog palette and the fixture library in
-//! one searchable list, and the verbs that open it and take a row into the hand.
+//! The add-element dialog: the fixture library or the catalog palette, as a
+//! searchable list, and the verbs that open it and take a row into the hand.
 
 use std::collections::BTreeMap;
 
@@ -10,12 +10,12 @@ use luma_scene::venue::NodeKind;
 use luma_ui::float::{self, RowState};
 use luma_ui::icons::IconName;
 use luma_ui::ladder;
-use luma_ui::node::{Instrument as _, Role};
+use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 
 use crate::fixture_library::{self, FixtureLibrary};
 use crate::Luma;
 
-use super::hand::{self, Hand, Held, Holding};
+use super::hand::{self, Hand, Held, Holding, Offer};
 use super::page::StagePage;
 use super::preview;
 
@@ -99,8 +99,16 @@ impl Luma {
             })
             .detach();
         }
+        // The page's own view says what is being built: its stage list adds
+        // structure, everything else adds lights.
+        let offer = match self.workspace.active_body() {
+            Some(crate::shell::Body::Patch(state)) if state.view == crate::patch::View::Stage => {
+                Offer::Pieces
+            }
+            _ => Offer::Fixtures,
+        };
         if let Some(build) = self.build_mut() {
-            build.hand = Hand::Choosing(hand::Choosing::default());
+            build.hand = Hand::Choosing(hand::Choosing { offer, cursor: 0 });
         }
         if let Some(page) = self.stage_page_mut() {
             page.closing.finish_close();
@@ -115,6 +123,16 @@ impl Luma {
             field.update(cx, |field, cx| field.set_text("", cx));
         }
         self.stage_fetch_fixture_page(cx);
+        cx.notify();
+    }
+
+    /// Offer the other half of the catalogue, from its first row.
+    pub(super) fn stage_offer(&mut self, offer: Offer, cx: &mut Context<Self>) {
+        if let Some(build) = self.build_mut() {
+            if let Hand::Choosing(choosing) = &mut build.hand {
+                *choosing = hand::Choosing { offer, cursor: 0 };
+            }
+        }
         cx.notify();
     }
 
@@ -214,64 +232,67 @@ const CHOOSER_SIZE: luma_ui::dialog::morph::MorphSize = luma_ui::dialog::morph::
 /// One row the dialog can offer, and what taking it puts in the hand.
 pub(crate) struct ChooserRow {
     pub(crate) label: String,
-    pub(crate) section: &'static str,
+    pub(crate) section: String,
     /// What the preview says about it beyond its name: for a library
     /// fixture, how well it is checked and the modes it can be patched in.
     pub(crate) detail: Option<String>,
     pub(crate) take: Holding,
 }
 
-/// Every element this venue can be given that matches the dialog's query, in
-/// one list.
+/// What the dialog offers for its query: the fixtures a venue can be given, or
+/// the catalog's pieces.
 ///
-/// Catalog pieces and the library — two provenances, one question ("what goes
-/// in next"), so one list.
-///
-/// Already narrowed, because the two provenances narrow differently and only
-/// this function knows which is which: the catalog is in memory and filtered
-/// here, while the library's rows *are* the answer to
-/// the query — [`Library::search_fixtures`] matched them, and re-filtering the
-/// page it returned would drop rows it matched on a field the label does not
-/// carry.
-pub(crate) fn chooser_rows(library: &FixtureLibrary) -> Vec<ChooserRow> {
-    let needle = library.query().trim().to_lowercase();
-    let matches = |label: &str, section: &str| {
-        needle.is_empty()
-            || label.to_lowercase().contains(&needle)
-            || section.to_lowercase().contains(&needle)
-    };
-    let mut rows: Vec<ChooserRow> = palette_rows()
-        .into_iter()
-        .filter(|row| matches(&row.label, row.group.as_str()))
-        .map(|row| ChooserRow {
-            label: row.label.clone(),
-            section: row.group.as_str(),
-            detail: None,
-            take: Holding::Piece {
-                catalog_ref: row.catalog_ref.to_string(),
-                kind: NodeKind::Piece,
-                display_name: row.label,
-                footing: hand::footing_for(row.catalog_ref, row.tower),
-                params: BTreeMap::new(),
-            },
-        })
-        .collect();
-    rows.extend(library.entries().iter().map(|entry| {
-        let label = format!("{} {}", entry.manufacturer, entry.model);
-        ChooserRow {
-            label: label.clone(),
-            section: "Fixtures",
-            detail: entry.library.as_ref().map(library_detail),
-            take: Holding::Fixture {
-                path: entry.path.clone(),
-                label,
-                mode: None,
-                width_m: DEFAULT_FIXTURE_WIDTH_M,
-                dims: None,
-            },
+/// Already narrowed, because the two narrow differently and only this function
+/// knows which is which: the catalog is in memory and filtered here, while the
+/// library's rows *are* the answer to the query —
+/// [`Library::search_fixtures`] matched them, and re-filtering the page it
+/// returned would drop rows it matched on a field the label does not carry.
+pub(crate) fn chooser_rows(library: &FixtureLibrary, offer: Offer) -> Vec<ChooserRow> {
+    match offer {
+        Offer::Fixtures => library
+            .entries()
+            .iter()
+            .map(|entry| {
+                let label = format!("{} {}", entry.manufacturer, entry.model);
+                ChooserRow {
+                    label: label.clone(),
+                    section: entry.manufacturer.clone(),
+                    detail: entry.library.as_ref().map(library_detail),
+                    take: Holding::Fixture {
+                        path: entry.path.clone(),
+                        label,
+                        mode: None,
+                        width_m: DEFAULT_FIXTURE_WIDTH_M,
+                        dims: None,
+                    },
+                }
+            })
+            .collect(),
+        Offer::Pieces => {
+            let needle = library.query().trim().to_lowercase();
+            let matches = |label: &str, section: &str| {
+                needle.is_empty()
+                    || label.to_lowercase().contains(&needle)
+                    || section.to_lowercase().contains(&needle)
+            };
+            palette_rows()
+                .into_iter()
+                .filter(|row| matches(&row.label, row.group.as_str()))
+                .map(|row| ChooserRow {
+                    label: row.label.clone(),
+                    section: row.group.as_str().to_string(),
+                    detail: None,
+                    take: Holding::Piece {
+                        catalog_ref: row.catalog_ref.to_string(),
+                        kind: NodeKind::Piece,
+                        display_name: row.label,
+                        footing: hand::footing_for(row.catalog_ref, row.tower),
+                        params: BTreeMap::new(),
+                    },
+                })
+                .collect()
         }
-    }));
-    rows
+    }
 }
 
 /// A library fixture's line in the preview: `Fixture library · geometry
@@ -303,11 +324,8 @@ const DEFAULT_FIXTURE_WIDTH_M: f64 = 0.3;
 /// What the row under the keyboard is, at a size worth looking at.
 ///
 /// A pane and not a tooltip, because choosing between two trusses is a
-/// comparison and a comparison wants one place the answer always appears. It
-/// is deliberately words rather than a rendered thumbnail: the catalog's
-/// meshes are loaded by the renderer for the *room*, and spinning one up per
-/// highlighted row would put a mesh load inside an arrow key.
-fn chooser_preview(row: Option<&ChooserRow>) -> Div {
+/// comparison and a comparison wants one place the answer always appears.
+fn chooser_preview(row: Option<&ChooserRow>, window: &Window) -> Div {
     let pane = div()
         .w(px(CHOOSER_PREVIEW_W))
         .flex_none()
@@ -332,12 +350,20 @@ fn chooser_preview(row: Option<&ChooserRow>) -> Div {
     };
     let thumb = match &row.take {
         Holding::Piece { catalog_ref, .. } => {
-            let path = preview::thumbnail_path(catalog_ref);
-            path.exists()
-                .then(|| gpui::img(path).w_full().rounded(px(6.0)).into_any_element())
+            Some(preview::thumbnail_path(catalog_ref)).filter(|path| path.exists())
         }
-        _ => None,
-    };
+        Holding::Fixture { path, .. } => match preview::fixture_thumbnail(path) {
+            preview::FixtureThumbnail::Ready(path) => Some(path),
+            preview::FixtureThumbnail::Rendering => {
+                // On its way: look again next frame.
+                window.request_animation_frame();
+                None
+            }
+            preview::FixtureThumbnail::Unavailable => None,
+        },
+        Holding::Duplicate { .. } => None,
+    }
+    .map(|path| gpui::img(path).w_full().rounded(px(6.0)).into_any_element());
     pane.children(thumb)
         .child(float::label(row.section.to_string()))
         .child(
@@ -362,18 +388,18 @@ const CHOOSER_PREVIEW_W: f32 = 208.0;
 /// The add-element dialog: a search field, a preview, a sectioned list.
 pub(super) fn chooser(
     state: &StagePage,
-    cursor: usize,
+    (offer, cursor): (Offer, usize),
     app: &Entity<Luma>,
     window: &Window,
 ) -> AnyElement {
-    let rows = chooser_rows(&state.library);
+    let rows = chooser_rows(&state.library, offer);
     let dismiss = app.clone();
 
     let mut list = float::list().id("stage-chooser-list").overflow_y_scroll();
     let mut section = "";
     for (index, row) in rows.iter().enumerate() {
         if row.section != section {
-            section = row.section;
+            section = &row.section;
             list = list.child(float::section_heading(section.to_string()));
         }
         let app = app.clone();
@@ -417,6 +443,15 @@ pub(super) fn chooser(
             let step: isize = match event.keystroke.key.as_str() {
                 "down" => 1,
                 "up" => -1,
+                "tab" => {
+                    let other = match offer {
+                        Offer::Fixtures => Offer::Pieces,
+                        Offer::Pieces => Offer::Fixtures,
+                    };
+                    keys.update(cx, |this, cx| this.stage_offer(other, cx));
+                    cx.stop_propagation();
+                    return;
+                }
                 // Handled here as well as at the shell's rung, because the
                 // search field holds focus and a field taking typed text
                 // out-ranks the window's own Escape.
@@ -459,6 +494,23 @@ pub(super) fn chooser(
         })
         .child(
             float::header_band()
+                .child(
+                    float::segmented()
+                        .flex_none()
+                        .children(Offer::ALL.map(|other| {
+                            let offered = app.clone();
+                            float::segment(other.label(), other == offer, other.label())
+                                .id(other.label())
+                                .on_click(move |_, _, cx| {
+                                    offered.update(cx, |this, cx| this.stage_offer(other, cx));
+                                })
+                                .agent_node(
+                                    Role::Toggle,
+                                    format!("Add {}", other.label().to_lowercase()),
+                                )
+                                .agent_focused(other == offer)
+                        })),
+                )
                 .child(fixture_library::search_field(&state.library, true, true))
                 .child({
                     let close = app.clone();
@@ -481,7 +533,7 @@ pub(super) fn chooser(
                 .min_h_0()
                 .flex()
                 .flex_row()
-                .child(chooser_preview(rows.get(cursor)))
+                .child(chooser_preview(rows.get(cursor), window))
                 .child(
                     div()
                         .flex_1()
@@ -501,6 +553,7 @@ pub(super) fn chooser(
                     IconName::ArrowDown,
                     "Navigate",
                 ))
+                .child(float::key_hint_text("tab", "Fixtures or pieces"))
                 .child(float::key_hint_text("enter", "Take"))
                 .child(float::key_hint_text("esc", "Close")),
         )
