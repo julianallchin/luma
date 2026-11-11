@@ -563,6 +563,7 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                                                     Some(timings.gpu_total_ms as f32);
                                                 stage.last_cluster_ms =
                                                     Some(timings.cpu_cluster_ms as f32);
+                                                stage.exposure_ev = timings.exposure_ev;
                                             }
                                             stage.last_shadow_maps =
                                                 Some(completed.redrawn_shadow_maps);
