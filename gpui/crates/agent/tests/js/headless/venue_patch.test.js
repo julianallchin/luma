@@ -176,23 +176,26 @@ test("adding an output on a host with no DMX output says why", () => {
   until("the device menu", (s) => s.findAll({ role: "text" }).some((n) => n.label.includes("not running on this host")));
 });
 
-// Auto Patch re-derives, asks before discarding an override, and says how
-// much it moved.
-test("auto patch moves and reports", () => {
+// Auto Patch packs the rig around an address set by hand, and says how much
+// it moved and how much it kept.
+test("auto patch packs around a hand-set address and reports", () => {
   openPatch();
-  // Pin one address by hand so Auto Patch has an override to ask about.
+  // Set one address by hand, and move another out of the way without
+  // pinning it being the point: only the first is the operator's.
   typeAddress("Mover 1", reading("Mover 1 address = "), "100");
   until("the moved row", (s) => s.findAll({ role: "text" }).some((n) => n.label === "Mover 1 address = 100"));
   app.frames(4);
 
   app.click(app.snapshot().find({ role: "button", label: "Auto patch" }));
-  until("the confirmation", (s) => s.findAll({ role: "text" }).some((n) => n.label.startsWith("Re-derive")));
-  app.click(lastButton("Auto patch"));
   until("the report", (s) => s.findAll({ role: "text" }).some((n) => n.label.startsWith("Auto patch moved")));
   app.frames(6);
-  expect(texts().find((l) => l.startsWith("Auto patch moved"))).toContain("discarded 1 overrides");
-  // It moved the pinned row back, which is the whole claim.
-  assert(reading("Mover 1 address = ") !== "100", "auto patch left the override in place");
+  // Nothing was asked: a hand-set address is not something it takes.
+  expect(app.snapshot().find({ role: "card", label: "Confirm dialog" })).toBe(undefined);
+  expect(texts().find((l) => l.startsWith("Auto patch moved"))).toContain("kept 1 hand-set");
+  expect(reading("Mover 1 address = ")).toBe("100");
+  // The rest closed the gap it left: three fixtures of eight channels, from 1.
+  const others = ["Mover 0", "Mover 2", "Mover 3"].map((name) => Number(reading(`${name} address = `))).sort((a, b) => a - b);
+  expect(others).toEqual([1, 9, 17]);
 });
 
 // Unpatching takes the light out of the room too, so it asks first.

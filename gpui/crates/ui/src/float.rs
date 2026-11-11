@@ -566,6 +566,22 @@ pub fn btn(label: impl Into<SharedString>, _fade_key: impl Into<SharedString>) -
         .child(label.into())
 }
 
+/// [`btn`] with a glyph for a label: square, so the glyph sits in its middle.
+pub fn icon_btn(icon: IconName, _fade_key: impl Into<SharedString>) -> Div {
+    btn_shape()
+        .w(rpx(32.0))
+        .px(rpx(0.0))
+        .text_color(ladder::foreground_alpha(0.72))
+        .bg(glass::wash(0.0))
+        .hover(|style| {
+            style
+                .text_color(ladder::foreground_alpha(1.0))
+                .bg(glass::ink(0.06))
+        })
+        .fade_hover()
+        .child(Icon::new(icon).size(rpx(14.0)))
+}
+
 /// The one emphasised button: a near-white fill with near-black text — the
 /// only place on this tier where ink becomes a *surface* rather than a state.
 ///

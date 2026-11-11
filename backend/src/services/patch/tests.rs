@@ -273,13 +273,19 @@ async fn auto_patch_writes_physical_order_through_to_the_rows() {
     let after = stored(&pool).await;
     assert_ne!(before, after, "auto-patch changed nothing at all");
     assert!(report.moved > 0);
+    // The one hand-set address is where it was, still pinned, and nothing
+    // was packed onto it.
+    let pinned = |rows: &[(String, i64, i64, bool)]| -> Vec<(String, i64, i64)> {
+        rows.iter()
+            .filter(|(.., pinned)| *pinned)
+            .map(|(id, universe, address, _)| (id.clone(), *universe, *address))
+            .collect()
+    };
+    assert_eq!(pinned(&before).len(), 1);
     assert_eq!(
-        report.overrides_discarded, 1,
-        "the one hand-set address was the one override"
-    );
-    assert!(
-        after.iter().all(|(_, _, _, pinned)| !pinned),
-        "auto-patch left a pin behind"
+        pinned(&before),
+        pinned(&after),
+        "auto-patch moved or unpinned a hand-set address"
     );
 
     // The movers were hung back-to-front; the addresses they ended up with run

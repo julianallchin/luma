@@ -146,6 +146,8 @@ pub(crate) struct StripDrag {
     /// one the block was picked up from.
     pub(crate) universe: u16,
     pub(crate) over: u16,
+    /// Let go, and waiting for the write and the rows that show it.
+    pub(crate) dropped: bool,
 }
 
 pub(crate) struct Patch {
@@ -285,10 +287,6 @@ impl Patch {
         GRID_COLUMNS[self.grid_zoom.min(GRID_COLUMNS.len() - 1)]
     }
 
-    pub(crate) fn any_pinned(&self) -> bool {
-        self.rows().iter().any(|row| row.address_pinned)
-    }
-
     fn clear_edit(&mut self) {
         self.editing = None;
     }
@@ -401,6 +399,10 @@ impl Patch {
                 // order is nobody's business.
                 data.fixtures
                     .sort_by_key(|row| (row.universe, row.address, row.id.clone()));
+                // The rows a dropped run was waiting for.
+                if self.drag.as_ref().is_some_and(|drag| drag.dropped) {
+                    self.drag = None;
+                }
                 self.selected
                     .retain(|id| data.fixtures.iter().any(|f| &f.id == id));
                 if self
@@ -849,43 +851,23 @@ impl Luma {
         .detach();
     }
 
-    /// Auto patch. A venue holding pinned addresses is asked first, because
-    /// the answer discards them.
+    /// Auto patch: pack every address that was not set by hand around the
+    /// ones that were. Nothing a person typed or dragged is moved, so there
+    /// is nothing to ask first.
     pub(crate) fn auto_patch_venue(&mut self, venue_id: String, cx: &mut Context<Self>) {
-        let pinned = self
-            .patch_mut(&venue_id)
-            .is_some_and(|state| state.any_pinned());
-        if !pinned {
-            self.run_auto_patch(venue_id, cx);
-            return;
-        }
-        self.ask(
-            Confirm {
-                title: "Re-derive every address?".into(),
-                body: "This venue holds hand-set addresses. Auto patch derives \
-                       addresses from where fixtures hang and discards the \
-                       overrides it touches."
-                    .into(),
-                verb: "Auto patch".into(),
-                action: Action::AutoPatch {
-                    venue_id: venue_id.into(),
-                },
-            },
-            cx,
-        );
-    }
-
-    pub(crate) fn run_auto_patch(&mut self, venue_id: String, cx: &mut Context<Self>) {
+        let kept = self.patch_mut(&venue_id).map_or(0, |state| {
+            state.rows().iter().filter(|row| row.address_pinned).count()
+        });
         let pending = self.library.auto_patch(&venue_id);
         cx.spawn(async move |this, cx| {
             let report = pending.await;
             this.update(cx, |this, cx| {
                 let notice: SharedString = match report {
                     Ok(report) => {
-                        let mut line = format!(
-                            "Auto patch moved {}, discarded {} overrides",
-                            report.moved, report.overrides_discarded
-                        );
+                        let mut line = format!("Auto patch moved {}", report.moved);
+                        if kept > 0 {
+                            line.push_str(&format!(", kept {kept} hand-set"));
+                        }
                         for note in &report.notes {
                             line.push_str(" · ");
                             line.push_str(&note.message);
@@ -1070,6 +1052,7 @@ impl Luma {
             grabbed_channel,
             universe,
             over: address,
+            dropped: false,
         });
         let selected = state.selected.clone();
         self.highlight_venue_lights(selected, cx);
@@ -1083,7 +1066,7 @@ impl Luma {
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = self.patch_mut(&venue_id) {
-            let Some(drag) = state.drag.as_mut() else {
+            let Some(drag) = state.drag.as_mut().filter(|drag| !drag.dropped) else {
                 return;
             };
             if drag.over == address && drag.universe == universe {
@@ -1101,17 +1084,22 @@ impl Luma {
         let Some(state) = self.patch_mut(&venue_id) else {
             return;
         };
-        let Some(drag) = state.drag.take() else {
+        let Some(drag) = state.drag.as_mut().filter(|drag| !drag.dropped) else {
             return;
         };
+        // The run stays drawn where it was let go until the write answers.
+        // Clearing the drag here would put it back where it started for the
+        // frames the write and the reload take.
+        drag.dropped = true;
         let strip = drag.universe;
         let universe = i64::from(strip);
         let start = i64::from(drag.over) - i64::from(drag.grabbed_channel);
-        let fixture = drag.fixture;
+        let fixture = drag.fixture.clone();
         if state
             .row(&fixture)
             .is_some_and(|row| row.universe == universe && row.address == start)
         {
+            state.drag = None;
             cx.notify();
             return;
         }
@@ -1124,9 +1112,13 @@ impl Luma {
                 Ok(()) => this.reload_patch(venue_id, cx),
                 Err(error) => {
                     let Some(message) = refusal(&error) else {
+                        if let Some(state) = this.patch_mut(&venue_id) {
+                            state.drag = None;
+                        }
                         return this.report_failure("The fixture was not moved", error, cx);
                     };
                     if let Some(state) = this.patch_mut(&venue_id) {
+                        state.drag = None;
                         state.strip_refusal = Some((strip, message));
                     }
                     this.select_occupant(venue_id, universe, start, cx);
@@ -1286,11 +1278,6 @@ fn add_button(app: &Entity<Luma>) -> impl IntoElement {
     let open = app.clone();
     luma_ui::float::btn("Add", "stage-add")
         .id("stage-add")
-        .child(
-            gpui_component::Icon::new(luma_ui::icons::IconName::Plus)
-                .size(px(14.0))
-                .text_color(ladder::foreground_alpha(0.7)),
-        )
         .child(luma_ui::float::key_hint_text("A", ""))
         .on_click(move |_, window, cx| {
             open.update(cx, |this, cx| this.stage_open_chooser_focused(window, cx));
@@ -1320,10 +1307,8 @@ fn zoom_button(state: &Patch, closer: bool, app: &Entity<Luma>) -> impl IntoElem
     };
     let zoomed = app.clone();
     let venue = state.venue_id.clone();
-    luma_ui::float::btn("", key)
+    luma_ui::float::icon_btn(icon, key)
         .id(key)
-        .px(px(6.0))
-        .child(gpui_component::Icon::new(icon).size(px(14.0)))
         .when(at_end, |button| button.opacity(0.35))
         .on_click(move |_, _, cx| {
             let venue = venue.clone();

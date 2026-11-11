@@ -142,11 +142,11 @@ pub async fn plan(
 
 /// Re-derive every address from placement and write the result.
 ///
-/// **Discards hand-set addresses.** Auto Patch is a deliberate "redo the
-/// paperwork", so the overrides it re-derives over are cleared rather than
-/// stepped around (`docs/specs/venue-builder-gauntlet.md` §3). Every other
-/// path — a new fixture, a distribution, [`next_addresses`] — goes through
-/// [`allocate`], which preserves them.
+/// **Keeps hand-set addresses.** A pinned fixture stays where a person put
+/// it and the rest of the rig is packed around it, exactly as [`allocate`]
+/// does for every other path — a new fixture, a distribution,
+/// [`next_addresses`]. A pin that Auto Patch threw away would be a pin that
+/// meant nothing; unpinning is the gesture that hands an address back.
 ///
 /// # Errors
 /// Fails if the venue cannot be solved or a write is refused.
@@ -154,7 +154,6 @@ pub async fn auto_patch(
     access: &mut VenueAccess<'_, Write>,
     fixtures_root: &Path,
 ) -> Result<AutoPatchReport, String> {
-    let discarded = fixtures_db::clear_address_pins(access).await?;
     let allocation = plan(access, fixtures_root).await?;
     let before: Vec<PatchedFixture> = fixtures_db::get_patched_fixtures(access).await?;
 
@@ -175,7 +174,6 @@ pub async fn auto_patch(
 
     Ok(AutoPatchReport {
         moved,
-        overrides_discarded: usize::try_from(discarded).unwrap_or(usize::MAX),
         notes: allocation.notes.iter().map(PatchNote::from).collect(),
     })
 }

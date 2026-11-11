@@ -174,7 +174,14 @@ fn fills(state: &Patch, universe: u16, cells: &[UniverseCell]) -> Vec<Hsla> {
     if let Some(drag) = state.drag.as_ref().filter(|drag| drag.universe == universe) {
         if let Some(row) = state.row(&drag.fixture) {
             let start = i64::from(drag.over) - i64::from(drag.grabbed_channel);
-            paint(start, row.num_channels, ladder::accent().into());
+            // Let go, it is the fixture where it will be; in the hand, it is
+            // an offer.
+            let colour: Hsla = if drag.dropped {
+                ladder::foreground_90().into()
+            } else {
+                ladder::accent().into()
+            };
+            paint(start, row.num_channels, colour);
         }
     }
     fills
