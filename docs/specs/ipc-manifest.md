@@ -5,7 +5,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` fails when it is stale and
 rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 
-**135 commands** across **27 domains**
+**136 commands** across **27 domains**
 
 ## Domains
 
@@ -36,9 +36,9 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `sync` | 2 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 5 | `backend/src/dispatch/handlers/tracks.rs` |
-| `venues` | 10 | `backend/src/dispatch/handlers/venues.rs` |
+| `venues` | 11 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **135** | |
+| **total** | **136** | |
 
 ## Commands
 
@@ -307,7 +307,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `list_venue_members` | `venueId: String` | `Vec<VenueMember>` |
 | `remove_venue_member` | `venueId: String`<br>`uid: String` | `()` |
 | `join_venue` | `code: String` | `String` |
-| `joined_venue` | `venue_id: String` | `Option<Venue>` |
+| `joined_venue` | `venueId: String` | `Option<Venue>` |
 
 ### `waveforms`
 
