@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::fixtures::parser::{self, FixtureIndex};
-use crate::models::fixtures::FixtureEntry;
+use crate::models::fixtures::{FixtureEntry, LASER_PROJECTOR_PATH};
 use crate::services::group_derivation;
 
 /// In-memory fixture-definition index. `None` until [`initialize_fixtures`]
@@ -37,12 +37,12 @@ pub async fn initialize_fixtures(root: &Path, state: &FixtureState) -> Result<us
     Ok(count)
 }
 
-/// Every fixture a venue can be given: the Luma fixture library's, then the
-/// QLC+ files under `root` that no library fixture stands for.
+/// Every fixture a venue can be given: the Luma fixture library's, and the
+/// one built-in the library does not carry, the ILDA laser projector
+/// ([`LASER_PROJECTOR_PATH`]).
 ///
-/// A library fixture that names a QLC+ file among its aliases replaces that
-/// file in search, so one product is offered once and offered as the library
-/// fixture. The file itself stays where it is: venues patched with it keep
+/// The QLC+ files under `root` are not offered once there is a library
+/// beside them. They stay where they are: venues patched with one keep
 /// loading it. A tree with no library beside it is searched as QLC+ alone.
 ///
 /// # Errors
@@ -53,11 +53,6 @@ pub fn catalogue(root: &Path) -> Result<FixtureIndex, String> {
         return Ok(qlc);
     };
     let index = crate::fixtures::library::index(&library_root)?;
-    let aliased: std::collections::HashSet<&str> = index
-        .fixtures
-        .iter()
-        .filter_map(|entry| entry.aliases.as_ref()?.qlc_path.as_deref())
-        .collect();
     let mut entries: Vec<FixtureEntry> = index
         .fixtures
         .iter()
@@ -71,7 +66,7 @@ pub fn catalogue(root: &Path) -> Result<FixtureIndex, String> {
     entries.extend(
         qlc.entries
             .into_iter()
-            .filter(|entry| !aliased.contains(entry.path.as_str())),
+            .filter(|entry| entry.path == LASER_PROJECTOR_PATH),
     );
     entries.sort_by(|a, b| {
         a.manufacturer

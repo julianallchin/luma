@@ -128,8 +128,14 @@ fn search_offers_the_library_fixture_in_place_of_the_qlc_file_it_replaces() {
         .iter()
         .any(|m| m.name == "16ch" && m.footprint == 16));
     assert!(!entry.quality.geometry.is_empty());
-    // QLC+ files nothing in the library stands for are still offered.
-    assert!(catalogue.entries.iter().any(|e| e.library.is_none()));
+    // Beside a library, the only QLC+ file offered is the laser projector.
+    let files: Vec<&str> = catalogue
+        .entries
+        .iter()
+        .filter(|e| e.library.is_none())
+        .map(|e| e.path.as_str())
+        .collect();
+    assert_eq!(files, [crate::models::fixtures::LASER_PROJECTOR_PATH]);
 }
 
 /// Sharpy 16ch: colour wheel 0, shutter 1, dimmer 2, pan 9–10, tilt 11–12.

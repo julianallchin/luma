@@ -107,7 +107,7 @@ mod migration_tests {
 
     const LASER_ELEMENTS: i64 = 20_261_025_130_000;
     const LASER_FIGURES: i64 = 20_261_026_120_000;
-    const PROJECTOR: &str = "Generic/Generic-ILDA-Laser-Projector.qxf";
+    const PROJECTOR: &str = crate::models::fixtures::LASER_PROJECTOR_PATH;
 
     /// A venue of two projectors and a par, migrated up to `until`.
     async fn database(directory: &tempfile::TempDir, until: i64) -> SqlitePool {

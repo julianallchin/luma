@@ -55,6 +55,10 @@ pub struct FixtureDefinition {
 /// with from laser clips, through a point stream rather than DMX.
 pub const LASER_PROJECTOR: &str = "Laser Projector";
 
+/// The bundled definition of the ILDA laser projector: the one fixture Luma
+/// offers that the fixture library does not carry.
+pub const LASER_PROJECTOR_PATH: &str = "Generic/Generic-ILDA-Laser-Projector.qxf";
+
 impl FixtureDefinition {
     /// Whether Luma can drive `mode`'s light: false for a library mode it
     /// cannot light (its colour only through presets of unknown colour).
