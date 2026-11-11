@@ -129,6 +129,7 @@ impl Visualizer {
             venue_environment: VenueEnvironment::default(),
             render_controls: RenderControls::new(environment),
             settings: Default::default(),
+            settings_page: Default::default(),
             presentation: false,
             bottom_bar_visible: false,
             settings_motion: RefCell::new(settings::DockMotion::new(cx.reduce_motion())),

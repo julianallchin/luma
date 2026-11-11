@@ -49,6 +49,11 @@ pub(super) struct Instance {
     pub(super) led: [f32; 4],
     /// An LED panel's gap colour (linear) and metalness.
     pub(super) gap: [f32; 4],
+    /// A lamp's lit face: its beam's axis (world, unit), and w: 1 when the
+    /// instance is one.
+    pub(super) beam_axis: [f32; 4],
+    /// The cosines of that beam's half angle (x) and of its field's (y).
+    pub(super) beam: [f32; 4],
 }
 
 #[repr(C)]
@@ -124,6 +129,12 @@ pub(super) struct CompositeUniform {
     pub(super) display: [f32; 4],
 }
 
+/// The brightest a surface is drawn, scene-linear. The scene target holds
+/// half floats, which stop at 65,504: past that a pixel is infinite, and the
+/// glare spreads an infinite pixel over the whole frame. A lamp's face at
+/// its real luminance is the one thing that gets near it.
+const BRIGHTEST: f32 = 60_000.0;
+
 pub(super) fn instance_of(frame: &Frame, draw: &Draw) -> Instance {
     let led = draw.material.led;
     Instance {
@@ -137,6 +148,7 @@ pub(super) fn instance_of(frame: &Frame, draw: &Draw) -> Instance {
         emissive: draw
             .material
             .emissive
+            .min(glam::Vec3::splat(BRIGHTEST))
             .extend(draw.material.roughness)
             .to_array(),
         flags: [
@@ -165,6 +177,14 @@ pub(super) fn instance_of(frame: &Frame, draw: &Draw) -> Instance {
         gap: led.map_or([0.0; 4], |led| {
             led.gap_color.extend(led.gap_metallic).to_array()
         }),
+        beam_axis: draw
+            .material
+            .beam
+            .map_or([0.0; 4], |beam| beam.axis.extend(1.0).to_array()),
+        beam: draw
+            .material
+            .beam
+            .map_or([0.0; 4], |beam| [beam.cos_beam, beam.cos_field, 0.0, 0.0]),
     }
 }
 

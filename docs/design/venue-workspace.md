@@ -17,7 +17,7 @@ that piece's placement controls, Duplicate and Remove. With nothing selected
 it shows the environment. Nothing floats over the scene for a selection.
 
 View holds the environment (Indoor or Outdoor), house lights, time of day,
-haze (density, cloudiness, turbulence), fixture shadows, grid and gizmos. Haze
+haze (density, cloudiness, turbulence), grid and gizmos. Haze
 and environment are venue data and sync with the venue. Grid, gizmos and
 render scale are settings of this device. FPS is a small top-right readout.
 A click on it expands the performance details.

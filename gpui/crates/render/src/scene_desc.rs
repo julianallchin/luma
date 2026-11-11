@@ -459,6 +459,7 @@ impl Look {
         exposure: Exposure {
             auto: false,
             ev: 0.0,
+            held: 0.0,
         },
         glare: Glare::OFF,
         footage: Footage::OFF,
@@ -523,17 +524,23 @@ impl ToneCurve {
 
 /// Exposure in stops, where 0 is the photometric exposure for a room lit to
 /// [`crate::photometry::METER_LUX`]. With `auto` the renderer meters each
-/// frame, within [`crate::photometry::ADAPT_EV`], and `ev` is the
-/// compensation added to the metered value; without it `ev` is the exposure
-/// itself. A look stored with metering clamps of its own still loads; the
-/// clamps are the renderer's now, in real units, and those keys are ignored.
+/// frame and adapts as an eye does (`post.rs`), within
+/// [`crate::photometry::ADAPT_EV`]; without it the exposure stays at `held`.
+/// `ev` is added to either. A look stored with metering clamps of its own
+/// still loads; the clamps are the renderer's now, in real units, and those
+/// keys are ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Exposure {
     /// Meter the frame and adapt to it over time.
     pub auto: bool,
-    /// Compensation (auto) or exposure (manual), in stops.
+    /// Compensation, in stops, on the metered exposure or the held one.
     pub ev: f32,
+    /// The exposure that stands while nothing is metered: the one the meter
+    /// had reached when it was switched off. A look stored before there was
+    /// one holds 0, the photometric exposure.
+    #[serde(default)]
+    pub held: f32,
 }
 
 impl Exposure {
@@ -541,9 +548,27 @@ impl Exposure {
     pub const STAGE: Self = Self {
         auto: true,
         ev: 0.0,
+        held: 0.0,
     };
     /// The range the exposure control offers, in stops.
     pub const RANGE: std::ops::RangeInclusive<f32> = -4.0..=4.0;
+
+    /// The exposure a frame is drawn at while nothing is metered, in stops.
+    #[must_use]
+    pub fn fixed(self) -> f32 {
+        self.held + self.ev
+    }
+
+    /// Stop metering and stay where the meter is: `metered` is the exposure
+    /// the picture has now, compensation included.
+    #[must_use]
+    pub fn holding(self, metered: f32) -> Self {
+        Self {
+            auto: false,
+            held: metered - self.ev,
+            ..self
+        }
+    }
 }
 
 /// The footage look: the picture a video camera in the room would record.
@@ -1387,6 +1412,23 @@ fn piece_box(piece: &Piece) -> luma_scene::Aabb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Switching the meter off leaves the picture where the meter had it,
+    /// and the compensation still moves it; a look stored before an exposure
+    /// could be held is the photometric exposure plus its number, as it was.
+    #[test]
+    fn a_held_exposure_stays_where_the_meter_was() {
+        let metered = Exposure {
+            ev: 0.5,
+            ..Exposure::STAGE
+        };
+        let held = metered.holding(2.5);
+        assert!(!held.auto);
+        assert_eq!(held.fixed(), 2.5);
+        assert_eq!(held.ev, metered.ev);
+        let older = r#"{"tone":"agx","exposure":{"auto":false,"ev":1.5},"glare":{"strength":0.0,"threshold":2.0,"star":0.3}}"#;
+        assert_eq!(Look::stored(older).exposure.fixed(), 1.5);
+    }
 
     /// A stored look round-trips, and one that no longer parses falls back to
     /// the stage default rather than to a black or blinding stage.

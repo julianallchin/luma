@@ -58,6 +58,11 @@ struct Instance {
     led: vec4<f32>,
     // An LED panel's gap colour (linear) and metalness.
     gap: vec4<f32>,
+    // A lamp's lit face: its beam's axis (world, unit); w is 1 when the
+    // instance is one.
+    beam_axis: vec4<f32>,
+    // The cosines of that beam's half angle (x) and of its field's (y).
+    beam: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;

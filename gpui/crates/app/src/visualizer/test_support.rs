@@ -52,6 +52,7 @@ pub(super) fn visualizer(build: Option<crate::stage::Build>, pick: PickSnapshot)
         venue_environment: Default::default(),
         render_controls: RenderControls::new(Default::default()),
         settings: Default::default(),
+        settings_page: Default::default(),
         presentation: false,
         bottom_bar_visible: false,
         settings_motion: RefCell::new(settings::DockMotion::new(true)),

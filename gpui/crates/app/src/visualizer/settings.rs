@@ -8,7 +8,7 @@ use luma_ui::{float, glass};
 #[derive(Default)]
 pub(super) struct DockMotion {
     tooltip: Transition,
-    pub(super) switches: [Transition; 8],
+    pub(super) switches: [Transition; 7],
     knob_hovered: bool,
     light_dragging: bool,
     knob_bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
@@ -89,10 +89,12 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .w(px(268.))
         .p(px(14.))
         .gap(px(12.))
-        .child(float::label("View settings"))
-        .child(super::view_controls(state, app))
-        .child(float::divider())
-        .child(section("Debug", debug_rows(state, app)));
+        .child(page_tabs(state.settings_page, app))
+        .child(match state.settings_page {
+            Page::Camera => super::camera_page(state, app).into_any_element(),
+            Page::View => super::view_page(state, app).into_any_element(),
+            Page::Debug => debug_rows(state, app),
+        });
     let open = state.settings.is_open();
     let camera = luma_ui::icon_toggle(luma_ui::icons::IconName::Camera, open)
         .id("visualizer-settings")
@@ -148,6 +150,48 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                 ),
             })
         })
+        .into_any_element()
+}
+
+/// A page of the view settings card. One shows at a time, so the card stays
+/// short enough to take in.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Page {
+    /// How scene light becomes the picture.
+    #[default]
+    Camera,
+    /// What the stage costs to draw, and the chrome over it.
+    View,
+    /// Probes and the camera export.
+    Debug,
+}
+
+/// The card's pages, as one choice across its top.
+fn page_tabs(open: Page, app: &Entity<Luma>) -> AnyElement {
+    let mut tabs = float::segmented().w_full();
+    for (name, page) in [
+        ("Camera", Page::Camera),
+        ("View", Page::View),
+        ("Debug", Page::Debug),
+    ] {
+        let app = app.clone();
+        tabs = tabs.child(
+            float::segment(name, open == page, name)
+                .id(gpui::ElementId::Name(
+                    format!("settings-page-{name}").into(),
+                ))
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| {
+                        if let Some(state) = this.visualizer_mut() {
+                            state.settings_page = page;
+                        }
+                        cx.notify();
+                    });
+                })
+                .agent_node(Role::Toggle, name),
+        );
+    }
+    tabs.agent_node(Role::Card, "Settings page")
         .into_any_element()
 }
 
@@ -248,7 +292,7 @@ fn column(title: &'static str, body: impl IntoElement) -> Div {
         .child(body)
 }
 
-/// The Debug section: the reflection probes, their debug balls, and the
+/// The Debug page: the reflection probes, their debug balls, and the
 /// camera export.
 fn debug_rows(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
     let probes = state.render_controls.probes;
@@ -553,13 +597,14 @@ impl Luma {
     ///
     /// The three tiers of this panel meet here. Haze is **venue truth** and goes
     /// on the venue row; grid and gizmos are **local device settings** and follow
-    /// the operator between rooms; fixture shadows is a session dial and outlives
-    /// nothing.
+    /// the operator between rooms; the probe switches are session dials and
+    /// outlive nothing.
     pub(super) fn toggle_view_control(&mut self, control: ViewToggle, cx: &mut Context<Self>) {
         let Some(state) = self.visualizer_mut() else {
             return;
         };
-        state.render_controls.toggle(control);
+        let metered = state.stage.borrow().exposure_ev;
+        state.render_controls.toggle(control, metered);
         let (grid, gizmos) = (
             state.render_controls.grid_enabled,
             state.render_controls.gizmos_enabled,
@@ -575,7 +620,7 @@ impl Luma {
             }
             ViewToggle::AutoExposure | ViewToggle::Footage => self.save_look(cx),
             // Session dials: they outlive nothing.
-            ViewToggle::FixtureShadows | ViewToggle::ReflectionProbes | ViewToggle::ShowProbes => {}
+            ViewToggle::ReflectionProbes | ViewToggle::ShowProbes => {}
         }
         cx.notify();
     }
@@ -910,9 +955,9 @@ fn floor_rows(environment: VenueEnvironment, app: &Entity<Luma>) -> Div {
     )
 }
 
-/// A titled group of rows on the View settings card: the card's quiet
+/// A titled group of rows on the environment panel: a quiet
 /// [`float::label`] over the rows it names.
-pub(super) fn section(title: &'static str, rows: impl IntoElement) -> Div {
+fn section(title: &'static str, rows: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_col()

@@ -7,7 +7,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use wgpu::util::DeviceExt;
 
-use crate::frame::{EditorObject, Frame};
+use crate::frame::Frame;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -88,7 +88,7 @@ impl Visibility {
                 .draws
                 .iter()
                 .take(frame.draws.len() - frame.transparent.len())
-                .filter(|d| !matches!(d.editor_object, Some(EditorObject::Fixture(_))))
+                .filter(|d| !crate::frame::is_luminaire(frame, d))
         };
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         enabled.hash(&mut hash);

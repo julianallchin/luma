@@ -233,9 +233,11 @@ fn the_post_chain_at_rest_is_the_composite_picture() {
     );
 }
 
-/// A lit room follows the light: four times the light meters about two stops
-/// down. A dark room with one dim beam is exposed for what is lit and held
-/// at the top clamp rather than lifted until the room is grey.
+/// A lit room follows the light most of the way: four times the light meters
+/// down by less than its two stops, and what is left shows, so the brighter
+/// room is the brighter picture. A dark room with one dim beam is exposed
+/// for what is lit and opens no further for a dimmer one, rather than being
+/// lifted until the room is grey.
 #[test]
 fn auto_exposure_meters_the_lit_part_of_the_frame() {
     let mut renderer = Renderer::new().unwrap();
@@ -247,22 +249,33 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
         },
         ..Look::STAGE
     };
-    let mut metered = |intensity: f32, haze: f32, look: Look| {
-        let _ = render(&mut renderer, &hazy_frame(intensity, 0.4, haze, look));
-        renderer.metered_exposure().unwrap()[0]
+    // The exposure a frame meters, and how bright its picture is.
+    let mut shot = |intensity: f32, haze: f32, look: Look| {
+        let pixels = render(&mut renderer, &hazy_frame(intensity, 0.4, haze, look));
+        let light: f32 = (0..HEIGHT)
+            .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+            .map(|(x, y)| luma(&pixels, x, y))
+            .sum();
+        (renderer.metered_exposure().unwrap()[0], light)
     };
-    let dim = metered(1.0, 0.3, auto);
-    let bright = metered(4.0, 0.3, auto);
+    let (dim, dim_picture) = shot(1.0, 0.3, auto);
+    let (bright, bright_picture) = shot(4.0, 0.3, auto);
     assert!(
-        (1.5..=2.5).contains(&(dim - bright)),
-        "four times the light meters about two stops down: {dim} then {bright}"
+        (1.0..2.0).contains(&(dim - bright)),
+        "four times the light meters most of two stops down: {dim} then {bright}"
     );
+    assert!(
+        bright_picture > 1.1 * dim_picture,
+        "the brighter room is the brighter picture: {bright_picture} against {dim_picture}"
+    );
+    let mut metered = |intensity: f32, haze: f32, look: Look| shot(intensity, haze, look).0;
 
-    // A dim cue: the beam at a quarter, in light haze.
+    // A dim cue: the beam at a quarter, in light haze. It is past what the
+    // exposure opens for, so a dimmer one meters the same.
     let dark_room = metered(0.25, 0.05, auto);
     assert_eq!(
         dark_room,
-        *luma_render::photometry::ADAPT_EV.end(),
+        metered(0.125, 0.05, auto),
         "a dark room stops at the clamp"
     );
 
@@ -278,7 +291,7 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
             ..auto
         },
     );
-    assert_eq!(lifted, luma_render::photometry::ADAPT_EV.end() + 1.0);
+    assert_eq!(lifted, dark_room + 1.0);
 
     // Manual exposure is the number itself.
     let half_stop = Look {
@@ -314,12 +327,72 @@ fn live_exposure_adapts_rather_than_jumps() {
         .unwrap();
     let [current, target] = renderer.metered_exposure().unwrap();
     assert!(
-        target < dim - 1.5,
+        target < dim - 1.0,
         "the bright frame meters lower: {target} against {dim}"
     );
     assert!(
-        current > target + 1.0 && current <= dim,
+        current > (dim + target) / 2.0 && current <= dim,
         "one live frame later the exposure is still on its way: {current}, from {dim} to {target}"
+    );
+}
+
+/// A light that arrives in an eye used to the dark shuts its pupil and, for
+/// a while, no more: the exposure closes by the pupil's stops where the meter
+/// asks for far more, and goes on closing slowly. The dark opens it again
+/// all the way.
+#[test]
+fn a_sudden_light_closes_the_exposure_only_as_far_as_a_pupil() {
+    let pupil = luma_render::photometry::PUPIL_STOPS;
+    let auto = Look {
+        glare: Glare::OFF,
+        exposure: Exposure::STAGE,
+        ..Look::STAGE
+    };
+    let dark = |time: f32| Frame {
+        time,
+        ..hazy_frame(0.25, 0.4, 0.05, auto)
+    };
+    // The same beam a thousand times brighter, down the camera's throat.
+    let blinding = |time: f32| Frame {
+        time,
+        ..hazy_frame(4000.0, 1.0, 0.3, auto)
+    };
+    let mut still = Renderer::new().unwrap();
+    let _ = render(&mut still, &blinding(0.0));
+    let [asked, _] = still.metered_exposure().unwrap();
+
+    let mut renderer = Renderer::new().unwrap();
+    let _ = render(&mut renderer, &dark(0.0));
+    let [used_to, _] = renderer.metered_exposure().unwrap();
+    assert!(
+        asked < used_to - pupil - 2.0,
+        "the light asks for much more than a pupil closes: {asked} from {used_to}"
+    );
+    // Ten frames a second, the longest step one adaptation takes.
+    let mut live = |frame: &dyn Fn(f32) -> Frame, seconds: std::ops::Range<u32>| {
+        for tick in seconds.start * 10..seconds.end * 10 {
+            let _ = renderer
+                .render_next(&frame((tick + 1) as f32 / 10.0), WIDTH, HEIGHT, 1)
+                .unwrap();
+        }
+        renderer.metered_exposure().unwrap()[0]
+    };
+    let at_once = live(&blinding, 0..5);
+    let closed = used_to - at_once;
+    assert!(
+        closed > pupil - 0.1 && closed < pupil + 0.25 * (used_to - asked - pupil),
+        "after five seconds the pupil has closed and little else: {closed} of {} stops",
+        used_to - asked
+    );
+    let later = live(&blinding, 5..15);
+    assert!(
+        later < at_once && later > asked,
+        "it goes on closing, slowly: {at_once} then {later}, toward {asked}"
+    );
+    let reopened = live(&dark, 15..25);
+    assert!(
+        (reopened - used_to).abs() < 0.1,
+        "the dark opens it all the way: {reopened}, as before the light {used_to}"
     );
 }
 

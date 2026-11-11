@@ -8,13 +8,18 @@
 //! 1. **Metering** (`post_exposure.wgsl`). A 128-bin log-luminance histogram
 //!    of a quarter of the pixels, centre-weighted. The mean of the band
 //!    between two percentiles of the lit pixels sets the target exposure,
-//!    clamped to [`crate::photometry::ADAPT_EV`]; the compensation is added after the
-//!    clamp. Near-black pixels are not metered, so a dark room with a few
+//!    clamped to [`crate::photometry::ADAPT_EV`], and the exposure goes
+//!    [`crate::photometry::ADAPTATION`] of the way there, so a brighter room
+//!    is still a brighter picture; the compensation is added after that. Near-black pixels are not metered, so a dark room with a few
 //!    beams is exposed for what is lit, and the clamps stop it lifting the
 //!    room further. A frame with almost nothing lit holds the last exposure.
-//!    The exposure moves toward the target with separate speeds up and down,
-//!    and snaps on a standalone frame so a capture is a function of its
-//!    frame alone.
+//!    The exposure moves toward the target as an eye does: it opens for a
+//!    darker scene at one speed and closes for a brighter one at another,
+//!    but closes fast only as far as a pupil does
+//!    ([`crate::photometry::PUPIL_STOPS`]) and adapts the rest of the way
+//!    over about a minute, so a light in the face is blinding until then. It
+//!    snaps on a standalone frame so a capture is a function of its frame
+//!    alone.
 //! 2. **Glare** (`post_glare.wgsl`, `psf.rs`). The exposed frame's light
 //!    above a threshold, averaged into a padded FFT grid (1024 × 512 at High,
 //!    512 × 256 at Low; the frame fills at most its top-left quarter), and
@@ -63,6 +68,20 @@ const METER_HIGH: f32 = 0.98;
 /// difference: opening up (a darker scene) and closing down (a brighter one).
 const ADAPT_UP: f32 = 1.2;
 const ADAPT_DOWN: f32 = 3.0;
+/// The same, for the part of closing down the pupil cannot do: the eye's own
+/// adaptation to a brighter scene, which takes about a minute.
+const ADAPT_BEHIND_PUPIL: f32 = 1.0 / 60.0;
+/// Bytes of the exposure state: `Exposed` in `post_exposure.wgsl`.
+const STATE_SIZE: u64 = 32;
+/// Bytes of it that say what the exposure is: `Exposed::now`.
+pub(crate) const EXPOSURE_READBACK: u64 = 16;
+
+/// The exposure in `Exposed::now` as it was read back, in stops, once a frame
+/// has set one.
+pub(crate) fn exposure_read_back(now: &[u8]) -> Option<f32> {
+    let now: [f32; 4] = bytemuck::pod_read_unaligned(now);
+    (now[2] > 0.5).then_some(now[0])
+}
 /// Longest step one adaptation takes. A viewport that sat idle for a minute
 /// does not jump on its next frame.
 const MAX_ADAPT_STEP_S: f32 = 0.1;
@@ -73,6 +92,7 @@ struct MeterUniform {
     exposure: [f32; 4],
     adapt: [f32; 4],
     meter: [f32; 4],
+    eye: [f32; 4],
 }
 
 #[repr(C)]
@@ -592,7 +612,7 @@ impl Post {
             ),
             state: buffer(
                 "post-exposure-state",
-                16,
+                STATE_SIZE,
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             ),
             meter: buffer(
@@ -613,6 +633,11 @@ impl Post {
             last_adapt: None,
             was_auto: None,
         }
+    }
+
+    /// The buffer the exposure lives in, `Exposed::now` first.
+    pub(crate) fn exposure_state(&self) -> wgpu::Buffer {
+        self.state.clone()
     }
 
     /// The exposure the last post-chain frame used and the one it was
@@ -720,7 +745,11 @@ impl Post {
             bytemuck::bytes_of(&MeterUniform {
                 exposure: [
                     f32::from(u8::from(auto)),
-                    look.exposure.ev,
+                    if auto {
+                        look.exposure.ev
+                    } else {
+                        look.exposure.fixed()
+                    },
                     *crate::photometry::ADAPT_EV.start(),
                     *crate::photometry::ADAPT_EV.end(),
                 ],
@@ -733,6 +762,12 @@ impl Post {
                     METER_HIGH,
                     crate::photometry::MIDDLE_GREY.log2(),
                     1.0,
+                ],
+                eye: [
+                    crate::photometry::PUPIL_STOPS,
+                    ADAPT_BEHIND_PUPIL,
+                    crate::photometry::ADAPTATION,
+                    0.0,
                 ],
             }),
         );

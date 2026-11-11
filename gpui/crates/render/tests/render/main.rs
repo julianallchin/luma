@@ -22,6 +22,7 @@ mod footage;
 mod gizmo_pivot;
 mod golden_descriptors;
 mod horizon_seam;
+mod house_lamp;
 mod laser;
 mod led_faces;
 mod lens_footprint;

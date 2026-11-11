@@ -44,10 +44,25 @@ fn warn_floor_once(floor: luma_scene::environment::Floor, error: &anyhow::Error)
     }
 }
 
+/// Where a one-lamp fixture's light leaves it and which way, in housing
+/// space under `worlds`.
+fn luminaire_face(built: &luma_fixture::Built, worlds: &[Mat4]) -> Option<(Vec3, Vec3)> {
+    let (at, along) = luma_scene::library::beam(built, worlds, 0)?;
+    Some((at, along.normalize_or_zero()))
+}
+
 /// Whether `mesh_key` names the ground plane, indoors or out. The ground only
 /// receives: everything it could shade stands on it.
 pub(crate) fn is_ground(mesh_key: &str) -> bool {
     matches!(mesh_key, "::floor" | "::outdoor-floor")
+}
+
+/// Whether `draw` is part of a light's own body: a patched fixture's or a
+/// house lamp's. A body stands at its light's mouth, so it casts no fixture
+/// shadow and stops no haze, and the room's own maps leave it out.
+pub(crate) fn is_luminaire(frame: &Frame, draw: &Draw) -> bool {
+    matches!(draw.editor_object, Some(EditorObject::Fixture(_)))
+        || crate::house::is_lamp(&frame.meshes[draw.mesh].key)
 }
 
 /// One mesh instance: what to draw, where, and with which material.
@@ -475,7 +490,7 @@ pub(crate) fn housing_draws(
             lib,
             bank,
             editor_object.as_ref(),
-            |_| Vec3::ZERO,
+            |_, _| {},
         ));
     }
     // A bar, and anything the mesh table has no answer for. Drawing the stated
@@ -993,9 +1008,9 @@ pub fn build_at(
                 lib,
                 &mut bank,
                 Some(&EditorObject::Fixture(fixture.id.clone())),
-                |cell| {
+                |cell, material| {
                     let s = cell_state(cell as usize);
-                    Vec3::from(s.color) * exposed(s) * 5.0
+                    material.emissive = Vec3::from(s.color) * exposed(s) * 5.0;
                 },
             ));
             // Every cone shares the fixture's own output and beam angle, the
@@ -1325,11 +1340,47 @@ pub fn build_at(
                 .saturating_add(potential.len())
                 .min(MAX_FIXTURE_CONES);
         }
-        for lamp in crate::house::lamps(environment, bounds) {
+        let lamps = crate::house::lamps(environment, bounds);
+        for lamp in &lamps {
             if fixture_cones.len() >= MAX_FIXTURE_CONES {
                 break;
             }
             fixture_cones.push(lamp.cone());
+        }
+        // The lamps' bodies hang there whether they are lit or not.
+        if let Some(pendant) = lib.fixture(crate::house::PENDANT) {
+            let (back, worlds) = luma_scene::library::aimed(&pendant, [0.0; 2], [0.0; 2]);
+            let hung = to_world * three_pose_from_data([0.0; 3], [0.0; 3]) * back;
+            if let Some((face, along)) = luminaire_face(&pendant, &worlds) {
+                let area = crate::library_housing::emitting_area(&pendant, &worlds, 0, along);
+                let beam = crate::house::Lamp::beam(hung.transform_vector3(along).normalize());
+                let reach = crate::library_housing::reach(&pendant, &worlds, along);
+                let mouth = face + along * (reach - face.dot(along));
+                for (i, at) in crate::house::rig(environment, bounds)
+                    .into_iter()
+                    .enumerate()
+                {
+                    // The lamp is at the body's mouth, on the beam's axis:
+                    // its light leaves the body, and lights none of it.
+                    let base = Mat4::from_translation(at - hung.transform_point3(mouth)) * hung;
+                    let lit = lamps.get(i).filter(|_| area > 0.0);
+                    draws.extend(crate::library_housing::draws(
+                        &pendant,
+                        crate::house::LAMP_KEY,
+                        base,
+                        &worlds,
+                        lib,
+                        &mut bank,
+                        None,
+                        |_, material| {
+                            if let Some(lamp) = lit {
+                                material.emissive = lamp.face_radiance(area);
+                                material.beam = Some(beam);
+                            }
+                        },
+                    ));
+                }
+            }
         }
         crate::house::glow(environment, bounds)
     });

@@ -33,7 +33,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{UVec3, Vec3};
 
-use crate::frame::{Draw, EditorObject, Frame};
+use crate::frame::{Draw, Frame};
 use crate::quality::QualityBudget;
 use crate::scene_desc::Quality;
 
@@ -229,10 +229,6 @@ fn local_box(frame: &Frame, mesh: usize) -> (Vec3, Vec3) {
     (min, max)
 }
 
-fn is_fixture(draw: &Draw) -> bool {
-    matches!(draw.editor_object, Some(EditorObject::Fixture(_)))
-}
-
 /// Everything the captures depend on: the stage's geometry and materials
 /// (fixtures by count only, so a moving head does not recapture every
 /// frame), the floor, whether there is a sky, and the quality. Fixture
@@ -246,7 +242,7 @@ pub(crate) fn key(frame: &Frame, opaque: usize) -> u64 {
     };
     let mut fixtures = 0u32;
     for draw in frame.draws.iter().take(opaque) {
-        if is_fixture(draw) {
+        if crate::frame::is_luminaire(frame, draw) {
             fixtures += 1;
             continue;
         }
@@ -287,7 +283,7 @@ pub(crate) fn place(frame: &Frame, opaque: usize) -> Option<Layout> {
         .map(|draw| {
             let bounds = *local[draw.mesh].get_or_insert_with(|| local_box(frame, draw.mesh));
             let (min, max) = world_box(draw, bounds);
-            (min, max, is_fixture(draw))
+            (min, max, crate::frame::is_luminaire(frame, draw))
         })
         .filter(|(min, max, _)| min.is_finite() && max.is_finite())
         .collect();

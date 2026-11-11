@@ -1078,12 +1078,7 @@ impl Renderer {
                     let mut sorted: Vec<usize> = casters
                         .iter()
                         .copied()
-                        .filter(|&index| {
-                            !matches!(
-                                &frame.draws[index].editor_object,
-                                Some(crate::frame::EditorObject::Fixture(_))
-                            )
-                        })
+                        .filter(|&index| !crate::frame::is_luminaire(frame, &frame.draws[index]))
                         .collect();
                     // Mesh-major, then draw order, so the buffer contents are
                     // reproducible across frames.
@@ -2605,6 +2600,7 @@ impl Renderer {
                         query_count,
                         passes,
                         moved,
+                        exposure: self.post.exposure_state(),
                     }
                 });
             PendingFrame {

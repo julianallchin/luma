@@ -227,6 +227,8 @@ pub(crate) struct Visualizer {
     render_controls: RenderControls,
     /// The view-settings popover beside the dock.
     pub(crate) settings: luma_ui::float::MenuVisibility,
+    /// The page of it that is open.
+    settings_page: settings::Page,
     presentation: bool,
     bottom_bar_visible: bool,
     settings_motion: RefCell<settings::DockMotion>,
@@ -313,6 +315,9 @@ struct Stage {
     last_cpu_ms: Option<f32>,
     /// GPU scene-through-composite time from the previous frame.
     last_gpu_ms: Option<f32>,
+    /// The exposure the stage's camera had reached at the last frame that
+    /// said, in stops: where it stays when its meter is switched off.
+    exposure_ev: Option<f32>,
     /// Cold cluster rebuild time; zero on topology cache hits.
     last_cluster_ms: Option<f32>,
     /// Fixture shadow maps redrawn by the previous frame. Zero is the healthy

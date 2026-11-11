@@ -26,6 +26,12 @@ struct VsOut {
     @location(2) @interpolate(flat) instance: u32,
     @location(3) uv: vec2<f32>,
     @location(4) tangent: vec4<f32>,
+    // `world` again, taken inside the triangle. A pixel's centre can lie off
+    // a triangle that covers only some of its samples, and `world` there is
+    // a point off the surface: centimetres off a long thin one. Lighting
+    // wants the surface; derivatives want `world`, which is even across
+    // pixels.
+    @location(5) @interpolate(perspective, centroid) on_surface: vec3<f32>,
 };
 
 @vertex
@@ -41,6 +47,7 @@ fn vs_main(
     var out: VsOut;
     out.clip = globals.view_proj * world;
     out.world = world.xyz;
+    out.on_surface = world.xyz;
     out.normal = (inst.normal_matrix * vec4<f32>(normal, 0.0)).xyz;
     out.instance = instance;
     out.uv = uv;
@@ -508,6 +515,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     if !front {
         n = -n;
     }
+    let face = n;
     var t = normalize(in.tangent.xyz - n * dot(n, in.tangent.xyz));
     if !front {
         t = -t;
@@ -536,6 +544,15 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     surface.roughness = specular_aa(n, max(mix(inst.led.w, inst.emissive.a * mr.g, lit), 0.0525));
     surface.ao = mix(1.0, textureSample(occlusion_map, material_sampler, in.uv).r, inst.flags.z);
     surface.emissive = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb * lit;
+    if inst.beam_axis.w > 0.5 {
+        // A lamp's face is as bright from here as the light its beam throws
+        // here: its intensity this way over the face as it is seen from
+        // here. Outside the beam it is dark, as a downlight is from the side.
+        // The face is what looks along the beam: a rim side-on to it is not.
+        let out = dot(inst.beam_axis.xyz, normalize(globals.camera_pos.xyz - in.on_surface));
+        surface.emissive *= max(dot(face, inst.beam_axis.xyz), 0.0)
+            * angular_profile(out, inst.beam.x, inst.beam.y) / max(out, 0.1);
+    }
     surface.n = n;
     surface.unevenness = 0.0;
     return shade(in, surface, dpdx(in.world), dpdy(in.world));
@@ -548,6 +565,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
 fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec4<f32> {
     let inst = instances[fragment.instance];
     var in = fragment;
+    in.world = fragment.on_surface;
     if inst.flags.x > 0.5 {
         in.world = ground_fragment(fragment.world);
     }

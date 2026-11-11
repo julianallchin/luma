@@ -242,10 +242,7 @@ pub(crate) fn fixture_shadow_caster_hash(frame: &Frame, opaque: usize) -> u64 {
         hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
     };
     for draw in frame.draws.iter().take(opaque) {
-        if matches!(
-            &draw.editor_object,
-            Some(crate::frame::EditorObject::Fixture(_))
-        ) {
+        if crate::frame::is_luminaire(frame, draw) {
             continue;
         }
         for byte in frame.meshes[draw.mesh].key.as_bytes() {
