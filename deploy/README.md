@@ -130,6 +130,8 @@ after it. A new migration adds its line here.
   reads `{"groups": …}` selections: it cannot read an expression, and a
   client from before it cannot read the rewritten selections. Server only;
   there is no local migration
+- `20261111030434_track_art_read.sql` — any time; until it runs, venue
+  members cannot download a shared track's cover art
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an
