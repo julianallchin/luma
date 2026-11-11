@@ -605,6 +605,7 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
                 mode_name: "18 Channel",
                 count: 2,
                 layout: Layout::At(if step < 2 { -2.0 } else { -3.0 }),
+                across_m: 0.0,
                 label_prefix: None,
             };
             let report = distribute(&mut access, &fixtures_root(), request.clone())
@@ -930,4 +931,44 @@ fn paperwork(
             )
         })
         .collect()
+}
+
+/// A floor is a surface, not a line: lights at one distance along it and
+/// different distances across it are beside each other, not in each other's
+/// way, and each sits at the point it was asked for.
+#[tokio::test]
+async fn lights_on_the_floor_land_where_asked_and_only_collide_in_place() {
+    use crate::services::distribute::{distribute, Request};
+    use luma_scene::distribute::Layout;
+
+    let (_dir, pool) = seeded().await;
+    let mut access = write(&pool).await;
+    let at = |across_m: f64| Request {
+        host_node: None,
+        host_socket: None,
+        fixture_path: "Chauvet/Chauvet-Rogue-R2-Spot.qxf",
+        mode_name: "18 Channel",
+        count: 1,
+        layout: Layout::At(1.5),
+        across_m,
+        label_prefix: None,
+    };
+    let mut placed = Vec::new();
+    for across in [2.0, -3.0] {
+        let report = distribute(&mut access, &fixtures_root(), at(across))
+            .await
+            .unwrap();
+        assert!(report.refusal.is_none(), "{report:?}");
+        placed.push((report.fixtures[0].id.clone(), across));
+    }
+    let graph = crate::venue_graph::graph(&mut access).await.unwrap();
+    for (id, across) in &placed {
+        let params = &graph.node(id).unwrap().params;
+        assert_eq!((params.get("u", 0.0), params.get("v", 0.0)), (1.5, *across));
+    }
+    // The same point again is taken.
+    let again = distribute(&mut access, &fixtures_root(), at(2.0))
+        .await
+        .unwrap();
+    assert!(again.refusal.is_some(), "{again:?}");
 }

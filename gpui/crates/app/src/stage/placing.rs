@@ -166,14 +166,42 @@ impl Luma {
             return;
         }
         let what = held.what.clone();
-        // A library fixture reaches the room only through the configure
-        // popover — it is created as a *row*, and a row needs a face to lie
-        // along. Which face is whatever the ghost is standing on: the bead is
-        // how a *named* socket is aimed at, but the floor and a truss's
-        // underside are areas, and a face a person can point at is a face they
-        // can distribute along. Landing on something that is not a feature —
-        // a bolt circle, a clamp — leaves the ghost in the hand, because "one
-        // of them there" is not what a row means.
+        // A fixture on the venue's own floor is one light at the point under
+        // the pointer, which is what the ghost showed. Anywhere else it is a
+        // *row*, and a row needs a face to lie along: whatever the ghost is
+        // standing on. The bead is how a *named* socket is aimed at, but a
+        // truss's underside and a deck top are areas, and a face a person can
+        // point at is a face they can distribute along. Landing on something
+        // that is not a feature — a bolt circle, a clamp — leaves the ghost
+        // in the hand, because "one of them there" is not what a row means.
+        if let (
+            Holding::Fixture { path, mode, .. },
+            Landing::Free {
+                surface: None,
+                seat,
+                ..
+            },
+        ) = (&what, &landed.how)
+        {
+            // No mode until the definition lands; the ghost stays in the hand.
+            let Some(mode) = mode.clone() else {
+                return;
+            };
+            let pending = self.library.distribute(
+                &venue,
+                None,
+                path,
+                &mode,
+                1,
+                luma_lib::models::distribute::DistributeLayout::At {
+                    metres: seat.u,
+                    across: seat.v,
+                },
+                None,
+            );
+            self.stage_place_row(pending, Hand::Placing(Held::again(&what)), cx);
+            return;
+        }
         if matches!(what, Holding::Fixture { .. }) {
             let (node, socket) = match &landed.how {
                 Landing::Free { surface, .. } => surface
@@ -203,7 +231,7 @@ impl Luma {
             Holding::Duplicate { .. } | Holding::Fixture { .. } => Hand::Idle,
         };
         let pending: Verb = match (&what, &landed.how) {
-            // Refused above: a fixture is created as a row, never dropped.
+            // Handled above: a fixture is created by `distribute`.
             (Holding::Fixture { .. }, _) => return,
             (
                 Holding::Piece {

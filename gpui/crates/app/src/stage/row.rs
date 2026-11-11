@@ -111,7 +111,6 @@ impl Luma {
             return;
         };
         let venue = build.venue_id.clone();
-        let snapshot = build.snapshot();
         let Some(row) = build.hand.configuring() else {
             return;
         };
@@ -134,10 +133,28 @@ impl Luma {
             row.layout.into(),
             None,
         );
-        if let Some(build) = self.build_mut() {
-            build.hand = Hand::Idle;
-            build.committing = true;
-        }
+        self.stage_place_row(pending, Hand::Idle, cx);
+    }
+
+    /// Run a `distribute` and re-read the room it changed, leaving `then` in
+    /// the hand.
+    pub(super) fn stage_place_row(
+        &mut self,
+        pending: impl std::future::Future<
+                Output = Result<
+                    luma_lib::models::distribute::DistributeReport,
+                    crate::LibraryError,
+                >,
+            > + 'static,
+        then: Hand,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(build) = self.build_mut() else {
+            return;
+        };
+        let snapshot = build.snapshot();
+        build.hand = then;
+        build.committing = true;
         cx.spawn(async move |this, cx| {
             let report = pending.await;
             this.update(cx, |this, cx| {
