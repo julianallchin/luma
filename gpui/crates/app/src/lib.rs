@@ -487,6 +487,11 @@ impl Render for Luma {
         if self.sign_in.is_some() {
             return signin::screen(self, window, cx);
         }
+        // A build behind the server's data cannot sync: say so in place of
+        // the app, until the update is in or someone puts it off.
+        if self.sync_status.status.update_required && !self.update.put_off {
+            return update::required(self, window, cx);
+        }
         // A window with no venue *is* the venue picker: keep the overlay up
         // while no venue is open and nothing else is up.
         if self.songs.is_none() && self.overlay.get().is_none() && self.arriving_venue.is_none() {

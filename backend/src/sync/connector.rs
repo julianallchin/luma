@@ -15,7 +15,17 @@
 //! count of zero is a refusal like any other — recorded in `sync_rejections`,
 //! taken off the queue, and replaced by the server's version of the row on the
 //! next download.
+//!
+//! Every request says which data format this build reads, in
+//! [`FORMAT_HEADER`]. A server whose data has moved past it refuses the write
+//! with a 426, and before the stream opens the connector asks the server's
+//! format itself: a build behind it does not connect, because it would read
+//! the rows wrongly. Either way [`Connector`]'s `outdated` flag goes up, which
+//! the status reports as "update required". See
+//! `supabase/migrations/20261111120000_client_format.sql`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use luma_sync::powersync::sdk::{
@@ -26,6 +36,9 @@ use serde_json::{Map, Value};
 use sqlx::SqlitePool;
 
 use crate::database::local::auth;
+use crate::database::local::database::PROJECTION_VERSION;
+
+use super::supabase::FORMAT_HEADER;
 
 /// The header the history trigger reads the actor from.
 const ACTOR_HEADER: &str = "x-luma-actor";
@@ -42,6 +55,9 @@ fn upload_error(message: impl Into<String>) -> PowerSyncError {
 
 /// What a refusal the server answered with success records as its body.
 const NO_ROW_CHANGED: &str = "the server changed no row";
+
+/// The status the server refuses a build behind its data format with.
+const UPDATE_REQUIRED: u16 = 426;
 
 /// What to do about a failed request.
 enum Failure {
@@ -63,6 +79,11 @@ pub struct Connector {
     postgrest_url: String,
     powersync_url: String,
     anon_key: String,
+    /// The data format this build reads.
+    format: i64,
+    /// Raised when the server's data is past `format`. Shared with the
+    /// service, which reports it and stops connecting.
+    outdated: Arc<AtomicBool>,
 }
 
 /// Where the access token comes from.
@@ -83,6 +104,7 @@ impl Connector {
         db: PowerSyncDatabase,
         pool: SqlitePool,
         state_pool: SqlitePool,
+        outdated: Arc<AtomicBool>,
     ) -> Result<Self, String> {
         Ok(Self {
             db,
@@ -96,6 +118,8 @@ impl Connector {
             postgrest_url: crate::config::postgrest_url(),
             powersync_url: crate::config::powersync_url(),
             anon_key: crate::config::SUPABASE_ANON_KEY.to_owned(),
+            format: PROJECTION_VERSION,
+            outdated,
         })
     }
 
@@ -117,7 +141,28 @@ impl Connector {
             http: reqwest::Client::new(),
             postgrest_url,
             powersync_url,
+            format: PROJECTION_VERSION,
+            outdated: Arc::default(),
         }
+    }
+
+    /// The same connector as a build that reads data `format`, raising
+    /// `outdated` when the server is past it.
+    #[cfg(test)]
+    pub(super) fn reading(mut self, format: i64, outdated: Arc<AtomicBool>) -> Self {
+        self.format = format;
+        self.outdated = outdated;
+        self
+    }
+
+    /// Whether the server's data is past what this build reads; the flag
+    /// goes up if it is.
+    async fn behind(&self, token: &str) -> Option<i64> {
+        let server = server_format(&self.http, &self.postgrest_url, &self.anon_key, token).await?;
+        (server > self.format).then(|| {
+            self.outdated.store(true, Ordering::Release);
+            server
+        })
     }
 
     async fn token(&self) -> Result<String, PowerSyncError> {
@@ -166,6 +211,7 @@ impl Connector {
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
+            .header(FORMAT_HEADER, self.format)
     }
 
     /// One upsert for a run of rows in the same table.
@@ -201,6 +247,7 @@ impl Connector {
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
+            .header(FORMAT_HEADER, self.format)
     }
 
     /// Send one batch of upserts, refreshing the token once on a 401.
@@ -340,6 +387,9 @@ impl Connector {
             entry.table,
             entry.id
         );
+        if status == UPDATE_REQUIRED {
+            self.outdated.store(true, Ordering::Release);
+        }
         let data = entry
             .data
             .as_ref()
@@ -361,6 +411,32 @@ impl Connector {
             log::error!("[sync] could not record a rejected upload: {error}");
         }
     }
+}
+
+/// The format of the server's data, or `None` when it would not say: no
+/// network, or a server from before it had one. The write check is the
+/// server's own, so not knowing is not a reason to stay disconnected.
+pub(super) async fn server_format(
+    http: &reqwest::Client,
+    postgrest_url: &str,
+    anon_key: &str,
+    token: &str,
+) -> Option<i64> {
+    let response = http
+        .post(format!(
+            "{}/rpc/data_format",
+            postgrest_url.trim_end_matches('/')
+        ))
+        .header("apikey", anon_key)
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&Value::Object(Map::new()))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json().await.ok()
 }
 
 /// Name the entry's actor on its request, when it has one.
@@ -443,9 +519,18 @@ fn body(entry: &CrudEntry) -> Map<String, Value> {
 #[async_trait::async_trait]
 impl BackendConnector for Connector {
     async fn fetch_credentials(&self) -> Result<PowerSyncCredentials, PowerSyncError> {
+        let token = self.token().await?;
+        // Before the stream opens: a build behind the server's data would
+        // apply rows it reads wrongly.
+        if let Some(server) = self.behind(&token).await {
+            return Err(upload_error(format!(
+                "this build reads data format {} and the server holds format {server}",
+                self.format
+            )));
+        }
         Ok(PowerSyncCredentials {
             endpoint: self.powersync_url.clone(),
-            token: self.token().await?,
+            token,
         })
     }
 
@@ -514,6 +599,8 @@ mod tests {
             postgrest_url: "https://example.test/rest/v1".into(),
             powersync_url: "https://example.test".into(),
             anon_key: "anon".into(),
+            format: PROJECTION_VERSION,
+            outdated: Arc::default(),
         }
     }
 

@@ -158,6 +158,41 @@ library at another version clears its synced tables without queueing anything
 for upload, and PowerSync downloads them again. A change still waiting to
 upload postpones that to a later launch.
 
+## Required updates
+
+A client keeps running after a newer release ships, and a build from before a
+format change would misread the new rows and write old ones over them. So the
+data has a format number, and a build behind it is turned away.
+
+- The server's number is `public.data_format()`. The client's is
+  `PROJECTION_VERSION`: the two are one number, bumped together by the
+  migration and the commit that change what synced rows mean.
+- **Writes.** Every PostgREST request carries the client's number in
+  `x-luma-format`. A statement trigger on every synced table refuses a write
+  from a build behind the server with HTTP 426, whether it comes as a row or
+  through a function. No header means a build from before the header, which
+  reads format 1. The refusal is recorded like any other.
+- **Reads.** Before it opens the sync stream, and once a minute while
+  connected, the client asks `data_format()`. Behind it, the client
+  disconnects and does not reconnect, so it applies nothing it would misread.
+  A server that will not answer (offline, or not migrated) is not a reason to
+  stay disconnected: the write check is the server's own.
+- **The app.** `SyncStatus.update_required` goes up. The window shows "Update
+  Luma to continue" in place of the app and fetches the update whatever the
+  auto-update setting says. "Not Now" brings the app back for the run, on the
+  local copy as it was; the status bar keeps saying `Update required`.
+
+What it does not cover: a connected build keeps applying downloads for up to
+a minute after the server moves, and an offline one cannot know until it
+reconnects. The updated build re-downloads either way, because the number
+that changed is `PROJECTION_VERSION`. A release older than 0.7.1 has no read
+check at all; the server still refuses its writes.
+
+To require an update, in one change: replace `public.data_format()` with the
+next number in the Supabase migration that changes the rows, bump
+`PROJECTION_VERSION`, and give a new synced table the `_client_format`
+trigger (`supabase/migrations/20261111120000_client_format.sql`).
+
 `venues.environment` and `venues.haze` are **not** on that list: what kind of
 room a venue is and what atmosphere it has are venue truth, so they follow the
 venue between devices. Only the three hardware-port columns above are local.

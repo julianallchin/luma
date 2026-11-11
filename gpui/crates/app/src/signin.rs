@@ -552,7 +552,7 @@ pub(crate) fn splash(window: &Window, label: &'static str, cx: &mut Context<Luma
 ///
 /// Not a scrim: nothing is behind these screens. The window controls go
 /// last, so nothing can cover the only things that move and close the window.
-fn ground(window: &Window, body: impl IntoElement) -> Div {
+pub(crate) fn ground(window: &Window, body: impl IntoElement) -> Div {
     div()
         .size_full()
         .flex()

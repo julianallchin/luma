@@ -132,6 +132,9 @@ after it. A new migration adds its line here.
   there is no local migration
 - `20261111030434_track_art_read.sql` — any time; until it runs, venue
   members cannot download a shared track's cover art
+- `20261111120000_client_format.sql` — any time; refuses nothing until a
+  later migration raises `public.data_format()`. Before any migration that
+  does: a server without it takes writes from a build of any format
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an

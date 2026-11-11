@@ -1313,6 +1313,123 @@ async fn a_refused_write_is_one_rejection_and_reads_not_saved() {
     a.close().await;
 }
 
+/// A build behind the server's data format is turned away at both ends: its
+/// writes are refused with a 426 on every synced table, and it does not open
+/// a sync stream, so nothing it would misread reaches it. The status says an
+/// update is required. A build at the server's format, and one from before
+/// the header, are served as ever.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
+async fn a_build_behind_the_servers_format_neither_writes_nor_reads() {
+    let Some(containers) = Containers::from_env() else {
+        eprintln!(
+            "skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET / _PG_URI unset"
+        );
+        return;
+    };
+    let admin = sqlx::PgPool::connect(&containers.postgres)
+        .await
+        .expect("postgres");
+    let server: i32 = sqlx::query_scalar("select public.data_format()")
+        .fetch_one(&admin)
+        .await
+        .expect("the server's format");
+    assert_eq!(
+        i64::from(server),
+        crate::database::local::database::PROJECTION_VERSION,
+        "this build reads the format the migrations leave the server at"
+    );
+    let guarded: Vec<String> = sqlx::query_scalar(
+        "select event_object_table::text from information_schema.triggers
+         where trigger_schema = 'public' and trigger_name like '%\\_client\\_format'",
+    )
+    .fetch_all(&admin)
+    .await
+    .expect("triggers");
+    for table in super::schema::SYNCED_TABLES {
+        assert!(
+            guarded.iter().any(|name| name == table.name),
+            "{} takes writes from a build of any format",
+            table.name
+        );
+    }
+
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let venue = unique("venue");
+    let score = unique("score");
+    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
+    wait_for_upload(&a.sql).await;
+
+    // The write, as three builds send it.
+    let rename = |format: Option<i64>| {
+        let containers = &containers;
+        let venue = &venue;
+        async move {
+            let token = mint_jwt(&containers.secret, USER);
+            let mut request = reqwest::Client::new()
+                .patch(format!(
+                    "{}/venues?id=eq.{venue}",
+                    containers.postgrest.trim_end_matches('/')
+                ))
+                .header("apikey", &token)
+                .header("Authorization", format!("Bearer {token}"))
+                .json(&serde_json::json!({ "name": "Renamed" }));
+            if let Some(format) = format {
+                request = request.header(super::supabase::FORMAT_HEADER, format);
+            }
+            request.send().await.expect("postgrest").status().as_u16()
+        }
+    };
+    let server = i64::from(server);
+    assert_eq!(rename(Some(server - 1)).await, 426, "a build behind");
+    let name: String = sqlx::query_scalar("select name from public.venues where id = $1")
+        .bind(&venue)
+        .fetch_one(&admin)
+        .await
+        .expect("venue");
+    assert_eq!(name, "Test Room", "the refused write changed the row");
+    assert!(rename(Some(server)).await < 300, "a build at the format");
+    assert!(rename(Some(server + 1)).await < 300, "a build ahead");
+    assert!(rename(None).await < 300, "a build from before the header");
+
+    // The same account on a build one format behind, syncing as the app does.
+    let b = offline_device(&directory.path().join("b"), USER).await;
+    let sync = b.sync.clone();
+    let state = SqlitePool::connect("sqlite::memory:").await.expect("state");
+    let service = super::service::Service::start(b, state, crate::events::Events::discard())
+        .expect("service");
+    sync.connect(SyncOptions::new(
+        super::connector::Connector::with_token(
+            sync.clone(),
+            service.pool().clone(),
+            mint_jwt(&containers.secret, USER),
+            containers.postgrest.clone(),
+            containers.powersync.clone(),
+        )
+        .reading(server - 1, service.outdated()),
+    ))
+    .await;
+    let deadline = Instant::now() + CONVERGE;
+    while !service.status().await.expect("status").update_required {
+        assert!(
+            Instant::now() < deadline,
+            "the build behind never learned it was"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let status = service.status().await.expect("status");
+    assert_eq!(status.summary().to_string(), "Update required");
+    let held: String = sqlx::query_scalar(sqlx::AssertSqlSafe(count("clips", "score_id", &score)))
+        .fetch_one(service.pool())
+        .await
+        .expect("count");
+    assert_eq!(held, "0", "the build behind applied rows it cannot read");
+
+    service.stop();
+    a.close().await;
+}
+
 /// A member's fixture outlives the member: nothing cascades from `auth.users`
 /// into a shared venue, so deleting the member's auth user is refused while
 /// they authored anything there, and the fixture stays in the owner's venue.
