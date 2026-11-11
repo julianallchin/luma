@@ -197,7 +197,9 @@ runs `post.rs`:
 - **Metering.** 128-bin log histogram of a quarter of the pixels,
   centre-weighted. The mean of the 60th–98th percentile of lit pixels is
   exposed to middle grey; the result is clamped to `photometry::ADAPT_EV`
-  (−6 to +4 EV) before the compensation is added. Near-black pixels are not
+  (−6 to +4 EV), and the exposure moves only three quarters of that
+  (`photometry::ADAPTATION`), so a brighter room is still a brighter
+  picture; then the compensation is added. Near-black pixels are not
   metered and a frame with almost nothing lit holds the previous exposure.
   Adaptation is an eye's: 1.2 /s opening; 3 /s closing, but only as far as
   a pupil closes (`photometry::PUPIL_STOPS`, 4 stops), and the rest over

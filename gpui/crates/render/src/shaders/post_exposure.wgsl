@@ -30,7 +30,8 @@ struct Meter {
     // x: low percentile, y: high percentile of the metered band, z: log2 of
     // the key the band's mean is exposed to, w: centre weighting (0 or 1).
     meter: vec4<f32>,
-    // x: stops the pupil closes, y: closing speed of what it cannot (1/s).
+    // x: stops the pupil closes, y: closing speed of what it cannot (1/s),
+    // z: the share of a change in the light that the exposure makes up for.
     eye: vec4<f32>,
 };
 
@@ -175,7 +176,9 @@ fn adapt_main(@builtin(local_invocation_index) lindex: u32) {
                 }
             }
             let mean = sum / max(weight, 1e-6);
-            target_ev = clamp(cfg.meter.z - mean, cfg.exposure.z, cfg.exposure.w)
+            // Only a share of the way from the reference room: the rest
+            // shows, so a brighter room is a brighter picture.
+            target_ev = clamp(cfg.meter.z - mean, cfg.exposure.z, cfg.exposure.w) * cfg.eye.z
                 + cfg.exposure.y;
         } else if valid {
             target_ev = previous.y;

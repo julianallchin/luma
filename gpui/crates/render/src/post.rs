@@ -8,8 +8,9 @@
 //! 1. **Metering** (`post_exposure.wgsl`). A 128-bin log-luminance histogram
 //!    of a quarter of the pixels, centre-weighted. The mean of the band
 //!    between two percentiles of the lit pixels sets the target exposure,
-//!    clamped to [`crate::photometry::ADAPT_EV`]; the compensation is added after the
-//!    clamp. Near-black pixels are not metered, so a dark room with a few
+//!    clamped to [`crate::photometry::ADAPT_EV`], and the exposure goes
+//!    [`crate::photometry::ADAPTATION`] of the way there, so a brighter room
+//!    is still a brighter picture; the compensation is added after that. Near-black pixels are not metered, so a dark room with a few
 //!    beams is exposed for what is lit, and the clamps stop it lifting the
 //!    room further. A frame with almost nothing lit holds the last exposure.
 //!    The exposure moves toward the target as an eye does: it opens for a
@@ -762,7 +763,12 @@ impl Post {
                     crate::photometry::MIDDLE_GREY.log2(),
                     1.0,
                 ],
-                eye: [crate::photometry::PUPIL_STOPS, ADAPT_BEHIND_PUPIL, 0.0, 0.0],
+                eye: [
+                    crate::photometry::PUPIL_STOPS,
+                    ADAPT_BEHIND_PUPIL,
+                    crate::photometry::ADAPTATION,
+                    0.0,
+                ],
             }),
         );
         let exposure_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {

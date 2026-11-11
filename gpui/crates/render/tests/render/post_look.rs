@@ -233,9 +233,11 @@ fn the_post_chain_at_rest_is_the_composite_picture() {
     );
 }
 
-/// A lit room follows the light: four times the light meters about two stops
-/// down. A dark room with one dim beam is exposed for what is lit and held
-/// at the top clamp rather than lifted until the room is grey.
+/// A lit room follows the light most of the way: four times the light meters
+/// down by less than its two stops, and what is left shows, so the brighter
+/// room is the brighter picture. A dark room with one dim beam is exposed
+/// for what is lit and opens no further for a dimmer one, rather than being
+/// lifted until the room is grey.
 #[test]
 fn auto_exposure_meters_the_lit_part_of_the_frame() {
     let mut renderer = Renderer::new().unwrap();
@@ -247,22 +249,33 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
         },
         ..Look::STAGE
     };
-    let mut metered = |intensity: f32, haze: f32, look: Look| {
-        let _ = render(&mut renderer, &hazy_frame(intensity, 0.4, haze, look));
-        renderer.metered_exposure().unwrap()[0]
+    // The exposure a frame meters, and how bright its picture is.
+    let mut shot = |intensity: f32, haze: f32, look: Look| {
+        let pixels = render(&mut renderer, &hazy_frame(intensity, 0.4, haze, look));
+        let light: f32 = (0..HEIGHT)
+            .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+            .map(|(x, y)| luma(&pixels, x, y))
+            .sum();
+        (renderer.metered_exposure().unwrap()[0], light)
     };
-    let dim = metered(1.0, 0.3, auto);
-    let bright = metered(4.0, 0.3, auto);
+    let (dim, dim_picture) = shot(1.0, 0.3, auto);
+    let (bright, bright_picture) = shot(4.0, 0.3, auto);
     assert!(
-        (1.5..=2.5).contains(&(dim - bright)),
-        "four times the light meters about two stops down: {dim} then {bright}"
+        (1.0..2.0).contains(&(dim - bright)),
+        "four times the light meters most of two stops down: {dim} then {bright}"
     );
+    assert!(
+        bright_picture > 1.1 * dim_picture,
+        "the brighter room is the brighter picture: {bright_picture} against {dim_picture}"
+    );
+    let mut metered = |intensity: f32, haze: f32, look: Look| shot(intensity, haze, look).0;
 
-    // A dim cue: the beam at a quarter, in light haze.
+    // A dim cue: the beam at a quarter, in light haze. It is past what the
+    // exposure opens for, so a dimmer one meters the same.
     let dark_room = metered(0.25, 0.05, auto);
     assert_eq!(
         dark_room,
-        *luma_render::photometry::ADAPT_EV.end(),
+        metered(0.125, 0.05, auto),
         "a dark room stops at the clamp"
     );
 
@@ -278,7 +291,7 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
             ..auto
         },
     );
-    assert_eq!(lifted, luma_render::photometry::ADAPT_EV.end() + 1.0);
+    assert_eq!(lifted, dark_room + 1.0);
 
     // Manual exposure is the number itself.
     let half_stop = Look {
@@ -314,11 +327,11 @@ fn live_exposure_adapts_rather_than_jumps() {
         .unwrap();
     let [current, target] = renderer.metered_exposure().unwrap();
     assert!(
-        target < dim - 1.5,
+        target < dim - 1.0,
         "the bright frame meters lower: {target} against {dim}"
     );
     assert!(
-        current > target + 1.0 && current <= dim,
+        current > (dim + target) / 2.0 && current <= dim,
         "one live frame later the exposure is still on its way: {current}, from {dim} to {target}"
     );
 }
