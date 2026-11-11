@@ -515,6 +515,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     if !front {
         n = -n;
     }
+    let face = n;
     var t = normalize(in.tangent.xyz - n * dot(n, in.tangent.xyz));
     if !front {
         t = -t;
@@ -543,6 +544,15 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     surface.roughness = specular_aa(n, max(mix(inst.led.w, inst.emissive.a * mr.g, lit), 0.0525));
     surface.ao = mix(1.0, textureSample(occlusion_map, material_sampler, in.uv).r, inst.flags.z);
     surface.emissive = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb * lit;
+    if inst.beam_axis.w > 0.5 {
+        // A lamp's face is as bright from here as the light its beam throws
+        // here: its intensity this way over the face as it is seen from
+        // here. Outside the beam it is dark, as a downlight is from the side.
+        // The face is what looks along the beam: a rim side-on to it is not.
+        let out = dot(inst.beam_axis.xyz, normalize(globals.camera_pos.xyz - in.on_surface));
+        surface.emissive *= max(dot(face, inst.beam_axis.xyz), 0.0)
+            * angular_profile(out, inst.beam.x, inst.beam.y) / max(out, 0.1);
+    }
     surface.n = n;
     surface.unevenness = 0.0;
     return shade(in, surface, dpdx(in.world), dpdy(in.world));

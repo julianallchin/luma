@@ -21,6 +21,12 @@
 //! faint glow beside a moving head's beam. Their first bounce off the floor
 //! is an ambient term (see [`fill`]); there is no directional work light
 //! layered over the lamps. Object thumbnails keep their separate preset.
+//!
+//! Each lamp hangs in a body ([`PENDANT`], from the fixture library), lit or
+//! dark, and a lit one's face is drawn at the lamp's own luminance: its
+//! intensity toward the viewer over the face ([`Lamp::face_radiance`],
+//! `Material::beam`). So a lamp glares at whoever stands in its beam and is
+//! dark from beside it.
 
 use glam::{Vec2, Vec3};
 use luma_scene::Aabb;
@@ -82,10 +88,11 @@ const LAMP_LUMENS: f32 = 7_334.0;
 const LAMP_FIELD_DEG: f32 = 90.0;
 const LAMP_BEAM_DEG: f32 = 60.0;
 
-/// The lamp's emitting face, metres in radius: the four cells sit in a
-/// 200 mm round housing (same datasheet). A face, not a point, so the light
-/// close to it is spread over the face as the real one is.
-const LAMP_RADIUS_M: f32 = 0.09;
+/// The lamp's emitting face, metres in radius: the face of the body it
+/// hangs in ([`PENDANT`], 108 mm across). A face, not a point, so the light
+/// close to it is spread over the face as the real one is; and the body's
+/// own face, so the beam leaves through it and misses the lip around it.
+const LAMP_RADIUS_M: f32 = 0.054;
 
 /// Mean illuminance on the floor under the house at full, lux: one lamp's
 /// lumens over the floor it serves. Edge cells lose some to spill.
@@ -101,6 +108,19 @@ const FLOOR_VIEW: f32 = 0.5;
 /// clears the floor with a pool's worth of spill around it.
 const LAMP_REACH: f32 = 2.4;
 
+/// The body a house lamp hangs in: the fixture library's Elation Colour
+/// Pendant, a house pendant of the ArcSystem's kind. Only its body: the light
+/// stays the ArcSystem's above.
+pub(crate) const PENDANT: &str = "elation/colour-pendant";
+
+/// What a house lamp's meshes are keyed under in a frame.
+pub(crate) const LAMP_KEY: &str = "::house-lamp";
+
+/// Whether `mesh_key` names part of a house lamp's body.
+pub(crate) fn is_lamp(mesh_key: &str) -> bool {
+    mesh_key.starts_with(LAMP_KEY)
+}
+
 /// One house lamp: where it hangs, and how hard.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Lamp {
@@ -113,6 +133,21 @@ pub struct Lamp {
 }
 
 impl Lamp {
+    /// The lamp's beam along `axis`, as a lit face has it (`Material::beam`).
+    pub(crate) fn beam(axis: Vec3) -> luma_scene::mesh::Beam {
+        luma_scene::mesh::Beam {
+            axis,
+            cos_beam: cos_half(LAMP_BEAM_DEG),
+            cos_field: cos_half(LAMP_FIELD_DEG),
+        }
+    }
+
+    /// What the lamp's face shows straight out, scene-linear: its intensity
+    /// over the `area` (square metres) the light leaves from.
+    pub(crate) fn face_radiance(self, area: f32) -> Vec3 {
+        WARM * self.intensity * crate::photometry::BEAM_GAIN / area
+    }
+
     /// This lamp as a light in the room, pointing straight down.
     ///
     /// An ordinary [`FixtureCone`]: the light index, the surface shader and the
@@ -272,6 +307,19 @@ pub fn lamps(env: VenueEnvironment, room: Aabb) -> Vec<Lamp> {
         }
     }
     out
+}
+
+/// Where the house's lamps hang, lit or dark: their bodies stay up at
+/// blackout. In the order [`lamps`] gives them.
+#[must_use]
+pub(crate) fn rig(env: VenueEnvironment, room: Aabb) -> Vec<Vec3> {
+    if !matches!(env, VenueEnvironment::Indoor { .. }) {
+        return Vec::new();
+    }
+    lamps(VenueEnvironment::indoor(1.0), room)
+        .into_iter()
+        .map(|lamp| lamp.position)
+        .collect()
 }
 
 /// The cone `intensity` that makes a [`WARM`] lamp of this profile emit

@@ -135,6 +135,7 @@ const PLAIN: Material = Material {
     normal_scale: 1.0,
     occlusion_strength: 1.0,
     led: None,
+    beam: None,
 };
 
 /// What each bundled mesh's glTF materials become, by material name.

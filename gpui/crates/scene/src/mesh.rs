@@ -75,6 +75,22 @@ pub struct Material {
     /// Set on a flat LED panel's face: the fields above are its LEDs', and
     /// the shader paints them on with the gap between them.
     pub led: Option<LedFace>,
+    /// Set on a lamp's lit face: `emissive` is its radiance straight out,
+    /// and to the side the face is as bright as the light its beam throws
+    /// there.
+    pub beam: Option<Beam>,
+}
+
+/// The beam a lamp's lit face throws. What faces along `axis` is the face;
+/// a rim turned side-on to it gives no light.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Beam {
+    /// Which way the beam leaves, world space, unit.
+    pub axis: Vec3,
+    /// Cosine of the beam's half angle, as a cone has it.
+    pub cos_beam: f32,
+    /// Cosine of the field's half angle.
+    pub cos_field: f32,
 }
 
 /// A flat LED panel's face, which the shader paints from its layout (see
@@ -102,6 +118,7 @@ impl Default for Material {
             normal_scale: 1.0,
             occlusion_strength: 1.0,
             led: None,
+            beam: None,
         }
     }
 }
@@ -531,6 +548,7 @@ fn read_primitive(prim: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Opt
             normal_scale: normal.map_or(1.0, |texture| texture.scale()),
             occlusion_strength: occlusion.map_or(1.0, |texture| texture.strength()),
             led: None,
+            beam: None,
         },
     })
 }
