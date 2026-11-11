@@ -37,10 +37,9 @@ test("orbiting and the house lights change what is drawn", () => {
   const settle = () => app.frames(24, { waitMs: 30 });
   const luma = (shot) => image.stats(shot).meanLuma;
 
-  const before = app.screenshot();
-  expect(luma(before)).toBeGreaterThan(1);
-  settle();
-  const churn = image.diff(before, app.screenshot());
+  // The Rig page opens under its work light, short of full.
+  const working = app.screenshot();
+  expect(luma(working)).toBeGreaterThan(1);
 
   const slider = () => {
     const node = app.snapshot().find({ role: "slider", label: "House lights" });
@@ -50,9 +49,17 @@ test("orbiting and the house lights change what is drawn", () => {
   const level = () => text("House lights = ")?.label ?? null;
 
   // The fraction is clamped, so a drag past either end of the slider is "all
-  // the way". The restoring drag carries the pointer off the widget, so the
-  // knob's hover tooltip is not a bubble in the restored frame.
-  app.drag(slider(), { dx: 0, dy: 54 }, { steps: 12, restale: "match" });
+  // the way". A drag up carries the pointer off the widget, so the knob's
+  // hover tooltip is not a bubble in the frame after it.
+  app.drag(slider(), { dx: 0, dy: -140 }, { steps: 12, restale: "match" });
+  until("the house lights up", () => level() === "House lights = 100%");
+  settle();
+  const before = app.screenshot();
+  expect(luma(before)).toBeGreaterThan(luma(working));
+  settle();
+  const churn = image.diff(before, app.screenshot());
+
+  app.drag(slider(), { dx: 0, dy: 140 }, { steps: 12, restale: "match" });
   until("the house lights down", () => level() === "House lights = 0%");
   settle();
   const dark = app.screenshot();

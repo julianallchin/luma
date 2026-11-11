@@ -144,6 +144,8 @@ impl Visualizer {
             reduced_motion: cx.reduce_motion(),
             exporting: false,
             build: None,
+            rigging: false,
+            work_light: luma_scene::environment::WORK_LIGHT,
             stage: Rc::default(),
         }
     }
@@ -163,10 +165,29 @@ impl Visualizer {
         self.render_controls.set_environment(self.environment());
     }
 
-    /// Preview and authoring use the same saved room. Selecting a score
-    /// changes its fixtures' output, not the time of day or the house lights.
-    fn environment(&self) -> VenueEnvironment {
-        self.venue_environment
+    /// The room as it is lit on screen. Previewing a score uses the saved
+    /// room: selecting one changes its fixtures' output, not the time of day
+    /// or the house lights. Rigging uses the same room under a work light of
+    /// its own, which is never saved.
+    pub(crate) fn environment(&self) -> VenueEnvironment {
+        if self.rigging {
+            self.venue_environment.lit_at(self.work_light)
+        } else {
+            self.venue_environment
+        }
+    }
+
+    /// Whether the page under the stage is the one the room is built on.
+    /// Arriving there turns the work light back to where it starts.
+    pub(super) fn set_rigging(&mut self, rigging: bool) {
+        self.rigging = rigging;
+        self.set_work_light(luma_scene::environment::WORK_LIGHT);
+    }
+
+    /// Turn the work light the room is rigged under.
+    pub(crate) fn set_work_light(&mut self, fraction: f32) {
+        self.work_light = fraction;
+        self.render_controls.set_environment(self.environment());
     }
 
     /// Light this stage with a different score, without rebuilding it.

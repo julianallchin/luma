@@ -67,6 +67,8 @@ pub(super) fn visualizer(build: Option<crate::stage::Build>, pick: PickSnapshot)
         reduced_motion: true,
         exporting: false,
         build,
+        rigging: false,
+        work_light: luma_scene::environment::WORK_LIGHT,
         stage: Rc::new(RefCell::new(Stage {
             displayed_pick: Some(pick),
             ..Default::default()

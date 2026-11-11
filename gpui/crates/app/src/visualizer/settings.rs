@@ -310,8 +310,11 @@ impl Render for LightDrag {
     }
 }
 
+/// The room's light dial: the venue's own light, saved with it — or, on the
+/// Rig page, the work light the room is built under, which is not.
 fn light_slider(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
-    let environment = state.venue_environment();
+    let environment = state.environment();
+    let rigging = state.rigging;
     let tooltip = {
         let mut motion = state.settings_motion.borrow_mut();
         let visible = motion.knob_hovered || motion.light_dragging;
@@ -451,6 +454,13 @@ fn light_slider(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                 - (f32::from(event.event.position.y - event.bounds.top()) - 6.) / 100.)
                 .clamp(0., 1.);
             app.update(cx, |this, cx| {
+                if rigging {
+                    if let Some(state) = this.visualizer_mut() {
+                        state.set_work_light(fraction);
+                    }
+                    cx.notify();
+                    return;
+                }
                 this.set_visualizer_environment(
                     if indoor {
                         VenueEnvironment::indoor(fraction)

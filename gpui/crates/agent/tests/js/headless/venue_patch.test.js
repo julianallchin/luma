@@ -362,7 +362,7 @@ test("the table, the groups and the stage share one selection", () => {
   expect(reading("wash 1 address = ")).toBe("65");
 });
 
-test("render settings follow the venue across a score and a reopen", () => {
+test("the room's light follows the venue across a reopen, and rigging has its own", () => {
   const sun = () => app.snapshot().findAll({ role: "text" }).find((n) => n.label.startsWith("Time of day = "))?.label;
   nav.patch("Test Venue");
   nav.step("the view settings", "toggle", "Render settings");
@@ -371,12 +371,10 @@ test("render settings follow the venue across a score and a reopen", () => {
   // The room is venue truth: it sits on the venue page.
   nav.step("outdoor", "toggle", "Outdoor");
   until("the sun", () => sun() !== undefined);
-  const before = sun();
+  // The Rig page is lit to work by; its dial is its own.
+  const working = sun();
   app.drag(app.snapshot().find({ role: "slider", label: "Time of day" }), { dx: 0, dy: -20 }, { steps: 12 });
-  const changed = sun();
-  assert(changed !== before, "the drag did not change the time of day");
-  app.key("escape");
-  until("the settings closed", (s) => !s.find({ role: "card", label: "Render settings" }));
+  assert(sun() !== working, "the drag did not turn the work light");
   // Escape puts away a group name being typed, and makes no group.
   nav.step("name a group", "button", "New group");
   until("the name field", (s) => s.find({ role: "input", label: "Group name" }));
@@ -384,17 +382,20 @@ test("render settings follow the venue across a score and a reopen", () => {
   until("the field closed", (s) => !s.find({ role: "input", label: "Group name" }));
   app.frames(4);
   expect(app.snapshot().find({ role: "row", label: "Group draft" })).toBe(undefined);
+  // A score is looked at in the room's own light, which the work light left alone.
   nav.track("Aurora");
-  nav.step("the score's view settings", "toggle", "Render settings");
-  until("the score's sun", () => sun() !== undefined);
-  expect(sun()).toBe(changed);
-  app.key("escape");
+  until("the score's sun", () => sun() !== undefined && sun() !== working);
+  const before = sun();
+  app.drag(app.snapshot().find({ role: "slider", label: "Time of day" }), { dx: 0, dy: 20 }, { steps: 12 });
+  const changed = sun();
+  assert(changed !== before, "the drag did not change the time of day");
   nav.leaveVenue("Test Venue");
   nav.venuePage("Test Venue");
   until("the loaded room", (s) => s.find({ role: "toggle", label: "Frame stats" }));
-  nav.step("the reopened settings", "toggle", "Render settings");
-  until("the saved sun", () => sun() !== undefined);
-  expect(sun()).toBe(changed);
+  // Back on the Rig page the work light is where it starts.
+  until("the work light", () => sun() === working);
+  nav.track("Aurora");
+  until("the saved sun", () => sun() === changed);
 });
 
 // A clip selects a group by its id: a rename leaves the clip on it, and

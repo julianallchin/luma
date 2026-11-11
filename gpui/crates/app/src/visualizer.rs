@@ -257,6 +257,10 @@ pub(crate) struct Visualizer {
     /// The builder. `None` until the rig lands, and the one place a position
     /// is editable in this app — see [`crate::stage`].
     pub(crate) build: Option<crate::stage::Build>,
+    /// The Rig page is under the stage: the room is shown under work light.
+    pub(crate) rigging: bool,
+    /// Where the work light's dial is, as a fraction of its travel.
+    pub(crate) work_light: f32,
     stage: Rc<RefCell<Stage>>,
 }
 
