@@ -1230,6 +1230,106 @@ async fn a_member_edits_the_venue_but_not_its_door() {
     b.close().await;
 }
 
+/// The owner brings back a membership they removed, by inserting the row
+/// again as undo does. One the member ended themselves stays ended, and the
+/// owner makes nobody a member who did not join.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
+async fn an_owner_restores_only_a_membership_they_removed() {
+    let Some(containers) = Containers::from_env() else {
+        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let venue = unique("venue");
+    seed(&a.sql, USER, &venue, &unique("score"), &[]).await;
+    let code = unique("door");
+    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
+        .bind(&code)
+        .bind(&venue)
+        .execute(&a.sql)
+        .await
+        .expect("share code");
+    wait_for_upload(&a.sql).await;
+    rpc_join(&containers, OTHER, &code).await;
+    let membership = get(
+        &containers,
+        USER,
+        &format!("/venue_members?venue_id=eq.{venue}&uid=eq.{OTHER}"),
+    )
+    .await[0]
+        .clone();
+    let member = membership["id"].as_str().expect("the membership's id");
+    let flag = serde_json::json!({ "deleted_at": "2026-11-12T00:00:00.000Z" });
+    let row = format!("/venue_members?id=eq.{member}");
+    let insert = |user: &'static str, row: serde_json::Value| {
+        let containers = &containers;
+        async move {
+            let token = mint_jwt(&containers.secret, user);
+            let response = reqwest::Client::new()
+                .post(format!(
+                    "{}/venue_members",
+                    containers.postgrest.trim_end_matches('/')
+                ))
+                .header("apikey", &token)
+                .header("Authorization", format!("Bearer {token}"))
+                .header(super::supabase::FORMAT_HEADER, FORMAT)
+                .header("Prefer", "resolution=merge-duplicates,return=minimal")
+                .json(&row)
+                .send()
+                .await
+                .expect("postgrest");
+            response.status()
+        }
+    };
+    let live = || async {
+        get(&containers, USER, &format!("{row}&select=deleted_at")).await[0]["deleted_at"].is_null()
+    };
+
+    // The owner removes the member, then undoes it.
+    rest(&containers, USER, reqwest::Method::PATCH, &row, Some(&flag)).await;
+    assert!(
+        !live().await,
+        "the owner's removal did not flag the membership"
+    );
+    let status = insert(USER, membership.clone()).await;
+    assert!(
+        status.is_success(),
+        "the owner's undo was refused: {status}"
+    );
+    assert!(live().await, "the owner's undo left the membership removed");
+
+    // The member leaves. Neither the owner nor the member inserts it back.
+    rest(
+        &containers,
+        OTHER,
+        reqwest::Method::PATCH,
+        &row,
+        Some(&flag),
+    )
+    .await;
+    for user in [USER, OTHER] {
+        let status = insert(user, membership.clone()).await;
+        assert!(
+            status.is_client_error(),
+            "{user} restored a membership the member ended: {status}"
+        );
+    }
+    assert!(!live().await, "a membership its member ended is live again");
+
+    // And the owner adds nobody who never joined.
+    let mut stranger = membership.clone();
+    stranger["id"] = serde_json::json!(id());
+    let status = insert(USER, stranger).await;
+    assert!(
+        status.is_client_error(),
+        "the owner made a member without a code: {status}"
+    );
+
+    a.close().await;
+}
+
 /// A write the server's policies refuse is not lost in silence. A member may
 /// read the owner's song but not retitle it: the update is filtered to no row
 /// and PostgREST answers 204. The production connector counts the rows its

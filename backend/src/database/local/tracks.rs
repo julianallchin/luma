@@ -990,14 +990,14 @@ pub(crate) async fn current_grid_id(
         .map_err(|e| format!("Failed to find the track's current beat grid: {e}"))
 }
 
-/// The detector version that found `grid`, when it is one of `track_id`'s
-/// grids: the newest that matches. A person reviews the grid on their screen,
+/// The id of `grid` and the detector version that found it, when it is one
+/// of `track_id`'s grids: the newest that matches. A person reviews the grid on their screen,
 /// which is their score's and not always the track's current one.
-pub(crate) async fn grid_version_for_connection(
+pub(crate) async fn stored_grid_for_connection(
     connection: &mut SqliteConnection,
     track_id: &str,
     grid: &BeatGrid,
-) -> Result<Option<i64>, String> {
+) -> Result<Option<(String, i64)>, String> {
     let rows = sqlx::query_as::<_, TrackBeats>(concat!(
         "SELECT ",
         grid_columns!(),
@@ -1009,9 +1009,9 @@ pub(crate) async fn grid_version_for_connection(
     .await
     .map_err(|e| format!("Failed to fetch the track's beat grids: {e}"))?;
     for row in rows {
-        let version = row.processor_version;
+        let stored = (row.id.clone(), row.processor_version);
         if beat_grid(row)? == *grid {
-            return Ok(Some(version));
+            return Ok(Some(stored));
         }
     }
     Ok(None)
@@ -1386,7 +1386,6 @@ mod tests {
         use crate::services::catalog;
         let (_directory, pool) = test_pool().await;
         song_in_a_room(&pool).await;
-        let request = |n: u8| format!("00000000-0000-4000-8000-00000000000{n}");
         let beats = |score: &str| {
             let score = score.to_owned();
             let pool = pool.clone();
@@ -1401,7 +1400,6 @@ mod tests {
         // first one is found, and keeps that one from then on.
         let early = catalog::create_score(
             &pool,
-            &request(1),
             "song",
             "room",
             None,
@@ -1422,7 +1420,6 @@ mod tests {
         .unwrap();
         let written = catalog::create_score(
             &pool,
-            &request(2),
             "song",
             "room",
             None,
@@ -1466,14 +1463,13 @@ mod tests {
 
         // A copy holds the same clips, so it names the same grid; a new
         // score is written against the current one.
-        let copy = catalog::duplicate_score(&pool, &request(3), &written.id, "Copy")
+        let copy = catalog::duplicate_score(&pool, &written.id, "Copy")
             .await
             .unwrap();
         assert_eq!(copy.grid_id, written.grid_id);
         assert_eq!(beats(&copy.id).await, Some(grid_at(120.)));
         let late = catalog::create_score(
             &pool,
-            &request(4),
             "song",
             "room",
             None,

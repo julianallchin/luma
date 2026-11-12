@@ -18,7 +18,7 @@ transport underneath.
 ## The contract for a source table
 
 - **`id` is random and opaque**: a UUID the writer generates. It names no
-  parent and no handle, and is never used twice. That includes link and slot
+  parent and no handle, and is never reused within a table. That includes link and slot
   rows (`folder_tracks`, `venue_node_params`, `venue_constraints`,
   `venue_members`, `laser_limits`, `perform_layouts`,
   `track_beat_validations`, `agent_thread_transcript_heads`), a venue's root
@@ -51,6 +51,11 @@ transport underneath.
 - An edit that reaches the server after the row was flagged changes no row.
   The connector records that as "not saved", as it does any refused write.
 - A second delete of a flagged row succeeds and keeps the first stamp.
+- `deleted_by` is the account the request came from, whatever the request
+  says.
+- A membership is the one row with a narrower revive: only the venue's owner
+  brings it back, and only one they removed. A member who left rejoins with
+  the venue's code.
 - A live row written under a flagged parent is refused as a foreign-key
   violation, so no device is sent a child whose parent it does not hold. A
   parent brought back uploads before its children.
@@ -73,7 +78,9 @@ transport underneath.
 A beat grid is written once. Reanalysis inserts a new `track_beats` row; the
 track's current grid is its newest. `scores.grid_id` names the grid a score
 was written against. The server refuses an edit to a grid row. A score made
-before its song has a grid is given the first one when it is found.
+before its song has a grid is given the first one when it is found. A beat
+review names the grid it is about (`track_beat_validations.grid_id`), so a
+review of one grid is not a verdict on another.
 
 ## History
 

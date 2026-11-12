@@ -55,7 +55,7 @@ pub async fn set(
     }
     // The grid a person reviews is the one on their screen: their score's,
     // which stays one of the track's grids after the song is analysed again.
-    let processor_version = crate::database::local::tracks::grid_version_for_connection(
+    let (grid_id, processor_version) = crate::database::local::tracks::stored_grid_for_connection(
         access.connection(),
         track_id,
         reviewed,
@@ -67,19 +67,21 @@ pub async fn set(
     }
     let json = serde_json::to_string(reviewed).map_err(|e| format!("Invalid beat grid: {e}"))?;
     // A track has one validation, found by its track: a second review changes
-    // that row, and only the first one makes a row, under its own id. The
-    // processor is the reviewed grid's.
+    // that row, and only the first one makes a row, under its own id. It
+    // names the grid it is about, so it is never read as a verdict on another.
     sqlx::query(
         "INSERT INTO track_beat_validations
-         (id, track_id, uid, track_hash, grid_json, processor_version, verdict, reason)
-         SELECT ?, t.id, t.uid, t.track_hash, ?, ?, ?, ?
+         (id, track_id, uid, track_hash, grid_id, grid_json, processor_version, verdict,
+          reason)
+         SELECT ?, t.id, t.uid, t.track_hash, ?, ?, ?, ?, ?
          FROM tracks t WHERE t.id = ?
          ON CONFLICT(track_id) DO UPDATE SET
-         uid = excluded.uid, track_hash = excluded.track_hash,
+         uid = excluded.uid, track_hash = excluded.track_hash, grid_id = excluded.grid_id,
          grid_json = excluded.grid_json, processor_version = excluded.processor_version,
          verdict = excluded.verdict, reason = excluded.reason",
     )
     .bind(uuid::Uuid::new_v4().to_string())
+    .bind(grid_id)
     .bind(json)
     .bind(processor_version)
     .bind(verdict)
@@ -135,8 +137,8 @@ mod tests {
             beats_per_bar: 4,
         };
         let rows = || async {
-            sqlx::query_as::<_, (String, String, i64)>(
-                "SELECT id, verdict, processor_version FROM track_beat_validations
+            sqlx::query_as::<_, (String, String, i64, String)>(
+                "SELECT id, verdict, processor_version, grid_id FROM track_beat_validations
                  WHERE track_id = 'reviewed'",
             )
             .fetch_all(&pool)
@@ -157,6 +159,7 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_ne!(first[0].0, "reviewed", "the id is its own, not its track's");
         assert_eq!(first[0].2, 7, "the grid's processor is recorded");
+        assert_eq!(first[0].3, "grid", "the review names the grid it is about");
 
         set(
             &pool,

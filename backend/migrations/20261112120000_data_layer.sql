@@ -97,6 +97,7 @@ CREATE TABLE track_beat_validations (
     track_id TEXT NOT NULL UNIQUE REFERENCES tracks(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
     uid TEXT,
     track_hash TEXT NOT NULL,
+    grid_id TEXT,
     grid_json TEXT NOT NULL,
     processor_version INTEGER NOT NULL,
     verdict TEXT NOT NULL CHECK (verdict IN ('unreviewed', 'correct', 'incorrect')),

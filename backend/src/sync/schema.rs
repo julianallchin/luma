@@ -400,6 +400,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "track_id",
             "uid",
             "track_hash",
+            "grid_id",
             "grid_json",
             "processor_version",
             "verdict",

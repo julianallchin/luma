@@ -166,6 +166,15 @@ alter table public.scores add column grid_id text;
 update public.scores score set grid_id = grid.id
 from public.track_beats grid where grid.track_id = score.track_id;
 
+-- The grid a review is about, so a review of one grid is never read as a
+-- verdict on another. A review whose grid was overwritten since names none.
+alter table public.track_beat_validations add column grid_id text;
+update public.track_beat_validations review set grid_id = grid.id
+from public.track_beats grid
+where grid.track_id = review.track_id
+  and review.grid_json::jsonb -> 'beats' = grid.beats_json::jsonb
+  and review.grid_json::jsonb -> 'downbeats' = grid.downbeats_json::jsonb;
+
 -- ---------------------------------------------------------------------------
 -- The flag, and uniqueness among live rows.
 -- ---------------------------------------------------------------------------
@@ -272,7 +281,9 @@ begin
         return new;
     end if;
     if old.deleted_at is null then
-        new.deleted_by := coalesce(new.deleted_by, auth.uid());
+        -- The account the request is from; what a migration or a parent's
+        -- flag passes down stands when there is none.
+        new.deleted_by := coalesce(auth.uid(), new.deleted_by);
         return new;
     end if;
     if nullif(current_setting('request.headers', true), '') is null then
@@ -396,7 +407,7 @@ begin
        and to_jsonb(new) - array['deleted_at', 'deleted_by', 'updated_at']
            is distinct from to_jsonb(old) - array['deleted_at', 'deleted_by', 'updated_at']
     then
-        raise exception '% rows are never edited; write a new one', tg_table_name
+        raise exception '% rows are written once and not edited', tg_table_name
             using errcode = '42501';
     end if;
     return new;
@@ -648,17 +659,42 @@ create policy venue_members_update on public.venue_members
 create trigger venue_members_keep_written before update on public.venue_members
     for each row execute function public.keep_written();
 
+-- The venue's owner may bring back a membership they removed, and only
+-- that: a member who left rejoins with a code, and an owner adds nobody who
+-- did not join. Undo uploads as an insert of the row, so the insert policy
+-- lets the owner through and this holds them to rows they flagged.
+drop policy venue_members_insert on public.venue_members;
+create policy venue_members_insert on public.venue_members
+    for insert to authenticated
+    with check ((uid = auth.uid() and public.can_access_venue(venue_id))
+                or public.owns_venue(venue_id));
+
 create or replace function public.guard_membership() returns trigger
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
 begin
-    if auth.uid() is not null
-       and old.deleted_at is not null and new.deleted_at is null
-       and not public.owns_venue(old.venue_id)
+    if auth.uid() is null then
+        return new;
+    end if;
+    if tg_op = 'INSERT' then
+        if new.uid is distinct from auth.uid() and not exists (
+            select 1 from public.venue_members member
+            where member.id = new.id and member.venue_id = new.venue_id
+              and member.uid = new.uid
+              and (member.deleted_at is null or member.deleted_by = auth.uid())
+        ) then
+            raise exception 'a membership is made by joining with the venue''s code'
+                using errcode = '42501';
+        end if;
+        return new;
+    end if;
+    if old.deleted_at is not null and new.deleted_at is null
+       and not (public.owns_venue(old.venue_id)
+                and old.deleted_by is not distinct from auth.uid())
     then
-        raise exception 'only the venue''s owner can restore a membership'
+        raise exception 'only the owner who removed a membership can restore it'
             using errcode = '42501';
     end if;
     return new;
@@ -666,7 +702,7 @@ end;
 $$;
 revoke all on function public.guard_membership() from public, anon, authenticated;
 
-create trigger venue_members_guard before update on public.venue_members
+create trigger venue_members_guard before insert or update on public.venue_members
     for each row execute function public.guard_membership();
 
 -- ---------------------------------------------------------------------------
