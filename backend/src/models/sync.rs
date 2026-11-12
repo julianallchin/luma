@@ -47,7 +47,9 @@ pub struct SyncRefusal {
     /// `PUT`, `PATCH` or `DELETE`.
     pub op: String,
     /// The HTTP status. A 2xx is a write the server's policies filtered to no
-    /// row at all: PostgREST answers success and changes nothing.
+    /// row at all: PostgREST answers success and changes nothing. Zero is a
+    /// change that was never sent: it was still waiting to upload when an
+    /// update changed the data format.
     pub status: u16,
     /// When it was refused, RFC 3339.
     pub at: String,
