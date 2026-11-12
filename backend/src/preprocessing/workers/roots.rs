@@ -55,13 +55,15 @@ impl Preprocessor for RootsPreprocessor {
         let sections_json = serde_json::to_string(&root_data.sections)
             .map_err(|e| format!("Failed to serialize chord sections: {e}"))?;
 
+        let mut write = ctx.publish().await?;
         tracks_db::upsert_track_roots(
-            ctx.pool(),
+            write.connection(),
             track_id,
             &sections_json,
             root_data.logits_path.as_deref(),
             self.version(),
         )
-        .await
+        .await?;
+        write.commit().await
     }
 }

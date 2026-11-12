@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 use sqlx::SqlitePool;
 use tokio::runtime::Handle;
 
+use super::spoken_groups::SpokenGroups;
 use crate::agent_execution::cell_host::{call_limit, decode, supervise};
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
@@ -37,9 +38,9 @@ use crate::models::perform::{
     Cell, CellContent, ControlTarget, LayoutPage, ListValue, PerformLayout, PerformPattern, Step,
 };
 use crate::perform::PerformSession;
-use crate::services::perform_set::{PerformSet, Set};
-use super::spoken_groups::SpokenGroups;
 use crate::services::busk_page;
+use crate::services::perform_set::{PerformSet, Set};
+use crate::sync::triggers::TurnAttribution;
 use luma_patterns::Selection;
 
 /// The most columns or rows a page has, as on the Perform tab.
@@ -53,8 +54,8 @@ pub struct PerformHost {
     /// The fixtures root, to read the venue's groups and rig.
     resource_root: PathBuf,
     venue_id: String,
-    /// Who this thread's writes are attributed to: the thread's `actor`.
-    actor: Option<String>,
+    /// Who this cell's writes are attributed to and the turn they belong to.
+    attribution: TurnAttribution,
     session: Arc<PerformSession>,
     inputs: Arc<InputHub>,
 }
@@ -65,7 +66,7 @@ impl PerformHost {
         pool: SqlitePool,
         resource_root: PathBuf,
         venue_id: String,
-        actor: Option<String>,
+        attribution: TurnAttribution,
         session: Arc<PerformSession>,
         inputs: Arc<InputHub>,
     ) -> Self {
@@ -74,14 +75,14 @@ impl PerformHost {
             pool,
             resource_root,
             venue_id,
-            actor,
+            attribution,
             session,
             inputs,
         }
     }
 
     fn set(&self) -> PerformSet<'_> {
-        PerformSet::new(&self.pool, &self.session, &self.venue_id).acting_as(self.actor.as_deref())
+        PerformSet::new(&self.pool, &self.session, &self.venue_id).acting_as(self.attribution.get())
     }
 
     /// Change the set, and answer it as it now stands with what `change`
@@ -262,7 +263,7 @@ impl PerformHost {
                 let Rebind { id, mode, invert } = decode(payload)?;
                 self.open_inputs().await?;
                 self.inputs
-                    .update(&self.venue_id, &id, mode, invert, self.actor.as_deref())
+                    .update(&self.venue_id, &id, mode, invert, self.attribution.get())
                     .await
                     .map_err(|error| HostCallError::new("not_found", error))?;
                 Ok(json!({ "inputs": self.inputs.state() }))
@@ -271,7 +272,7 @@ impl PerformHost {
                 let Id { id } = decode(payload)?;
                 self.open_inputs().await?;
                 self.inputs
-                    .unbind(&self.venue_id, &id, self.actor.as_deref())
+                    .unbind(&self.venue_id, &id, self.attribution.get())
                     .await
                     .map_err(|error| HostCallError::new("internal", error))?;
                 Ok(json!({ "inputs": self.inputs.state() }))
@@ -286,7 +287,12 @@ impl PerformHost {
                 self.open_inputs().await?;
                 let binding = self
                     .inputs
-                    .learn(&control, mode, controller.as_deref(), self.actor.as_deref())
+                    .learn(
+                        &control,
+                        mode,
+                        controller.as_deref(),
+                        self.attribution.get(),
+                    )
                     .await
                     .map_err(|error| HostCallError::new("not_heard", error))?;
                 Ok(json!({ "binding": binding, "inputs": self.inputs.state() }))
@@ -300,7 +306,7 @@ impl PerformHost {
                 self.open_inputs().await?;
                 let controller = self
                     .inputs
-                    .add_controller(&name, &port, self.actor.as_deref())
+                    .add_controller(&name, &port, self.attribution.get())
                     .await
                     .map_err(refused)?;
                 let mut answer = self.controllers();
@@ -317,7 +323,7 @@ impl PerformHost {
                 let profile = profile.map(Profile::read).transpose().map_err(refused)?;
                 self.open_inputs().await?;
                 self.inputs
-                    .change_controller(&id, self.actor.as_deref(), |controller| {
+                    .change_controller(&id, self.attribution.get(), |controller| {
                         if let Some(name) = name {
                             controller.name = name;
                         }
@@ -337,7 +343,7 @@ impl PerformHost {
                 let Id { id } = decode(payload)?;
                 self.open_inputs().await?;
                 self.inputs
-                    .remove_controller(&id, self.actor.as_deref())
+                    .remove_controller(&id, self.attribution.get())
                     .await
                     .map_err(|error| HostCallError::new("not_found", error))?;
                 Ok(json!({ "inputs": self.inputs.state() }))
@@ -353,7 +359,7 @@ impl PerformHost {
                 .ok_or_else(|| HostCallError::new("not_found", "no such page"))?;
                 let bindings = self
                     .inputs
-                    .map_page(&id, page, &set.patterns, self.actor.as_deref())
+                    .map_page(&id, page, &set.patterns, self.attribution.get())
                     .await
                     .map_err(refused)?;
                 Ok(json!({ "bound": bindings.len(), "inputs": self.inputs.state() }))

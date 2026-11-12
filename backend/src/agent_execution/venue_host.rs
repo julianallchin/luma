@@ -41,6 +41,7 @@ use crate::models::universe::UniverseState;
 use crate::services::groups;
 use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
+use crate::sync::triggers::TurnAttribution;
 use luma_scene::environment::{HazeAppearance, SkyParams, VenueEnvironment, VenueHaze};
 use luma_scene::venue_tiles::TileMap;
 use luma_scene::View;
@@ -53,8 +54,8 @@ pub struct VenueHost {
     resource_root: PathBuf,
     workspace: Arc<Workspace>,
     venue_id: String,
-    /// Who this thread's writes are attributed to: the thread's `actor`.
-    actor: Option<String>,
+    /// Who this cell's writes are attributed to and the turn they belong to.
+    attribution: TurnAttribution,
     /// The score that lights the room, when the thread has one. Without it the
     /// rig uses the venue's saved environment, with geometry and no score beams.
     lighting: Option<Arc<TrackHost>>,
@@ -74,7 +75,7 @@ impl VenueHost {
         resource_root: PathBuf,
         workspace: Arc<Workspace>,
         venue_id: String,
-        actor: Option<String>,
+        attribution: TurnAttribution,
         lighting: Option<Arc<TrackHost>>,
     ) -> Self {
         Self {
@@ -83,7 +84,7 @@ impl VenueHost {
             resource_root,
             workspace,
             venue_id,
-            actor,
+            attribution,
             lighting,
             drafts: std::sync::Mutex::default(),
         }
@@ -420,7 +421,7 @@ impl VenueHost {
         VenueAccess::<Write>::write_as(
             &self.pool,
             VenueResource::Venue(&self.venue_id),
-            self.actor.as_deref(),
+            self.attribution.get(),
         )
         .await
     }
@@ -462,7 +463,7 @@ impl VenueHost {
     /// This thread's venue, bound to the verbs.
     fn stage(&self) -> Stage<'_> {
         Stage::new(&self.pool, &self.resource_root, &self.venue_id)
-            .attributed(self.actor.as_deref())
+            .attributed(self.attribution.get())
     }
 
     /// The placeable vocabulary. A read of the catalog, not of the venue, so it

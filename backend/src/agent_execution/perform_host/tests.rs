@@ -31,7 +31,7 @@ async fn library() -> (tempfile::TempDir, AppServices, PerformHost) {
         services.db.0.clone(),
         repo,
         venue,
-        Some("test-model".into()),
+        crate::sync::triggers::TurnAttribution::turn(Some("test-model"), "thread", Some("turn")),
         services.perform.clone(),
         services.inputs.clone(),
     );

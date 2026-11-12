@@ -47,6 +47,7 @@ use crate::models::venue_graph::{
     PlacementReport, Reach, ResolvedVenue, StageCatalog, VenueGraphRows,
 };
 use crate::services::{distribute as distribute_service, fixture_create};
+use crate::sync::triggers::Attribution;
 use crate::venue_graph;
 
 // ---------------------------------------------------------------------------
@@ -177,9 +178,9 @@ pub struct Stage<'a> {
     /// from it.
     fixtures_root: &'a Path,
     venue_id: &'a str,
-    /// Who the verbs write for when it is not the person: see
-    /// [`VenueAccess::write_as`].
-    actor: Option<&'a str>,
+    /// Who the verbs write for, and as part of what, when it is not the
+    /// person alone: see [`VenueAccess::write_as`].
+    attribution: Attribution<'a>,
 }
 
 impl<'a> Stage<'a> {
@@ -189,14 +190,17 @@ impl<'a> Stage<'a> {
             pool,
             fixtures_root,
             venue_id,
-            actor: None,
+            attribution: Attribution::PERSON,
         }
     }
 
-    /// The same venue, with its writes attributed to `actor`.
+    /// The same venue, with its writes attributed.
     #[must_use]
-    pub fn attributed(self, actor: Option<&'a str>) -> Self {
-        Self { actor, ..self }
+    pub fn attributed(self, attribution: Attribution<'a>) -> Self {
+        Self {
+            attribution,
+            ..self
+        }
     }
 
     // -- reads ----------------------------------------------------------
@@ -1123,7 +1127,7 @@ impl<'a> Stage<'a> {
         Ok(VenueAccess::<Write>::write_as(
             self.pool,
             VenueResource::Venue(self.venue_id),
-            self.actor,
+            self.attribution,
         )
         .await?)
     }

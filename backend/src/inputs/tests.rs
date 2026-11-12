@@ -7,6 +7,7 @@ use serde_json::json;
 
 use super::{Address, Event, Mode, Profile};
 use crate::dispatch::{dispatch, AppServices};
+use crate::sync::triggers::Attribution;
 
 async fn library() -> (tempfile::TempDir, AppServices, String) {
     let directory = tempfile::tempdir().unwrap();
@@ -253,7 +254,7 @@ async fn a_learn_nobody_waits_for_ends() {
     let (_dir, services, _venue) = library().await;
     let waiting = services
         .inputs
-        .learn("drop", super::Mode::Fader, None, None);
+        .learn("drop", super::Mode::Fader, None, Attribution::PERSON);
     let stopped = tokio::time::timeout(Duration::from_millis(50), waiting).await;
     assert!(stopped.is_err(), "nothing was heard");
     assert_eq!(services.inputs.state().learning, None);
@@ -311,7 +312,7 @@ async fn a_page_maps_onto_a_controllers_grid_in_place_of_what_it_had() {
     let (_dir, services, venue) = library().await;
     let pads = services
         .inputs
-        .add_controller("Pads", "", None)
+        .add_controller("Pads", "", Attribution::PERSON)
         .await
         .unwrap();
     let profile = Profile::parse(
@@ -322,7 +323,7 @@ async fn a_page_maps_onto_a_controllers_grid_in_place_of_what_it_had() {
     .unwrap();
     services
         .inputs
-        .change_controller(&pads.id, None, |controller| {
+        .change_controller(&pads.id, Attribution::PERSON, |controller| {
             controller.profile = profile;
             Ok(())
         })
@@ -350,7 +351,7 @@ async fn a_page_maps_onto_a_controllers_grid_in_place_of_what_it_had() {
     ]);
     let bound = services
         .inputs
-        .map_page(&pads.id, &first, &[], None)
+        .map_page(&pads.id, &first, &[], Attribution::PERSON)
         .await
         .unwrap();
     assert_eq!(bound.len(), 2);
@@ -358,7 +359,7 @@ async fn a_page_maps_onto_a_controllers_grid_in_place_of_what_it_had() {
     let second = page(vec![at("select", 0, CellContent::Select)]);
     services
         .inputs
-        .map_page(&pads.id, &second, &[], None)
+        .map_page(&pads.id, &second, &[], Attribution::PERSON)
         .await
         .unwrap();
     let controls: Vec<String> = services
@@ -384,19 +385,19 @@ async fn a_page_maps_onto_a_controllers_grid_in_place_of_what_it_had() {
     // A controller with no profile cannot be mapped, and says why.
     let bare = services
         .inputs
-        .add_controller("Bare", "", None)
+        .add_controller("Bare", "", Attribution::PERSON)
         .await
         .unwrap();
     let refused = services
         .inputs
-        .map_page(&bare.id, &first, &[], None)
+        .map_page(&bare.id, &first, &[], Attribution::PERSON)
         .await
         .unwrap_err();
     assert!(refused.contains("profile"), "{refused}");
     // Removing a controller takes its bindings.
     services
         .inputs
-        .remove_controller(&pads.id, None)
+        .remove_controller(&pads.id, Attribution::PERSON)
         .await
         .unwrap();
     assert!(services.inputs.state().bindings.is_empty());
@@ -524,9 +525,15 @@ async fn bindings_from_before_controllers_upload_as_they_move() {
 async fn controllers_synced_from_another_device_reach_the_hub() {
     let (_dir, services, venue) = library().await;
     // Written under the hub, as a download writes it.
-    super::store::add_controller(&services.db.0, &venue, None, "Pads", "Pads MIDI 1")
-        .await
-        .unwrap();
+    super::store::add_controller(
+        &services.db.0,
+        &venue,
+        Attribution::PERSON,
+        "Pads",
+        "Pads MIDI 1",
+    )
+    .await
+    .unwrap();
     assert!(services.inputs.state().controllers.is_empty());
     super::synced();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -545,7 +552,7 @@ async fn a_controller_is_renamed_and_never_to_nothing() {
     let (_dir, services, venue) = library().await;
     let id = services
         .inputs
-        .add_controller("Pads", "", None)
+        .add_controller("Pads", "", Attribution::PERSON)
         .await
         .unwrap()
         .id;

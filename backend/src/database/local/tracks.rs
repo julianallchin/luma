@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::database::local::deletes;
 use crate::models::beat_grid::BeatGrid;
 use crate::models::tracks::{ChordSection, TrackBeats, TrackBrowserRow, TrackStem, TrackSummary};
+use crate::sync::triggers::{self, AttributedWrite, Attribution};
 
 // Helper structs for internal queries
 #[derive(FromRow)]
@@ -285,6 +286,10 @@ pub async fn insert_track_record(
         return Ok((id, false));
     }
 
+    // The row is what the import read off the file, not something the
+    // person typed, and history says so. Cleared before the commit, so the
+    // connection goes back to the pool as the person's.
+    triggers::attribute(&mut transaction, Attribution::IMPORT).await?;
     sqlx::query(
         "INSERT INTO tracks (id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid, source_type, source_id, source_filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -306,6 +311,7 @@ pub async fn insert_track_record(
     .execute(&mut *transaction)
     .await
     .map_err(|e| format!("Failed to insert track: {}", e))?;
+    triggers::unattribute(&mut transaction).await?;
 
     transaction
         .commit()
@@ -440,16 +446,19 @@ pub async fn get_track_duration(pool: &SqlitePool, track_id: &str) -> Result<Opt
 // -----------------------------------------------------------------------------
 
 /// Fetch the uid for a track (used to propagate auth.uid() to child rows).
-pub(crate) async fn track_uid(pool: &SqlitePool, track_id: &str) -> Result<Option<String>, String> {
+pub(crate) async fn track_uid(
+    executor: impl sqlx::SqliteExecutor<'_>,
+    track_id: &str,
+) -> Result<Option<String>, String> {
     sqlx::query_scalar::<_, Option<String>>("SELECT uid FROM tracks WHERE id = ?")
         .bind(track_id)
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await
         .map_err(|e| format!("Failed to get track uid: {}", e))
 }
 
 pub async fn upsert_track_beats(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     beats_json: &str,
     downbeats_json: &str,
@@ -458,7 +467,7 @@ pub async fn upsert_track_beats(
     beats_per_bar: Option<i64>,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar, processor_version)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -480,7 +489,7 @@ pub async fn upsert_track_beats(
     .bind(downbeat_offset)
     .bind(beats_per_bar)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist beat data: {}", e))?;
 
@@ -488,13 +497,13 @@ pub async fn upsert_track_beats(
 }
 
 pub async fn upsert_track_roots(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     sections_json: &str,
     logits_path: Option<&str>,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_roots (track_id, uid, sections_json, logits_path, processor_version)
          VALUES (?, ?, ?, ?, ?)
@@ -510,7 +519,7 @@ pub async fn upsert_track_roots(
     .bind(sections_json)
     .bind(logits_path)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist root data: {}", e))?;
 
@@ -518,13 +527,13 @@ pub async fn upsert_track_roots(
 }
 
 pub async fn upsert_track_bar_classifications(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     classifications_json: &str,
     tag_order_json: &str,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_bar_classifications (track_id, uid, classifications_json, tag_order_json, processor_version)
          VALUES (?, ?, ?, ?, ?)
@@ -540,7 +549,7 @@ pub async fn upsert_track_bar_classifications(
     .bind(classifications_json)
     .bind(tag_order_json)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist bar classifications: {}", e))?;
 
@@ -548,13 +557,13 @@ pub async fn upsert_track_bar_classifications(
 }
 
 pub async fn upsert_track_genres(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     genres_json: &str,
     labels_json: &str,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_genres (track_id, uid, genres_json, labels_json, processor_version)
          VALUES (?, ?, ?, ?, ?)
@@ -570,7 +579,7 @@ pub async fn upsert_track_genres(
     .bind(genres_json)
     .bind(labels_json)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist genres: {}", e))?;
 
@@ -626,12 +635,12 @@ pub async fn get_track_drum_onsets(
 }
 
 pub async fn upsert_track_drum_onsets(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     onsets_json: &str,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_drum_onsets (track_id, uid, onsets_json, processor_version)
          VALUES (?, ?, ?, ?)
@@ -645,7 +654,7 @@ pub async fn upsert_track_drum_onsets(
     .bind(&uid)
     .bind(onsets_json)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist drum onsets: {}", e))?;
 
@@ -699,14 +708,14 @@ pub async fn get_track_mert_paths(
 }
 
 pub async fn upsert_track_stem(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     stem_name: &str,
     file_path: &str,
     storage_path: Option<&str>,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path, processor_version)
          VALUES (?, ?, ?, ?, ?, ?)
@@ -723,7 +732,7 @@ pub async fn upsert_track_stem(
     .bind(file_path)
     .bind(storage_path)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist stem data: {}", e))?;
 
@@ -965,6 +974,8 @@ pub async fn fill_track_metadata_gaps(
     album: &Option<String>,
     duration_seconds: Option<f64>,
 ) -> Result<(), String> {
+    // What the file's tags say, filled in by the import rather than typed.
+    let mut write = AttributedWrite::begin(pool, Attribution::IMPORT).await?;
     sqlx::query(
         "UPDATE tracks SET
             title = COALESCE(title, ?),
@@ -979,10 +990,10 @@ pub async fn fill_track_metadata_gaps(
     .bind(album)
     .bind(duration_seconds)
     .bind(track_id)
-    .execute(pool)
+    .execute(write.connection())
     .await
     .map_err(|e| format!("Failed to fill track metadata gaps: {}", e))?;
-    Ok(())
+    write.commit().await
 }
 
 #[cfg(test)]
@@ -1036,7 +1047,7 @@ mod tests {
         sqlx::query("INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('reviewed', 'alice', 'audio-hash', '/audio.ogg')")
             .execute(&pool).await.unwrap();
         upsert_track_beats(
-            &pool,
+            &mut *pool.acquire().await.unwrap(),
             "reviewed",
             "[0,0.5,1,1.5,2]",
             "[0,2]",
@@ -1100,7 +1111,7 @@ mod tests {
             .await
             .unwrap();
         upsert_track_beats(
-            &pool,
+            &mut *pool.acquire().await.unwrap(),
             "reviewed",
             "[0,1,2,3,4]",
             "[0,4]",

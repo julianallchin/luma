@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 pub use crate::models::venues::VenueCapability;
+use crate::sync::triggers::Attribution;
 
 pub struct Read;
 /// A persistent edit of the venue's content: its fixtures, groups, stage,
@@ -73,8 +74,8 @@ pub struct VenueAccess<'a, Mode> {
     venue_id: String,
     principal: String,
     standing: Standing,
-    /// Whether the writes are an agent's, and so must be given back to the
-    /// person before commit. See [`crate::sync::triggers::attribute`].
+    /// Whether the writes carry an attribution, and so must be given back to
+    /// the person before commit. See [`crate::sync::triggers::attribute`].
     attributed: bool,
     _mode: PhantomData<Mode>,
 }
@@ -124,28 +125,25 @@ impl<'a> VenueAccess<'a, Read> {
 
 impl<'a> VenueAccess<'a, Write> {
     pub async fn write(pool: &'a SqlitePool, resource: VenueResource<'_>) -> Result<Self, String> {
-        Self::write_as(pool, resource, None).await
+        Self::write_as(pool, resource, Attribution::PERSON).await
     }
 
-    /// A mutation made on `actor`'s behalf — a model id or an MCP client's
-    /// label — so the server's history names it instead of the person. `None`
-    /// is the person, as [`Self::write`].
+    /// A mutation made on someone else's behalf — a model's turn in a
+    /// conversation, or an MCP client's session — so the server's history
+    /// names it, and what it belongs to, instead of the person alone.
+    /// [`Attribution::PERSON`] is the person, as [`Self::write`].
     pub async fn write_as(
         pool: &'a SqlitePool,
         resource: VenueResource<'_>,
-        actor: Option<&str>,
+        attribution: Attribution<'_>,
     ) -> Result<Self, String> {
         let transaction = pool
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|error| format!("Failed to begin venue mutation: {error}"))?;
         let mut access: Self = authorize(transaction, resource, |can| can.edit).await?;
-        if let Some(actor) = actor {
-            crate::sync::triggers::attribute(
-                &mut access.transaction,
-                crate::sync::triggers::Attribution::actor(actor),
-            )
-            .await?;
+        if attribution != Attribution::PERSON {
+            crate::sync::triggers::attribute(&mut access.transaction, attribution).await?;
             access.attributed = true;
         }
         Ok(access)
@@ -338,6 +336,65 @@ mod tests {
             .await
             .unwrap();
         (directory, pool)
+    }
+
+    /// What an agent's turn writes is queued under the turn: who, in which
+    /// conversation, started by which message, and grouped with the rest of
+    /// that turn. The pool has one connection, so the person's next write
+    /// is on the one the agent just used, and carries none of it — whether
+    /// the agent's write committed or was abandoned.
+    #[tokio::test]
+    async fn an_agents_write_names_its_turn_and_the_next_write_is_the_persons() {
+        use crate::sync::triggers::{installed, TurnAttribution};
+
+        let (_directory, pool) = test_pool().await;
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        installed::on_the_only_connection(&pool).await;
+        let relabel = |label: &'static str| {
+            sqlx::query("UPDATE fixtures SET label = ? WHERE id = 'alice-fixture'").bind(label)
+        };
+        let fixture = VenueResource::Fixture("alice-fixture");
+
+        let turn = TurnAttribution::turn(Some("claude-opus-5-5"), "thread-1", Some("message-1"));
+        let mut agent = VenueAccess::<Write>::write_as(&pool, fixture, turn.get())
+            .await
+            .unwrap();
+        relabel("agent").execute(agent.connection()).await.unwrap();
+        agent.commit().await.unwrap();
+
+        let mut abandoned = VenueAccess::<Write>::write_as(&pool, fixture, turn.get())
+            .await
+            .unwrap();
+        relabel("abandoned")
+            .execute(abandoned.connection())
+            .await
+            .unwrap();
+        drop(abandoned);
+
+        let mut person = VenueAccess::<Write>::write(&pool, fixture).await.unwrap();
+        relabel("person")
+            .execute(person.connection())
+            .await
+            .unwrap();
+        person.commit().await.unwrap();
+
+        assert_eq!(
+            installed::attributions(&pool, "fixtures").await,
+            vec![
+                (
+                    "PATCH".to_owned(),
+                    Some(serde_json::json!({
+                        "actor": "claude-opus-5-5",
+                        "thread": "thread-1",
+                        "message": "message-1",
+                        "group": "message-1",
+                    }))
+                ),
+                ("PATCH".to_owned(), None),
+            ]
+        );
     }
 
     #[tokio::test]

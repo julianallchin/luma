@@ -6,6 +6,7 @@ use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::models::scores::{Score, ScoreSummary};
 use crate::services::catalog;
+use crate::sync::triggers::Attribution;
 
 /// The score's document, assembled from its rows. `None` only when the id
 /// names no score.
@@ -132,6 +133,7 @@ pub async fn create_score(
         &track_id,
         &venue_id,
         name.as_deref(),
+        Attribution::PERSON,
     )
     .await?)
 }
@@ -151,6 +153,7 @@ pub async fn ensure_venue_score(
         &track_id,
         &venue_id,
         name.as_deref(),
+        Attribution::PERSON,
     )
     .await?)
 }

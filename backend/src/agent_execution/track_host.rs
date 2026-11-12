@@ -21,6 +21,7 @@ use crate::eval::context::resolve_primitive_ids;
 use crate::eval::{Arena, Scope};
 use crate::models::universe::UniverseState;
 use crate::storage::StorageRoot;
+use crate::sync::triggers::TurnAttribution;
 
 /// The score a cell may read, captured by the host from the durable thread.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -75,8 +76,8 @@ pub struct TrackHost {
     /// The draft this thread writes into, for a subagent. `None` means the
     /// thread edits the live score.
     draft_id: Option<String>,
-    /// Who this thread's writes are attributed to: the thread's `actor`.
-    actor: Option<String>,
+    /// Who this cell's writes are attributed to and the turn they belong to.
+    attribution: TurnAttribution,
 }
 
 impl TrackHost {
@@ -90,7 +91,7 @@ impl TrackHost {
         scope: TrackScope,
         edit_scope: Option<TrackEditScope>,
         draft_id: Option<String>,
-        actor: Option<String>,
+        attribution: TurnAttribution,
     ) -> Self {
         Self {
             runtime,
@@ -102,7 +103,7 @@ impl TrackHost {
             scope,
             edit_scope,
             draft_id,
-            actor,
+            attribution,
         }
     }
 

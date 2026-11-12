@@ -49,8 +49,9 @@ impl Preprocessor for BeatGridPreprocessor {
         let downbeats_json = serde_json::to_string(&beat_data.downbeats)
             .map_err(|e| format!("Failed to serialize downbeats: {e}"))?;
 
+        let mut write = ctx.publish().await?;
         tracks_db::upsert_track_beats(
-            ctx.pool(),
+            write.connection(),
             track_id,
             &beats_json,
             &downbeats_json,
@@ -59,6 +60,7 @@ impl Preprocessor for BeatGridPreprocessor {
             Some(beat_data.beats_per_bar as i64),
             self.version(),
         )
-        .await
+        .await?;
+        write.commit().await
     }
 }

@@ -46,7 +46,8 @@ const ATTRIBUTION_TABLE: &str = "CREATE TEMP TABLE IF NOT EXISTS luma_attributio
 
 /// Who a transaction's writes are for and what they belong to, as the
 /// server's history records them. Every part is optional: a person's own
-/// action has no actor and may still name its group.
+/// action has no actor and may still name its group. An actor that starts
+/// `app:` is the app acting on its own, and the server records it so.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Attribution<'a> {
     /// A model id or an MCP client's label. `None` is the signed-in person.
@@ -61,18 +62,116 @@ pub struct Attribution<'a> {
 }
 
 impl<'a> Attribution<'a> {
+    /// The signed-in person acting alone: the write carries no metadata.
+    pub const PERSON: Self = Self {
+        actor: None,
+        thread: None,
+        message: None,
+        group: None,
+    };
+
+    /// What analysis computed from a song's audio.
+    pub const ANALYSIS: Self = Self::actor("app:analysis");
+    /// A song brought into the library, and what its file says about it.
+    pub const IMPORT: Self = Self::actor("app:import");
+    /// Where a song's files went in Storage.
+    pub const MEDIA_SYNC: Self = Self::actor("app:media-sync");
+
     /// A write by `actor`, belonging to nothing else.
     #[must_use]
-    pub fn actor(actor: &'a str) -> Self {
+    pub const fn actor(actor: &'a str) -> Self {
         Self {
             actor: Some(actor),
-            ..Self::default()
+            thread: None,
+            message: None,
+            group: None,
         }
     }
 }
 
+/// An [`Attribution`] that owns its parts, for a host that outlives the call
+/// that named them: an agent turn's writes, wherever in the turn they are
+/// made.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TurnAttribution {
+    pub actor: Option<String>,
+    pub thread: Option<String>,
+    pub message: Option<String>,
+    pub group: Option<String>,
+}
+
+impl TurnAttribution {
+    /// What a turn of `thread` writes. `actor` is the thread's, `message` is
+    /// the one that started the turn, and that message names the group too,
+    /// so everything the turn writes is one change group.
+    #[must_use]
+    pub fn turn(actor: Option<&str>, thread: &str, message: Option<&str>) -> Self {
+        Self {
+            actor: actor.map(str::to_owned),
+            thread: Some(thread.to_owned()),
+            message: message.map(str::to_owned),
+            group: message.map(str::to_owned),
+        }
+    }
+
+    #[must_use]
+    pub fn get(&self) -> Attribution<'_> {
+        Attribution {
+            actor: self.actor.as_deref(),
+            thread: self.thread.as_deref(),
+            message: self.message.as_deref(),
+            group: self.group.as_deref(),
+        }
+    }
+}
+
+/// A write transaction on a pooled connection whose every write carries one
+/// [`Attribution`]. For the writes no venue guard admits: the app's own.
+///
+/// The attribution is a row in a connection-local table, written inside the
+/// transaction. [`Self::commit`] deletes it first, and dropping this
+/// uncommitted rolls it back with everything else. Either way the connection
+/// returns to the pool unattributed, so the person's next write on it is the
+/// person's.
+pub struct AttributedWrite<'a> {
+    transaction: sqlx::Transaction<'a, sqlx::Sqlite>,
+}
+
+impl<'a> AttributedWrite<'a> {
+    /// # Errors
+    ///
+    /// If the transaction cannot begin or be attributed.
+    pub async fn begin(
+        pool: &'a sqlx::SqlitePool,
+        attribution: Attribution<'_>,
+    ) -> Result<Self, String> {
+        let mut transaction = pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|error| format!("failed to begin an attributed write: {error}"))?;
+        attribute(&mut transaction, attribution).await?;
+        Ok(Self { transaction })
+    }
+
+    pub fn connection(&mut self) -> &mut SqliteConnection {
+        &mut self.transaction
+    }
+
+    /// # Errors
+    ///
+    /// If the attribution cannot be cleared or the transaction cannot commit.
+    /// Nothing is written then.
+    pub async fn commit(mut self) -> Result<(), String> {
+        unattribute(&mut self.transaction).await?;
+        self.transaction
+            .commit()
+            .await
+            .map_err(|error| format!("failed to commit an attributed write: {error}"))
+    }
+}
+
 /// The connection-local mark that the open transaction's writes are this
-/// device's alone. Like [`ACTOR_TABLE`] it holds a row only inside a
+/// device's alone. Like [`ATTRIBUTION_TABLE`] it holds a row only inside a
 /// transaction: [`local_only`] writes it, [`uploading`] clears it before
 /// commit, and a rollback clears it with everything else.
 const LOCAL_ONLY_TABLE: &str =
@@ -290,10 +389,48 @@ pub fn upload_queue(table: &SyncedTable) -> [String; 3] {
 }
 
 #[cfg(test)]
-mod installed {
+pub(crate) mod installed {
     use super::*;
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::SqlitePool;
+
+    /// Put the upload queue, and somewhere for it to write, on the one
+    /// connection of a single-connection test pool, so every write the code
+    /// under test makes through that pool is queued as the app's writers'
+    /// are.
+    pub(crate) async fn on_the_only_connection(pool: &SqlitePool) {
+        let mut connection = pool.acquire().await.unwrap();
+        crud_queue(&mut connection).await;
+        install(&mut connection).await.unwrap();
+    }
+
+    /// What each queued entry of `table` says about who wrote it, oldest
+    /// first: its operation and its metadata.
+    pub(crate) async fn attributions(
+        pool: &SqlitePool,
+        table: &str,
+    ) -> Vec<(String, Option<serde_json::Value>)> {
+        let queued: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT op, metadata FROM powersync_crud WHERE type = ? ORDER BY seq")
+                .bind(table)
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        queued
+            .into_iter()
+            .map(|(op, metadata)| {
+                let metadata =
+                    metadata.map(|text| serde_json::from_str(&text).expect("metadata is JSON"));
+                (op, metadata)
+            })
+            .collect()
+    }
+
+    fn app(what: &str) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "actor": what, "thread": null, "message": null, "group": null,
+        }))
+    }
 
     /// A stand-in for the core extension's `powersync_crud` view. The app's
     /// real pool has the extension loaded; these tests only need somewhere for
@@ -310,9 +447,13 @@ mod installed {
     }
 
     async fn database(name: &str) -> (tempfile::TempDir, SqlitePool) {
+        database_of(name, 2).await
+    }
+
+    async fn database_of(name: &str, connections: u32) -> (tempfile::TempDir, SqlitePool) {
         let directory = tempfile::tempdir().unwrap();
         let pool = SqlitePoolOptions::new()
-            .max_connections(2)
+            .max_connections(connections)
             .connect_with(
                 SqliteConnectOptions::new()
                     .filename(directory.path().join(name))
@@ -430,6 +571,86 @@ mod installed {
                 ("PUT", "w", None),
             ]
         );
+    }
+
+    /// What the app does on its own is labelled with what it was doing,
+    /// through the paths that do it, and the label never outlives its
+    /// transaction: committed or abandoned, the pool's connection comes back
+    /// the person's.
+    #[tokio::test]
+    async fn the_apps_own_writes_say_so_and_the_next_write_is_the_persons() {
+        use crate::database::local::tracks;
+
+        let (_directory, pool) = database_of("app.db", 1).await;
+        on_the_only_connection(&pool).await;
+
+        let (track, _) = tracks::insert_track_record(
+            &pool,
+            "hash",
+            &Some("Song".into()),
+            &None,
+            &None,
+            None,
+            None,
+            Some(180.0),
+            "/audio/song.ogg",
+            &None,
+            &None,
+            "alice",
+            Some("file"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        tracks::fill_track_metadata_gaps(&pool, &track, &None, &Some("Artist".into()), &None, None)
+            .await
+            .unwrap();
+
+        let mut analysis = AttributedWrite::begin(&pool, Attribution::ANALYSIS)
+            .await
+            .unwrap();
+        tracks::upsert_track_roots(analysis.connection(), &track, "[]", None, 1)
+            .await
+            .unwrap();
+        analysis.commit().await.unwrap();
+
+        crate::sync::files::record_upload(
+            &pool,
+            sqlx::query("UPDATE tracks SET storage_path = 'track-audio/song' WHERE id = ?")
+                .bind(&track),
+        )
+        .await
+        .unwrap();
+
+        let mut abandoned = AttributedWrite::begin(&pool, Attribution::ANALYSIS)
+            .await
+            .unwrap();
+        tracks::upsert_track_drum_onsets(abandoned.connection(), &track, "[]", 1)
+            .await
+            .unwrap();
+        drop(abandoned);
+
+        sqlx::query("UPDATE tracks SET title = 'Renamed' WHERE id = ?")
+            .bind(&track)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            attributions(&pool, "tracks").await,
+            vec![
+                ("PUT".to_owned(), app("app:import")),
+                ("PATCH".to_owned(), app("app:import")),
+                ("PATCH".to_owned(), app("app:media-sync")),
+                ("PATCH".to_owned(), None),
+            ]
+        );
+        assert_eq!(
+            attributions(&pool, "track_roots").await,
+            vec![("PUT".to_owned(), app("app:analysis"))]
+        );
+        assert_eq!(attributions(&pool, "track_drum_onsets").await, vec![]);
     }
 
     /// A part the write does not have is a `null`, not a missing key: an
