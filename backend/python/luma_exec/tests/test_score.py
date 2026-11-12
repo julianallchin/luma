@@ -303,6 +303,55 @@ class ScoreTests(unittest.TestCase):
         with self.assertRaisesRegex(TrackError, "unknown preview clip"):
             edit._preview("missing")
 
+    def test_a_reference_score_groups_its_clips_into_looks_and_roles(self):
+        from luma_exec.scores import Scores
+        track = self.track()
+        graph = color().json()
+        def clip(name, start, group):
+            return {"name": name, "graph": graph, "start": start, "duration": 1, "seed": 0,
+                    "selection": {"expression": group}, "z_index": 1, "blend_mode": "add"}
+        answers = {
+            "track.scores_find": {"scores": [{
+                "id": "other", "name": "Fantastic", "track_id": "track", "track_title": "Test",
+                "track_artist": "Someone", "venue_name": "frat", "clips": 3,
+                "updated_at": "2026-11-10T04:00:00Z"}]},
+            "track.scores_open": {
+                "id": "other", "name": "Fantastic", "track_id": "track", "track_title": "Test",
+                "same_track": True,
+                "venue": {"id": "venue-2", "name": "frat", "groups": [
+                    {"name": "bars", "fixtures": 4, "cells": 0, "models": ["Tetra"]},
+                    {"name": "movers", "fixtures": 2, "cells": 0, "models": ["Sharpy"]}]},
+                "document": {"clips": {
+                    "a": clip("Snare 1.2", 1, "bars"), "b": clip("Snare @2.2.1", 5, "bars"),
+                    "c": clip("Floor", 0, "bars | gone")}}},
+        }
+        calls = []
+        def call(method, payload):
+            calls.append((method, payload))
+            return answers.get(method, {"ok": True})
+        object.__setattr__(track, "_host_call", call)
+        scores = Scores(track)
+        found = scores.find("fantastic", track=track)
+        self.assertEqual(calls[0], ("track.scores_find", {"text": "fantastic", "track_id": "track"}))
+        self.assertIn('Test — Someone @ frat · "Fantastic" · 3 clips · edited 2026-11-10', repr(found))
+        ref = scores.open(found[0])
+        self.assertEqual(calls[1], ("track.scores_open", {"id": "other"}))
+        self.assertEqual(len(ref.clips), 3)
+        looks = ref.looks()
+        # Two clips named for one look and a place are one look, counted twice.
+        self.assertIn("Snare: 2x color add, 1 beats, on bars", looks)
+        self.assertIn("Floor: 1x color add, 1 beats, on bars | gone", looks)
+        self.assertEqual(ref.look("Snare").at, ref.clips[1].at)
+        roles = ref.roles()
+        self.assertIn("bars: 4 fixtures (Tetra): Floor 1x, Snare 2x", roles)
+        # A group the show never used is the lead for what to give a job.
+        self.assertIn("movers: 2 fixtures (Sharpy): unused", roles)
+        self.assertIn("gone: a group that no longer exists: Floor 1x", roles)
+        # A reference clip's graph places on the open track unchanged.
+        edit = track.edit()
+        placed = edit.add_clip(ref.look("Snare").graph, name="Snare", at=ref.look("Snare").at)
+        self.assertEqual(placed.graph.json(), graph)
+
 
 if __name__ == "__main__":
     unittest.main()
