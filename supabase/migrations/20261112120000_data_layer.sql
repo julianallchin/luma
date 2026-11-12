@@ -334,6 +334,58 @@ end
 $$;
 revoke all on function public.flag_children() from public, anon, authenticated;
 
+-- A live row is not written under a flagged parent. When a delete removed
+-- the parent its foreign key refused such a write; the parent row is still
+-- there now, so this refuses it the same way (a foreign-key violation, which
+-- the client lists as not saved). Without it the child would reach devices
+-- that no longer hold the parent, and a device refuses that download whole.
+-- A parent brought back uploads before its children, as any parent does.
+create or replace function public.live_parents() returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    written jsonb := to_jsonb(new);
+    parent record;
+    flagged boolean;
+begin
+    if nullif(current_setting('request.headers', true), '') is null
+       or written ->> 'deleted_at' is not null then
+        return new;
+    end if;
+    for parent in
+        select link.confrelid::regclass as relation, held.attname as reference
+        from pg_catalog.pg_constraint link
+        join pg_catalog.pg_class target
+          on target.oid = link.confrelid
+         and target.relnamespace = 'public'::regnamespace
+        join pg_catalog.pg_attribute id
+          on id.attrelid = link.confrelid and id.attname = 'id'
+        join pg_catalog.pg_attribute flag
+          on flag.attrelid = link.confrelid and flag.attname = 'deleted_at'
+         and not flag.attisdropped
+        join lateral unnest(link.conkey, link.confkey) as pair (child_column, parent_column)
+          on pair.parent_column = id.attnum
+        join pg_catalog.pg_attribute held
+          on held.attrelid = link.conrelid and held.attnum = pair.child_column
+        where link.contype = 'f' and link.conrelid = tg_relid
+    loop
+        execute format(
+            'select exists (select 1 from %s where id = $1 and deleted_at is not null)',
+            parent.relation)
+        using written ->> parent.reference into flagged;
+        if flagged then
+            raise exception '% % is under a deleted % (%)',
+                tg_table_name, written ->> 'id', parent.relation, parent.reference
+                using errcode = '23503';
+        end if;
+    end loop;
+    return new;
+end
+$$;
+revoke all on function public.live_parents() from public, anon, authenticated;
+
 -- A beat grid is written once.
 create or replace function public.keep_written() returns trigger
 language plpgsql
@@ -371,6 +423,21 @@ begin
             'create trigger %I after update of deleted_at on public.%I
              for each row execute function public.flag_children()',
             name || '_flag_children', name);
+    end loop;
+    foreach name in array array[
+        'venues', 'venue_members', 'fixtures', 'fixture_groups', 'fixture_group_members',
+        'venue_nodes', 'venue_node_params', 'venue_constraints', 'folders', 'folder_tracks',
+        'laser_zones', 'laser_limits', 'perform_patterns', 'perform_layouts',
+        'perform_controllers', 'control_bindings', 'tracks', 'track_beats',
+        'track_beat_validations', 'scores', 'clips', 'agent_threads',
+        'agent_thread_messages', 'agent_thread_transcript_heads',
+        'track_stems', 'track_roots', 'track_drum_onsets', 'track_bar_classifications',
+        'track_genres', 'drafts'
+    ] loop
+        execute format(
+            'create trigger %I before insert or update on public.%I
+             for each row execute function public.live_parents()',
+            name || '_live_parents', name);
     end loop;
 end
 $$;

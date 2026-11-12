@@ -1818,6 +1818,91 @@ async fn an_offline_edit_to_a_row_deleted_meanwhile_is_not_saved() {
     b.close().await;
 }
 
+/// A row written offline under a parent another device deleted meanwhile is
+/// refused, as the foreign key refused it when a delete removed the parent.
+/// Accepted, it would be a live row under a parent no device holds.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
+async fn an_offline_child_of_a_parent_deleted_meanwhile_is_not_saved() {
+    let Some(containers) = Containers::from_env() else {
+        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
+        return;
+    };
+    let admin = admin(&containers).await;
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let b = device(&directory.path().join("b"), &containers, USER).await;
+
+    let venue = unique("venue");
+    let score = unique("score");
+    seed(&a.sql, USER, &venue, &score, &[]).await;
+    let rig = rig(&a.sql, USER, &venue).await;
+    settles(
+        &b.sql,
+        &count("venue_nodes", "venue_id", &venue),
+        "2",
+        "B did not receive the stage",
+    )
+    .await;
+
+    b.sync.disconnect().await;
+    let param = id();
+    sqlx::query(
+        "INSERT INTO venue_node_params (id, uid, venue_id, node_id, key, value)
+         VALUES (?, ?, ?, ?, 'width', 2.0)",
+    )
+    .bind(&param)
+    .bind(USER)
+    .bind(&venue)
+    .bind(&rig.child)
+    .execute(&b.sql)
+    .await
+    .expect("offline parameter");
+    sqlx::query("DELETE FROM venue_nodes WHERE id = ?")
+        .bind(&rig.child)
+        .execute(&a.sql)
+        .await
+        .expect("delete the node");
+    wait_for_upload(&a.sql).await;
+    assert!(flag(&admin, "venue_nodes", &rig.child).await.0);
+
+    connect(&b, &containers, USER).await;
+    drained(&b.sql).await;
+    for (table, rows) in [("venue_nodes", "1"), ("venue_node_params", "0")] {
+        settles(
+            &b.sql,
+            &count(table, "venue_id", &venue),
+            rows,
+            &format!("{table} on B after A deleted the node"),
+        )
+        .await;
+    }
+    let refused: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT table_name, row_id, op FROM sync_rejections")
+            .fetch_all(&b.sql)
+            .await
+            .expect("refusals");
+    assert_eq!(
+        refused,
+        [(
+            "venue_node_params".to_owned(),
+            param.clone(),
+            "PUT".to_owned()
+        )],
+        "B's parameter is one refused write"
+    );
+    let kept: i64 =
+        sqlx::query_scalar("select count(*) from public.venue_node_params where id = $1")
+            .bind(&param)
+            .fetch_one(&admin)
+            .await
+            .expect("the server's parameters");
+    assert_eq!(kept, 0, "the server took a parameter under a deleted node");
+
+    a.close().await;
+    b.close().await;
+}
+
 /// A parent and its children leave a device in one checkpoint. Locally a
 /// child's foreign key is real, so a parent removed in an earlier checkpoint
 /// than its child, or a child that outlives it, is a download the device

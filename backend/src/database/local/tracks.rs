@@ -498,6 +498,16 @@ pub async fn record_track_beats(
     .fetch_optional(&mut *connection)
     .await
     .map_err(|e| format!("Failed to read the current beat grid: {e}"))?;
+    let id = Uuid::new_v4().to_string();
+    // A score that names no grid has been reading the current one. It is
+    // pinned to that grid before a newer one exists, or to this one when it
+    // is the track's first, so its clips stay where they were put.
+    sqlx::query("UPDATE scores SET grid_id = ?1 WHERE track_id = ?2 AND grid_id IS NULL")
+        .bind(current.as_ref().map_or(&id, |current| &current.id))
+        .bind(track_id)
+        .execute(&mut *connection)
+        .await
+        .map_err(|e| format!("Failed to pin scores to their beat grid: {e}"))?;
     let replaced = match current {
         Some(current) => {
             // A newer detector that agrees still writes its row: the stamp is
@@ -528,7 +538,7 @@ pub async fn record_track_beats(
                    julianday('now'),
                    COALESCE(julianday(?9) + 2.0 / 86400000.0, 0))) AS at) stamp",
     )
-    .bind(Uuid::new_v4().to_string())
+    .bind(id)
     .bind(track_id)
     .bind(beats_json)
     .bind(downbeats_json)
@@ -1387,8 +1397,8 @@ mod tests {
             }
         };
 
-        // A score made before the song is analysed names no grid, and reads
-        // whichever is current.
+        // A score made before the song is analysed names no grid until the
+        // first one is found, and keeps that one from then on.
         let early = catalog::create_score(
             &pool,
             &request(1),
@@ -1452,7 +1462,7 @@ mod tests {
         .unwrap();
         assert_eq!(beats(&written.id).await, Some(grid_at(120.)));
         assert_eq!(coverage().await, before);
-        assert_eq!(beats(&early.id).await, Some(grid_at(60.)));
+        assert_eq!(beats(&early.id).await, Some(grid_at(120.)));
 
         // A copy holds the same clips, so it names the same grid; a new
         // score is written against the current one.

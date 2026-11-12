@@ -51,6 +51,9 @@ transport underneath.
 - An edit that reaches the server after the row was flagged changes no row.
   The connector records that as "not saved", as it does any refused write.
 - A second delete of a flagged row succeeds and keeps the first stamp.
+- A live row written under a flagged parent is refused as a foreign-key
+  violation, so no device is sent a child whose parent it does not hold. A
+  parent brought back uploads before its children.
 - Where deleting was held more tightly than editing, the flag is held as
   tightly. Members edit a venue's row, and only its owner flags or revives
   it. A membership is flagged by its member or the venue's owner, revived
@@ -69,7 +72,8 @@ transport underneath.
 
 A beat grid is written once. Reanalysis inserts a new `track_beats` row; the
 track's current grid is its newest. `scores.grid_id` names the grid a score
-was written against. The server refuses an edit to a grid row.
+was written against. The server refuses an edit to a grid row. A score made
+before its song has a grid is given the first one when it is found.
 
 ## History
 
@@ -99,7 +103,8 @@ The client sends these as request headers: `x-luma-actor`, `x-luma-thread`,
 - Server-side, over every row, flagged ones included. Outside a request
   nothing is refused.
 - Each sets the actor to `migration:<file>` and bumps `public.data_format()`
-  with `PROJECTION_VERSION`.
+  with `PROJECTION_VERSION`. The cutover itself is the exception: it rebuilds
+  the log, so it writes no entries, and `public.legacy_ids` is its record.
 - Each ships a function that reads a row of the previous format as the new
   one (`public.row_from_format_1`), so old history entries stay readable.
   `public.legacy_ids` maps the ids format 1 built from other columns to the
