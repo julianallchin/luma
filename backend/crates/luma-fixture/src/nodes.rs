@@ -414,6 +414,18 @@ fn build(
     }
     let old = ctx.each;
     ctx.each = each;
+    // A hex of dies that each take one of a few colours interleaves them by
+    // place; a `colours` list that names every die keeps its own order.
+    let hex = node
+        .layout
+        .as_ref()
+        .is_some_and(|l| l.kind == LayoutKind::Hex)
+        && node
+            .child
+            .as_ref()
+            .and_then(|c| c.emitter.as_ref())
+            .and_then(|e| e.colours.as_ref())
+            .is_some_and(|cs| cs.iter().enumerate().all(|(i, c)| !cs[..i].contains(c)));
     for (i, (sx, sy, sw, sh)) in slots(node, w, h).into_iter().enumerate() {
         let child = match kids {
             Some(k) => Some(&k[i % k.len()]),
@@ -423,6 +435,9 @@ fn build(
         if clip && !inside(Some(NodeOutline::Circle), sx, sy, w, h) {
             continue;
         }
+        if hex {
+            ctx.colour_i.insert(key.clone(), hex_colour(sx, sy, sw));
+        }
         key.push(i);
         let r = build(b, child, x + sx, y + sy, sw, sh, ctx, cell, key);
         key.pop();
@@ -430,6 +445,19 @@ fn build(
     }
     ctx.each = old;
     Ok(())
+}
+
+/// The colour index of the hex slot at `(x, y)` with pitch `p`, for an
+/// emitter's `colours` to cycle over: hex slots are listed by distance from
+/// the centre, which would put neighbours in the same colour. On the lattice
+/// (axial `q`, `r`), `q + 2r` differs between any two neighbours modulo any
+/// count of three or more, so mixed dies sit interleaved as on the fixture.
+fn hex_colour(x: f64, y: f64, p: f64) -> usize {
+    let r = (y / (p * 0.866)).round() as i64;
+    let odd = r.rem_euclid(2);
+    let q = (x / p - odd as f64 * 0.5).round() as i64 - (r - odd) / 2;
+    // 840 is a multiple of every count up to 8.
+    (q + 2 * r).rem_euclid(840) as usize
 }
 
 /// A node's `fill`, `(fx, fy)`.
@@ -623,4 +651,38 @@ pub(crate) fn build_face(b: &mut Rig, root: &Node, g: Geom) -> Res {
         (c0..b.next_cell).collect(),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every die's six neighbours on a hex face are other colours, for faces
+    /// of three or four colours.
+    #[test]
+    fn hex_neighbours_differ_in_colour() {
+        let node: Node = serde_json::from_value(serde_json::json!({
+            "outline": "circle", "layout": {"kind": "hex", "n": 180}
+        }))
+        .unwrap();
+        let slots = slots(&node, 0.18, 0.18);
+        let pitch = slots[0].2;
+        let pts: Vec<(f64, f64)> = slots.iter().map(|&(x, y, _, _)| (x, y)).collect();
+        let mut pairs = 0;
+        for n in [3, 4] {
+            for (i, a) in pts.iter().enumerate() {
+                for b in &pts[i + 1..] {
+                    if (a.0 - b.0).hypot(a.1 - b.1) < pitch * 1.1 {
+                        pairs += 1;
+                        assert_ne!(
+                            hex_colour(a.0, a.1, pitch) % n,
+                            hex_colour(b.0, b.1, pitch) % n,
+                            "{a:?} and {b:?} share a colour of {n}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(pairs > 400, "only {pairs} neighbour pairs found");
+    }
 }
