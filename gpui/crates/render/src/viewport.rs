@@ -366,8 +366,10 @@ impl Viewport {
     /// honest answer on a machine with no GPU, and is why this is a `Result`
     /// rather than a panic: a host with no viewport is still a host.
     pub fn new() -> anyhow::Result<Self> {
+        let mut renderer = Renderer::new()?;
+        renderer.set_live_bounce(true);
         Ok(Self {
-            renderer: Renderer::new()?,
+            renderer,
             pixels: Vec::new(),
             subframes: LIVE_SUBFRAMES,
         })
@@ -1295,6 +1297,10 @@ fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>
     // second set of query buffers rather than a second device.
     let mut renderer = Gpu::shared()
         .map(|gpu| Renderer::profiling_on(Arc::clone(&gpu)).unwrap_or_else(|_| Renderer::on(gpu)))
+        .map(|mut renderer| {
+            renderer.set_live_bounce(true);
+            renderer
+        })
         .map_err(|error| error.to_string());
     let mut pending: [Option<(u64, PendingFrame)>; PRESENTATION_SLOTS] =
         std::array::from_fn(|_| None);

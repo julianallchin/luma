@@ -25,6 +25,7 @@
 
 pub mod assets;
 pub mod atmosphere;
+mod bounce;
 pub(crate) mod cables;
 pub mod camera_export;
 pub mod colour;
@@ -54,7 +55,6 @@ pub mod panel;
 mod pass_profile;
 pub mod photometry;
 mod post;
-mod probes;
 mod psf;
 mod quality;
 pub mod scene_desc;

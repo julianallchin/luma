@@ -117,7 +117,7 @@ impl Renderer {
             MAX_FIXTURE_SHADOWS,
         );
         let compaction = crate::haze_compact::Compaction::new(&gpu.device);
-        let probes = crate::probes::Probes::new(&gpu.device);
+        let bounce = crate::bounce::Bounce::new(&gpu.device);
         let haze_glow = crate::haze_glow::Glow::new(&gpu.device, &gpu.queue);
         Self {
             gpu,
@@ -126,7 +126,7 @@ impl Renderer {
             atmosphere: AtmosphereCache::default(),
             sun_shafts: crate::sun_shafts::Cache::default(),
             haze_glow,
-            probes,
+            bounce,
             sky_visibility: crate::sky_visibility::SkyVisibility::default(),
             post,
             shadow_map,
@@ -431,13 +431,19 @@ impl Renderer {
         self.geometry_shadows = enabled;
     }
 
-    /// Faces of the reflection probes still to capture since the stage last
-    /// changed: they are captured a probe a frame. Zero when every probe
-    /// holds the current stage, or when they are off.
-    #[doc(hidden)]
+    /// Whether the bounced light of the stage last shown is still being
+    /// baked: until it is, surfaces show the last stage's bounce, or none.
     #[must_use]
-    pub fn reflection_probes_pending(&self) -> u32 {
-        self.probes.pending()
+    pub fn bounce_pending(&self) -> bool {
+        self.bounce.pending()
+    }
+
+    /// Let the bounced light follow a live view: take the stage's bake
+    /// when it is done, without waiting, and carry the light a bounce a
+    /// frame. Off, as a renderer starts, every frame stands on its own, as a
+    /// still or a film frame must.
+    pub fn set_live_bounce(&mut self, live: bool) {
+        self.bounce.set_live_view(live);
     }
 
     /// Number of fixtures with resident shadow maps on the last frame.

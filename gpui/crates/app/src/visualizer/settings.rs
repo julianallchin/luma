@@ -8,7 +8,7 @@ use luma_ui::{float, glass};
 #[derive(Default)]
 pub(super) struct DockMotion {
     tooltip: Transition,
-    pub(super) switches: [Transition; 7],
+    pub(super) switches: [Transition; 6],
     knob_hovered: bool,
     light_dragging: bool,
     knob_bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
@@ -295,12 +295,11 @@ fn column(title: &'static str, body: impl IntoElement) -> Div {
         .child(body)
 }
 
-/// The Debug page: the reflection probes, their debug balls, and the
-/// camera export.
+/// The Debug page: the bounced light and the camera export.
 fn debug_rows(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
-    let probes = state.render_controls.probes;
+    let bounce = state.render_controls.bounce;
     // What the renderer is handed, read back from the settings it is sent.
-    let sent = state.render_settings().probes;
+    let sent = state.render_settings().bounce;
     div()
         .flex()
         .flex_col()
@@ -308,23 +307,15 @@ fn debug_rows(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .child(super::view_toggle(
             state,
             app,
-            "Reflection probes",
-            probes.enabled,
-            ViewToggle::ReflectionProbes,
-        ))
-        .child(super::view_toggle(
-            state,
-            app,
-            "Show probes",
-            probes.debug,
-            ViewToggle::ShowProbes,
+            "Bounced light",
+            bounce.enabled,
+            ViewToggle::BouncedLight,
         ))
         .child(div().size_0().agent_node(
             Role::Text,
             format!(
-                "Renderer probes = {}, balls {}",
-                if sent.enabled { "on" } else { "off" },
-                if sent.debug { "on" } else { "off" }
+                "Renderer bounce = {}",
+                if sent.enabled { "on" } else { "off" }
             ),
         ))
         .child(export_camera(app))
@@ -627,7 +618,7 @@ impl Luma {
             }
             ViewToggle::AutoExposure | ViewToggle::Footage => self.save_look(cx),
             // Session dials: they outlive nothing.
-            ViewToggle::ReflectionProbes | ViewToggle::ShowProbes => {}
+            ViewToggle::BouncedLight => {}
         }
         cx.notify();
     }

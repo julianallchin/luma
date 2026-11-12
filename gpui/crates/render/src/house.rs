@@ -196,8 +196,8 @@ pub struct Fill {
 /// lit to [`FLOOR_LUX`] times the level, reflects its albedo of that, and a
 /// surface sees [`FLOOR_VIEW`] of the floor's light on average. The room has
 /// no walls or ceiling to bounce from, so this is all of it. On a quality
-/// level with reflection probes the probes see the lit floor themselves and
-/// replace this term where they reach (`scene.wgsl`). It lights surfaces
+/// level with bounced light (`bounce.rs`) the lit floor's own bounce
+/// replaces this term. It lights surfaces
 /// only, never the haze. Direct light comes entirely from the downlights, so
 /// surfaces outside their reach receive no unrelated directional key. Bounce
 /// follows source output linearly; changing a dimmer does not change the

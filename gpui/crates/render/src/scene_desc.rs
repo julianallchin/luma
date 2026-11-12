@@ -269,10 +269,10 @@ pub struct RenderSettings {
     pub geometry_shadows: bool,
     /// Paint cluster occupancy instead of authored PBR shading.
     pub cluster_debug: bool,
-    /// The local reflection probes: a view choice for this session, never
-    /// saved. Starts as [`ProbeView::PLAIN`].
+    /// The bounced light: a view choice for this session, never saved.
+    /// Starts as [`BounceView::ON`].
     #[serde(skip)]
-    pub probes: ProbeView,
+    pub bounce: BounceView,
     /// Vertical field of view, degrees.
     pub fov: f32,
     /// How much work the renderer may spend per frame. A device choice, not
@@ -287,27 +287,22 @@ pub struct RenderSettings {
     pub(crate) golden_shadow_eye: Option<[f32; 3]>,
 }
 
-/// The local reflection probes (`probes.rs`), as the view shows them.
+/// The bounced light (`bounce.rs`), as the view shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ProbeView {
-    /// Light surfaces from the probes over the stage, not the sky probe
-    /// alone.
+pub struct BounceView {
+    /// Light surfaces by what the lit stage sends on to them, not the
+    /// house's flat fill and the sky probe alone.
     pub enabled: bool,
-    /// Draw each probe as a small ball showing its cube.
-    pub debug: bool,
 }
 
-impl ProbeView {
-    /// On, balls off: where every view starts.
-    pub const PLAIN: Self = Self {
-        enabled: true,
-        debug: false,
-    };
+impl BounceView {
+    /// On: where every view starts.
+    pub const ON: Self = Self { enabled: true };
 }
 
-impl Default for ProbeView {
+impl Default for BounceView {
     fn default() -> Self {
-        Self::PLAIN
+        Self::ON
     }
 }
 
@@ -843,7 +838,7 @@ impl RenderSettings {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
-            probes: ProbeView::PLAIN,
+            bounce: BounceView::ON,
             fov,
             quality: Quality::High,
             golden_shadow_eye: None,
@@ -881,7 +876,7 @@ impl RenderSettings {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
-            probes: ProbeView::PLAIN,
+            bounce: BounceView::ON,
             fov,
             quality: Quality::High,
             golden_shadow_eye: None,
@@ -935,7 +930,7 @@ impl RenderSettings {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
-            probes: ProbeView::default(),
+            bounce: BounceView::default(),
             fov,
             quality: Quality::High,
             golden_shadow_eye: None,
@@ -1046,7 +1041,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 fixture_shadows: wire.fixture_shadows.unwrap_or(true),
                 geometry_shadows: wire.geometry_shadows,
                 cluster_debug: wire.cluster_debug,
-                probes: ProbeView::default(),
+                bounce: BounceView::default(),
                 fov: wire.fov,
                 quality: wire.quality,
                 golden_shadow_eye: None,

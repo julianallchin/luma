@@ -31,11 +31,6 @@ performance measurement.
 
 ## What is not built
 
-- **Geometry-aware indirect lighting.** There is no pass that bounces fixture
-  light off surfaces with wall occlusion. Surfaces get their surroundings from
-  the relit reflection probes (`probes.rs`) and the haze's glow (below). Do not
-  add an emitter-summed ambient fill to stand in for it: it lights surfaces
-  even when beams hit nothing.
 - **Fixture photometry.** `gpui/crates/scene/src/luminaire.rs` uses relative
   lumen outputs (1 is a stock moving-head lamp) and a shared beam gain. A
   quoted zoom range is represented by its midpoint, not by live optics.
@@ -131,9 +126,46 @@ preserved.
 
 Low marches nothing and draws each beam in closed form (see "Quality levels").
 
+## Bounced light
+
+A lit floor lights the wall beside it and the truss over it
+(`gpui/crates/render/src/bounce/`). The stage's geometry is baked once, and
+its light is spread again every frame, so a fixture that turns red sends red
+off the floor in that frame.
+
+- **Bake** (`bake.rs`, CPU, on a thread, when the stage's geometry changes).
+  Every big surface is cut into discs about half a metre across. For each
+  disc, and for each point of a grid in the air, one ray to every other disc
+  says what it sees, and that becomes links: the share of an emitter's light
+  that lands on the receiver. Discs are sorted into patches and patches into
+  groups, and a receiver links to the coarsest of these that says the same
+  thing as its discs one by one (`Settings::error`), so a far wall is a
+  handful of links. No GPU ray tracing: it runs the same on every machine.
+- **Relight** (`bounce_relight.wgsl`). The light landing on every disc from
+  the sun, the sky probe and every fixture cone with its shadow map, through
+  the scene pass's own functions.
+- **Spread** (`bounce_spread.wgsl`). Each receiver adds up its links. What a
+  disc gathers it sends on in the next frame's relight, so a live view carries
+  the light one bounce further each frame at no cost. A still carries it four
+  bounces in its one frame, from nothing, so it depends on nothing before it.
+- **Picture** (`bounce_low.wgsl`, `bounce_sample.wgsl`). At every fourth
+  pixel of the depth prepass, the discs on the surface there, cut off by each
+  disc's clip planes so a barrier does not glow with what is behind it. The
+  scene pass spreads these over the pixels between. A pixel no disc speaks
+  for (a truss tube, a fixture's body) takes its light from the air grid.
+
+Where the bounce is live it replaces the house's flat fill. A live view takes
+a new bake when it is done and shows the old one meanwhile; a changed stage is
+baked once it has held still for a few frames. Fixture bodies are left out of
+the bake, so a moving head never starts one.
+
+Not built: emissive surfaces (LED panels) send no bounce, the sharp sheen of
+a polished floor is blurred to the discs' size, and outdoors the sky hidden by
+the stage is still taken off by the ambient visibility alone.
+
 ## Sky visibility and ambient occlusion
 
-The ambient terms (house ambient, probe diffuse and probe specular) are scaled
+The ambient terms (house ambient, the bounce, probe diffuse and probe specular) are scaled
 by a per-pixel visibility texture (`sky_visibility.rs`,
 `shaders/ambient_occlusion.wgsl`), so the legs and underside of a deck do not
 get the full sky and the full ground bounce. Sun and fixture light are not
@@ -289,10 +321,12 @@ every pass reads.
 - **Medium** is a laptop GPU's budget: haze at half resolution at most, 4 gobo
   samples at most, a 1 MP pixel budget, MSAA 1×, 16 px fog cells, a plain-beam cap of 4 pieces, 16
   shadow redraws a frame, twice the shadow-walk footprint and half its steps,
-  and twice again while the camera moves. It also runs no local reflection
-  probes, coarser sun shafts, clouds and haze glow, the half-size glare grid,
+  and twice again while the camera moves. It also runs a coarser bounce
+  (below), coarser sun shafts, clouds and haze glow, the half-size glare grid,
   and no floor detail.
 - **Low** keeps Medium's budgets and:
+  - **Bounces no light** (`QualityBudget::bounce`). Surfaces take the house's
+    flat fill and the sky probe.
   - **Marches no haze** (`QualityBudget::marched`). No fog grid, medium
     cache, lit-interval cache, compaction or haze kernel runs, and there are
     no sun shafts and no haze glow. One compute pass,

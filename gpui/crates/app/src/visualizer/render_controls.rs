@@ -66,9 +66,8 @@ pub(super) struct RenderControls {
     /// pixel budget in [`render_size`], and the rest inside the
     /// renderer.
     pub(super) quality: scene_desc::Quality,
-    /// The local reflection probes and their debug balls: a session view
-    /// choice, never saved.
-    pub(super) probes: scene_desc::ProbeView,
+    /// The bounced light: a session view choice, never saved.
+    pub(super) bounce: scene_desc::BounceView,
 }
 
 /// [`scene_desc::DirectionalLight::EDITOR`]'s direction as an azimuth and
@@ -134,7 +133,7 @@ impl RenderControls {
         render.fixture_surface_lighting = self.fixture_surface_lighting;
         render.geometry_shadows = true;
         render.look = self.look;
-        render.probes = self.probes;
+        render.bounce = self.bounce;
         render
     }
 
@@ -178,7 +177,7 @@ impl RenderControls {
             render_scale_percent: 0,
             look: scene_desc::Look::STAGE,
             quality: scene_desc::Quality::High,
-            probes: scene_desc::ProbeView::default(),
+            bounce: scene_desc::BounceView::default(),
         };
         controls.set_environment(environment);
         controls.apply_settings(&AppSettings::default());
@@ -239,8 +238,7 @@ pub(super) enum ViewToggle {
     Grid,
     Gizmos,
     AutoExposure,
-    ReflectionProbes,
-    ShowProbes,
+    BouncedLight,
     /// The footage look, [`scene_desc::Footage`].
     Footage,
 }
@@ -306,8 +304,7 @@ impl RenderControls {
                     }
                 };
             }
-            ViewToggle::ReflectionProbes => self.probes.enabled = !self.probes.enabled,
-            ViewToggle::ShowProbes => self.probes.debug = !self.probes.debug,
+            ViewToggle::BouncedLight => self.bounce.enabled = !self.bounce.enabled,
             ViewToggle::Footage => {
                 self.look.footage.enabled = !self.look.footage.enabled;
             }

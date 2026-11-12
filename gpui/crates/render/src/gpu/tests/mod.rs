@@ -529,6 +529,7 @@ fn fixture_surface_frame(count: usize) -> Frame {
         })
         .collect();
     Frame {
+        room_hidden: Vec::new(),
         meshes: vec![mesh],
         images: Vec::new(),
         draws: vec![Draw {
@@ -554,7 +555,7 @@ fn fixture_surface_frame(count: usize) -> Frame {
         fixture_shadows: true,
         geometry_shadows: false,
         cluster_debug: false,
-        probes: crate::scene_desc::ProbeView::default(),
+        bounce: crate::scene_desc::BounceView::default(),
         clear_color: Vec3::ZERO,
         room: None,
         ambient: Vec3::splat(0.002),
@@ -635,6 +636,7 @@ fn overlay_test_frame(
         .into_iter()
         .collect();
     Frame {
+        room_hidden: Vec::new(),
         meshes: vec![mesh],
         images: Vec::new(),
         draws,
@@ -657,7 +659,7 @@ fn overlay_test_frame(
         fixture_shadows: true,
         geometry_shadows: false,
         cluster_debug: false,
-        probes: crate::scene_desc::ProbeView::default(),
+        bounce: crate::scene_desc::BounceView::default(),
         environment: None,
         clear_color: scene_radiance,
         room: None,

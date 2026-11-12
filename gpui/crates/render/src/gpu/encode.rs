@@ -432,6 +432,22 @@ impl Renderer {
         // fog grid on frames that run the fog chain, so the scene pass is
         // encoded after `fog-transmittance` then; otherwise it marches.
         let scene_after_fog = grid_fog;
+        // The bounced light (`bounce.rs`) takes this frame's stage. Where it
+        // is live the house's flat fill, which stands in for the house
+        // lamps' bounce off the floor, gives way to the bounce itself.
+        self.bounce.prepare(
+            &self.gpu.bounce,
+            &self.gpu.device,
+            &self.gpu.queue,
+            frame,
+            opaque,
+            (width, height),
+        );
+        let fill = if self.bounce.live() && frame.room.is_some() {
+            Vec3::ZERO
+        } else {
+            frame.ambient
+        };
         let mut globals = Globals {
             surface_fog: [fog_far, f32::from(u8::from(grid_fog)), 0.0, 0.0],
             viewport: [
@@ -452,7 +468,7 @@ impl Renderer {
                 CASCADE_SPLITS[2],
                 CASCADE_BLEND,
             ],
-            ambient: frame.ambient.extend(0.0).to_array(),
+            ambient: fill.extend(0.0).to_array(),
             room: frame.room.map_or([0.0; 4], |room| {
                 [room.centre.x, room.centre.y, room.half.x, room.half.y]
             }),
@@ -487,22 +503,15 @@ impl Renderer {
         }
         let ambient_buf = self.environment.ambient(&self.gpu.device);
         let mut ambient_probe = self.environment.irradiance(&self.gpu.environment).clone();
-        let (probe_cubes, probe_grid, probe_ambient) = self.probes.bindings();
-        let local_probes = crate::environment::LocalProbes {
-            cubes: probe_cubes,
-            dummy: self.gpu.probes.dummy_cubes(),
-            grid: probe_grid,
-            ambient: probe_ambient,
-        };
+        let local_bounce = self.bounce.bindings();
         let (_environment_uniform, environment_groups) = self.environment.bind_group(
             &self.gpu.environment,
             &self.gpu.device,
             frame.environment.as_ref(),
             &ambient_buf,
-            &local_probes,
+            &local_bounce,
         );
-        let mut environment_bg = environment_groups.scene;
-        let mut probe_environment_bg = environment_groups.relight;
+        let mut environment_bg = environment_groups;
         // The sky, when there is one, is both the background the composite
         // resolves and the probe the scene pass is lit by. Its tables are
         // rebuilt only when the sun moves, so this is a cache hit for every
@@ -536,14 +545,12 @@ impl Renderer {
             &mut pass_queries,
         );
         if let Some(probe) = &sky_probe {
-            let groups = self.gpu.environment.sky_bind_group(
+            environment_bg = self.gpu.environment.sky_bind_group(
                 &self.gpu.device,
                 probe,
                 &ambient_buf,
-                &local_probes,
+                &local_bounce,
             );
-            environment_bg = groups.scene;
-            probe_environment_bg = groups.relight;
             ambient_probe = probe.0.clone();
         }
         // Frame-constant probe mean, computed once here instead of by six cube
@@ -917,12 +924,10 @@ impl Renderer {
             .clone()
             .unwrap_or_else(|| self.gpu.sun_shafts.off.clone());
         // Built after the targets: binding 13 is this frame's fog prefix.
-        // The probe relight's copy binds every cone in source order in place
-        // of the light index's in-view subset (`probes.rs`).
-        self.probes
+        // The bounce relight's copy binds every cone in source order in place
+        // of the light index's in-view subset (`bounce.rs`).
+        self.bounce
             .set_lights(&self.gpu.device, &self.gpu.queue, &cores, &rests);
-        let probe_work = self.probes.prepare(&self.gpu.queue, frame, opaque);
-        let probe_debug_balls = self.probes.debug_balls();
         // Where the haze's glow is this frame, before the surfaces and the
         // composite bind it; it is filled after the shadow maps.
         self.haze_glow
@@ -974,10 +979,10 @@ impl Renderer {
             &index_bindings.core,
             &index_bindings.rest,
         );
-        let probe_cluster_bg = self
-            .probes
+        let bounce_cluster_bg = self
+            .bounce
             .cone_buffers()
-            .map(|(core, rest)| cluster_group("probe-clusters", core, rest));
+            .map(|(core, rest)| cluster_group("bounce-clusters", core, rest));
         // This block runs to the end of the function: `encode_scene` below
         // captures its draw closures and is called either here or, when the
         // surface pass reads the fog grid, after `fog-integrate`.
@@ -1387,51 +1392,33 @@ impl Renderer {
                 );
             }
 
-            // The local reflection probes (`probes.rs`): this frame's share
-            // of any capture, then every probe relit and prefiltered, before
-            // the scene pass samples them.
-            if self.probes.live() {
-                let capture = probe_work.capture.clone();
-                if !capture.is_empty() {
-                    let spheres: Vec<(Vec3, f32)> = frame.draws[..opaque]
-                        .iter()
-                        .map(|draw| world_sphere(draw, mesh_bounds[draw.mesh]))
-                        .collect();
-                    self.probes.encode_capture(
-                        &self.gpu.probes,
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &mut encoder,
-                        &instance_buf,
-                        capture,
-                        pass_queries.render("probe-capture", None),
-                        |pass, at, face, texels| {
-                            pass.set_vertex_buffer(0, vertex_buf.slice(..));
-                            pass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                            for (i, (centre, radius)) in spheres.iter().enumerate() {
-                                if !crate::probes::face_sees(face, *centre - at, *radius, texels) {
-                                    continue;
-                                }
-                                pass.set_bind_group(1, &materials[i], &[]);
-                                let (first, last, base) = ranges[frame.draws[i].mesh];
-                                pass.draw_indexed(first..last, base, i as u32..i as u32 + 1);
-                            }
-                        },
-                    );
-                }
-                if let Some(probe_clusters) = &probe_cluster_bg {
-                    self.probes.encode_relight(
-                        &self.gpu.probes,
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &mut encoder,
-                        &lit_bg,
-                        &probe_environment_bg,
-                        probe_clusters,
-                        pass_queries.compute("probe-relight", None),
-                        pass_queries.compute("probe-filter", None),
-                    );
-                }
+            // The bounced light (`bounce.rs`): the discs lit by this frame's
+            // light and spread, then the low pictures of it over the depth
+            // prepass, before the scene pass samples them.
+            if let Some(bounce_clusters) = self
+                .bounce
+                .live()
+                .then_some(())
+                .and(bounce_cluster_bg.as_ref())
+            {
+                self.bounce.encode_spread(
+                    &self.gpu.bounce,
+                    &mut encoder,
+                    &lit_bg,
+                    &environment_bg,
+                    bounce_clusters,
+                    pass_queries.compute("bounce-relight", None),
+                    pass_queries.compute("bounce-spread", None),
+                );
+                self.bounce.encode_low(
+                    &self.gpu.bounce,
+                    &self.gpu.device,
+                    &mut encoder,
+                    &ambient_params_buf,
+                    &depth_view,
+                    (width, height),
+                    pass_queries.compute("bounce-low", None),
+                );
             }
 
             // The scene pass reads nothing the haze chain writes unless the
@@ -1499,11 +1486,6 @@ impl Renderer {
                 }
                 pass.set_pipeline(&pipelines.scene);
                 draw_range(&mut pass, &lit_draws);
-                if let Some(balls) = probe_debug_balls {
-                    pass.set_pipeline(&pipelines.probe_debug);
-                    pass.set_bind_group(1, &gpu.white_material, &[]);
-                    pass.draw(0..crate::probes::DEBUG_BALL_VERTICES, 0..balls);
-                }
                 for (slot, kind) in frame.transparent.iter().enumerate() {
                     pass.set_pipeline(match kind {
                         crate::frame::Transparent::Grid => &pipelines.grid,

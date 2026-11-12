@@ -52,7 +52,7 @@ fn luminaire_face(built: &luma_fixture::Built, worlds: &[Mat4]) -> Option<(Vec3,
 }
 
 /// The mesh-key prefix of a room's own walls and ceiling.
-const ROOM_PANEL: &str = "::room-panel:";
+pub(crate) const ROOM_PANEL: &str = "::room-panel:";
 
 impl Frame {
     /// Take away the walls and the ceiling that stand between the camera and
@@ -68,9 +68,11 @@ impl Frame {
                     .dot(draw.model.transform_vector3(Vec3::Z))
                     <= 0.0
         };
-        let meshes = std::mem::take(&mut self.meshes);
-        self.draws.retain(|draw| !hidden(draw, &meshes));
-        self.meshes = meshes;
+        let (hidden, shown) = std::mem::take(&mut self.draws)
+            .into_iter()
+            .partition(|draw| hidden(draw, &self.meshes));
+        self.draws = shown;
+        self.room_hidden.extend::<Vec<Draw>>(hidden);
     }
 }
 
@@ -274,6 +276,10 @@ pub struct Frame {
     /// order. Depth-only passes take the opaque prefix; nothing in the tail
     /// writes depth.
     pub draws: Vec<Draw>,
+    /// The room's walls and ceiling that [`Frame::open_room_to_camera`] took
+    /// out of `draws`: not drawn, and still where light bounces
+    /// (`bounce.rs`).
+    pub room_hidden: Vec<Draw>,
     /// The pipeline each trailing transparent draw is painted with, in paint
     /// order. One list rather than a count per kind: a second count is a
     /// second definition of where the opaque prefix ends.
@@ -305,8 +311,8 @@ pub struct Frame {
     pub geometry_shadows: bool,
     /// Whether the surface shader visualizes cluster occupancy.
     pub cluster_debug: bool,
-    /// The local reflection probes, and whether to draw them.
-    pub probes: crate::scene_desc::ProbeView,
+    /// Whether the lit stage's bounced light is drawn (`bounce.rs`).
+    pub bounce: crate::scene_desc::BounceView,
     /// Linear, the `<color attach="background">` value.
     pub clear_color: Vec3,
     /// Linear ambient-light colour multiplied by its intensity.
@@ -1609,6 +1615,7 @@ pub fn build_at(
         meshes: bank.meshes,
         images: bank.images,
         draws,
+        room_hidden: Vec::new(),
         transparent,
         gizmo_pivot,
         fixture_cones,
@@ -1619,7 +1626,7 @@ pub fn build_at(
         fixture_shadows: scene.render.fixture_shadows,
         geometry_shadows: scene.render.geometry_shadows,
         cluster_debug: scene.render.cluster_debug,
-        probes: scene.render.probes,
+        bounce: scene.render.bounce,
         clear_color: Vec3::from(scene.render.environment.background),
         room: lit_room,
         // Under a sky the fill is the sky itself, arriving as an image-based

@@ -646,23 +646,18 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
     );
     let occlusion = ao * visibility.r;
     let reflected = reflect(-v, n);
-    let local = probe_light(in.world, n, reflected, roughness);
-    // The ambient is the house's bounce off the floor (`house.rs`). Where
-    // the local probes reach they have seen the lit floor and the lit stage
-    // themselves, so their diffuse light is the bounce and this gives way.
-    out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion
-        * (1.0 - local.weight);
+    let local = bounce_light(in.world, n, reflected, in.clip.xy, dx, dy);
+    // The ambient is the house's bounce off the floor (`house.rs`), a flat
+    // stand-in: nothing on a frame whose bounced light is live (`bounce.rs`).
+    out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * occlusion;
     // The light the haze scatters (`haze_glow_sample.wgsl`) comes from every
     // side: a quarter of its fluence lands on a surface. Read a little off
     // the surface, in the air that lights it.
     let haze_light = 0.25 * haze_glow_fluence(in.world + n * 0.3);
     out += haze_light * diffuse_color * RECIPROCAL_PI * occlusion;
-    // Environment light: the sky probe, and over the stage what the local
-    // reflection probes (`probe_sample.wgsl`) say the stage changes of it:
-    // the stage's own light, less the sky it hides. On open ground they
-    // change nothing, so the grid's edge does not show. Their change is
-    // absolute, the sky probe's radiance scaled by its intensity, and it
-    // lights a room that has no sky probe at all.
+    // Environment light: the sky probe, and what the lit stage sends on
+    // (`bounce_sample.wgsl`). The bounce is absolute, not scaled by the sky
+    // probe's intensity, and it lights a room that has no sky probe at all.
     let sky_probe = environment_params.enabled > 0.5 && environment_params.intensity > 0.0;
     if sky_probe || local.weight > 0.0 {
         let dot_nv = saturate(dot(n, v));
@@ -676,18 +671,12 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             vec2<f32>(dot_nv, roughness),
             0.0,
         ).rg;
-        // The occlusion both environment terms take: this pixel's own
-        // ambient visibility, and outdoors the stage height field's share of
-        // sky and lit ground (`occluded_sky`), as a ratio to the open sky
-        // probe. The local probes need it as much as the sky probe does: they
-        // stand over the deck and the barriers, not under them, so what lies
-        // under a deck is darker than anything they saw.
-        var diffuse_visibility = vec3<f32>(visibility.r);
-        var specular_visibility = vec3<f32>(lobe);
-        // Radiance for the split sum's specular, and E / pi for the diffuse
-        // with its visibility taken: the sky probe's, plus the probes'
-        // change, which may be negative. Only the sum is kept from going
-        // below nothing.
+        // What the sky probe's reflection is hidden by: this pixel's own
+        // ambient visibility, and outdoors the stage height field's share
+        // of sky and lit ground (`occluded_sky`).
+        var sky_visibility = vec3<f32>(lobe);
+        // The sky probe's light: radiance for the split sum's specular, and
+        // E / pi for the diffuse with its visibility taken.
         var diffuse_light = vec3<f32>(0.0);
         var specular_light = vec3<f32>(0.0);
         if sky_probe {
@@ -699,9 +688,8 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             ).rgb;
             if globals.room_falloff.y > 0.5 {
                 let sky = occluded_sky(n, irradiance, visibility);
-                diffuse_visibility *= min(sky.irradiance / max(irradiance, vec3<f32>(1e-5)), vec3<f32>(1.0));
                 irradiance = sky.irradiance;
-                specular_visibility *= mix(sky.ground, vec3<f32>(visibility.g), smoothstep(-0.2, 0.2, reflected.z));
+                sky_visibility *= mix(sky.ground, vec3<f32>(visibility.g), smoothstep(-0.2, 0.2, reflected.z));
             }
             let prefiltered = textureSampleLevel(
                 environment_specular,
@@ -712,12 +700,15 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             diffuse_light = irradiance * visibility.r * environment_params.intensity;
             specular_light = prefiltered * environment_params.intensity;
         }
+        let glossy = f0 * brdf.x + brdf.y;
+        var ibl = diffuse_light * diffuse_color * (vec3<f32>(1.0) - fresnel)
+            + specular_light * glossy * sky_visibility;
         if local.weight > 0.0 {
-            diffuse_light += local.diffuse * diffuse_visibility * local.weight;
-            specular_light += local.specular * local.weight;
+            // The bake knows what stands in the bounce's way; this pixel's
+            // own small-scale visibility is all that is left to take.
+            ibl += local.diffuse * visibility.r * diffuse_color * (vec3<f32>(1.0) - fresnel)
+                + (local.specular * glossy + local.mirror) * lobe;
         }
-        let ibl = max(diffuse_light, vec3<f32>(0.0)) * diffuse_color * (vec3<f32>(1.0) - fresnel)
-            + max(specular_light, vec3<f32>(0.0)) * (f0 * brdf.x + brdf.y) * specular_visibility;
         out += ibl * ao;
     }
 

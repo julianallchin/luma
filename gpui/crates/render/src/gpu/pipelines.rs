@@ -73,7 +73,7 @@ impl Gpu {
                 count: None,
             },
         ]);
-        // The probe relight (`probes.rs`) lights its texels with the scene
+        // The bounce relight (`bounce.rs`) lights its discs with the scene
         // pass's own functions, in compute, so groups 0 and 3 are visible there.
         for entry in &mut scene_entries {
             entry.visibility |= wgpu::ShaderStages::COMPUTE;
@@ -451,14 +451,12 @@ impl Gpu {
 
         let vertex_layout = mesh_vertex_layout();
 
-        let probes = crate::probes::Pipelines::new(
+        let bounce = crate::bounce::Pipelines::new(
             &device,
-            &crate::probes::PipelineSources {
-                material_layout: &material_layout,
+            &crate::bounce::PipelineSources {
                 scene_layout: &scene_layout,
                 environment_layout: environment.scene_layout(),
                 cluster_layout: &cluster_layout,
-                vertex_layout: mesh_vertex_layout(),
                 scene_source: &scene_wgsl,
             },
         );
@@ -1232,7 +1230,7 @@ impl Gpu {
             sun_shafts,
             laser,
             haze_glow,
-            probes,
+            bounce,
             scene_layout,
             material_layout,
             cluster_layout,
