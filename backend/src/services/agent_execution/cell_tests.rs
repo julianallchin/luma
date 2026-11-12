@@ -935,6 +935,26 @@ legs = luma.venue.nodes(label="*leg")
         out.stdout
     );
 
+    // A group the agent made can be taken away again, and only that one goes.
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            "v = luma.venue\n\
+             before = v.groups().names()\n\
+             v.group('scratch', [])\n\
+             said = v.remove_group('scratch')\n\
+             (said, v.groups().names() == before)",
+        )
+        .await;
+    expect_ok(&out, "remove a group");
+    assert_eq!(
+        out.repr.as_deref(),
+        Some("('removed group scratch', True)"),
+        "{}",
+        out.stdout
+    );
+
     f.service.shutdown_all();
 }
 

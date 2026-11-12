@@ -845,9 +845,20 @@ class Music:
                 found.append(f"{name} {delta:+.0f} dB")
         return ", ".join(found) or "same"
 
+    @property
+    def missing(self) -> tuple[str, ...]:
+        """The analysis this track lacks, and what each absence costs."""
+        missing = []
+        if not any(len(times) for times in self._raw_onsets.values()):
+            missing.append("drum onsets (onsets is empty, the grid shows no drums and feel is the grid tempo)")
+        if all(value is None for value in self._mert.values()):
+            missing.append("MERT embeddings (no sections or find_like; similar compares bands and hits only)")
+        return tuple(missing)
+
     def __repr__(self) -> str:
+        missing = "".join(f"\nMISSING {item}; tell the user" for item in self.missing)
         return (f"<luma.music {self.feel.bpm:.0f} bpm felt (grid {self._grid_bpm:.0f}), {self.bar_count} bars: "
-                "listen deviations modulation similar sections find_like; beats onsets envelopes mert>")
+                f"listen deviations modulation similar sections find_like; beats onsets envelopes mert>{missing}")
 
 
 # ---------------------------------------------------------------------------

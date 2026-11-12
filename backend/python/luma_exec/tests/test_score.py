@@ -24,7 +24,11 @@ class ScoreTests(unittest.TestCase):
         adjacent = edit.add_clip(graph, name="Wash", id="adjacent", at=("2.3", "3"))
         explicit = edit.add_clip(graph, name="Wash", id="explicit", at=("1", "2"), z=0)
         self.assertEqual((first.z, second.z, adjacent.z, explicit.z), (0, 1, 0, 0))
-        edit.apply()
+        receipt = edit.apply()
+        self.assertEqual(repr(receipt).splitlines()[0], "applied: +3 added, ~0 changed, -0 removed")
+        self.assertIn("3 clips of 1 distinct graphs on 2 layers", repr(receipt))
+        self.assertNotIn("graph", repr(receipt).split("distinct graphs")[1])
+        self.assertEqual(set(receipt["clips"]), {"second", "adjacent", "explicit"})
         saved = self.calls[-1][1]["candidate"]["clips"]
         self.assertEqual(saved["second"]["z_index"], 1)
         self.assertEqual(saved["explicit"]["z_index"], 0)
