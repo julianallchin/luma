@@ -1,6 +1,6 @@
 ---
 name: composing-patterns
-description: How to build clip graphs and place them as clips, in the fewest calls. The working order, a complete audio-reactive example, how to measure the result as numbers, how to read the checker's errors, and the API rules that cost the most retries. Read before placing clips.
+description: How to build clip graphs and place them as clips, in the fewest calls. The working order, a complete timed example, how to measure the result as numbers, how to read the checker's errors, and the API rules that cost the most retries. Read before placing clips.
 ---
 # Composing patterns
 
@@ -26,27 +26,42 @@ mode. Build, add, measure, apply.
 6. **Look once** with `luma.venue.render(edit=edit, only=clip, t=...)`.
 7. **Apply** with `edit.apply()`, then tell the user what the room will feel like.
 
-## A complete example: a kick-driven chase over a wash
+## A complete example: a floor, a chase and a hit on every snare
 
-A dim blue wash, with a white chase above it. The kick makes the chase
-brighter.
+A dim blue floor, a chase that crosses the bars once every two beats, and a
+short white hit placed on each snare the track really has. Nothing here
+follows the audio level: the chase runs on the clock and the hits sit where
+the snares were measured.
 
 ```python
 edit = luma.track.edit()
-end = luma.track.duration_s
+drop = ("33", "49")
 
-edit.add_clip(color(color="#1030ff", brightness=0.3),
-              name="Blue wash", seconds=(0.0, end), selection="all")
+edit.add_clip(color(color="#1030ff", brightness=0.15),
+              name="Blue floor", at=drop, selection="all")
 
-t = time(every=1, duration=2)
+t = time(every=2)
 place = space(shift=curve(t, "Ramp up", low=-0.2, high=1), scale=0.2)
 pill = curve(place, [[0, 0], [0, 1], [1, 1], [1, 0]])
-kick = curve(audio("low"), "Ramp up", low=0.3, high=1)
-chase = color(brightness=pill * kick)
-clip = edit.add_clip(chase, name="Kick chase", seconds=(0.0, end),
-                     selection="led_bars_vertical", blend="screen")
+edit.add_clip(color(brightness=0.6 * pill), name="Chase", at=drop,
+              selection="led_bars_vertical", blend="screen")
+
+def hit(every=None):
+    return color(color="#ffffff", brightness=0.8,
+                 alpha=curve(time(every=every), "Ramp down"))
+
+snare = luma.music.onsets["snare"]
+start, stop = (luma.track.seconds_at(p) for p in drop)
+for s in snare.time_s:
+    if start <= s < stop:
+        edit.add_clip(hit(), name="Snare", seconds=(s, s + 0.2),
+                      selection="strobes", blend="screen")
 edit.check()
 ```
+
+The look is one function, so every hit shares one graph. When every hit in
+the range sits on the grid, one clip with `hit(every=4)` does the same job;
+when any hit is off the grid or a bar is skipped, it is one clip per hit.
 
 `clip.graph.source()` prints Python that builds the same graph. Use it to
 read a clip that is already in the score, change a line, and pass the new
@@ -84,9 +99,11 @@ graph to `edit.update_clip(clip, graph=...)`.
   a short plan; `edit.diff(full=True)` gives the raw clips.
 - **`luma.track.document` is a property.** Do not call it.
 - **Python calls need `purpose`.** The tool refuses a cell without it.
-- **Selection is a group expression.** Operators: `&` and, `|` or, `^` xor,
-  `~` not, `>` fallback, parentheses. `"all"` is the whole venue. Names are
-  lower case with underscores, as `luma.venue.groups()` prints them.
+- **A selection is `"all"`, one group name, or several joined with `|`.**
+  `|` is their union; there is no other operator. Names are lower case with
+  underscores, as `luma.venue.groups()` prints them. For part of a group or
+  an overlap of two, make a group of those lights with
+  `luma.venue.group(name, fixtures)` and select it.
 - **A separate axis per fixture or group.** Put `split()` or
   `split(by="group")` into `heads`.
 - **Values keep units.** Shares are 0–1. Degrees for yaw and pitch. Colors
@@ -127,16 +144,22 @@ shutter = out.strobe.values   # [primitive, time]
 
 Use this to check three things fast:
 
-- Which heads are on at a loud moment and at a quiet moment.
+- Which heads are on during a hit and between hits, and how bright the
+  floor is against the peak.
 - The order of heads along an axis. Sort by the fixture's position from
   `luma.venue.nodes(...)` and make sure brightness changes in that order.
 - Whether a color band reaches the top only at peaks.
 
-Then render once at the loudest second to confirm the look.
+Then render once at the busiest second to confirm the look.
 
-## Calibrate a level
+To see how much one clip adds, take the window twice, with the clip and
+with it removed from a second edit, and compare `values`. A layer that moves
+the output by a few percent will not be noticed in the room.
 
-Find a loud second and a quiet second from `luma.audio.mix` RMS. Change the
+## Calibrate a level, when the user asks for a reactive look
+
+Time a show; do not make it follow the level. `audio()` is for the user who
+asks for a light that reacts. Then find a loud second and a quiet second from `luma.audio.mix` RMS. Change the
 shape, `low` and `high` of the audio curve, and measure the lit fraction at
 both. A floor is a shape that starts above 0, such as `[[0, 0.2], [1, 1]]`.
 A threshold is a held start, such as `[[0, 0, "hold"], [0.3, 0.2], [1, 1]]`.

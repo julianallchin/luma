@@ -9,12 +9,18 @@ The grid carries the structure; save close listening for motifs and drops
 (see Listening). Confirm the kick (`four_four` tag is reliable,
 or kick onsets against the beats) and work structurally.
 
+Read `reading-music-into-light` first. It is how a sound becomes a look;
+this adds what is particular to the style. What follows are the habits of
+the genre and what to listen for, not instructions: the track in front of
+you decides.
+
 ## The one idea
 
 **Terrace.** Read the track as blocks — intro, build, main, breakdown, riser,
 drop, outro — and give each block a level. Hold the level for the whole block.
-Change only on phrase lines (find the phrase length once with `luma.music.sections()`). Discrete
-steps read as arrangement; continuous drifting reads as a screensaver.
+Change on phrase lines (find the phrase length once with `luma.music.sections()`). Discrete
+steps read as arrangement. A slow drift across a block is right when the
+music itself drifts, as a filter opens over sixteen bars.
 
 - Each drop sits at least one step above every block before it.
 - The last drop is the peak. Don't spend the top of the range early.
@@ -41,11 +47,15 @@ Same shape every time, and it's the one moment that needs real care:
 
 1. Breakdown: strip to one or two groups, long fades. If the kick leaves the
    mix, the kick-linked light leaves with it — the room must feel the floor go.
-2. Riser: accelerate a pulse (quarter → eighth → sixteenth), terrace up. In
-   trance this runs 16 or 32 bars — pace it to still be climbing at the end.
-3. Last bar: near-black, or one held tone. Never busy.
-4. Drop: everything on the downbeat, then settle into the block's held state
-   within a bar or two. Impact is a moment, not a section.
+2. Riser: follow what the riser does. If the snare roll doubles from quarters
+   to eighths to sixteenths, the light doubles with it; if it is one long
+   filtered sweep, the light swells. In trance this runs 16 or 32 bars — pace
+   it to still be climbing at the end.
+3. Last bar: usually the music thins or stops. Match it: near-dark, or one
+   held tone.
+4. Drop: the release lands on the downbeat, as big as the music's own
+   release, then settles into the block's held state within a bar or two.
+   Impact is a moment, not a section.
 
 Check it's real: `listen` the first bars after the riser for kick and full low
 band. This genre feints with filtered stalls constantly.
@@ -61,9 +71,16 @@ restraint:
 - **Tech house** — the groove is the star. Percussion accents on the offbeats,
   playful group alternation, mid-range energy held forever. Resist big moments;
   the bounce IS the moment.
-- **Techno** — monochrome, mechanical, glacial. Change less than you think,
-  then less than that. One new element at minute five is a bigger event than
-  anything busier. Strobes are permitted and precious.
+- **Techno** — three different rooms share the name, and the audio says
+  which. *Hypnotic and minimal*: a loop where one filter or one percussion
+  layer moves over 32 or 64 bars and nothing breaks down. Monochrome, slow,
+  one change per phrase; change less than you think, then less than that.
+  *Peak-time and hard*: a distorted rumbling kick, open rides, claps, big
+  breakdowns with snare rolls. This one earns white, strobes and beams in
+  the air, hard on and off. *Industrial*: metallic hits, noise, distortion
+  on everything. Cold, harsh, hard cuts, little color. Measure which before
+  you pick a level of restraint: kick distortion, how often anything
+  changes, and whether there is a breakdown at all.
 - **Trance** — widest range, longest arcs, most melodic. Follow the chords with
   color; the breakdown melody is often the emotional peak, so the most
   beautiful moment may be the quietest. Uplift is vertical: builds rise

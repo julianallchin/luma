@@ -9,6 +9,11 @@ for UKG and breaks. The drum pattern isn't timekeeping here, it *is* the
 music. Lighting that ignores the break and pulses the bar line misses the
 entire genre.
 
+Read `reading-music-into-light` first. It is how a sound becomes a look;
+this adds what is particular to the style. What follows are the habits of
+the genre and what to listen for, not instructions: the track in front of
+you decides.
+
 ## The one idea
 
 Ride the break. The kick-snare placement inside the bar is a melody, and it

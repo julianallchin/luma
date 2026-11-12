@@ -8,6 +8,11 @@ Use this when the music wants to hurt. Halftime feel, snare on 3, and drops
 where the bass is doing violent, articulate things. If the bass at the drop is
 smooth and pretty instead, you want `melodic-bass` — same tempo, opposite soul.
 
+Read `reading-music-into-light` first. It is how a sound becomes a look;
+this adds what is particular to the style. What follows are the habits of
+the genre and what to listen for, not instructions: the track in front of
+you decides.
+
 ## The one idea
 
 The kick and snare are scaffolding. The event is the bass: its rhythm, its
@@ -50,24 +55,26 @@ and the bars read intense:
 Compare the drops before scoring any of them (spectral character, wub rate and
 depth from `modulation`, `similar(mode="sound")`). What you're looking for:
 
-- **Drop 2 goes absurd.** First drop melodic, second drop suddenly noisy,
-  distorted, stupid — flatness way up, rate faster or uglier. That contrast is
-  the design. Drop 1 gets a controlled, handsome treatment. Drop 2 is the
-  punch in the face: red, strobe, everything at once, the move you've been
-  refusing to use all track. The audience should feel betrayed in the best way.
-- **Drops are twins.** Then difference must be authored: change exactly one
-  axis on drop 2 — invert the groups, flip the palette, accent the gaps instead
-  of the hits. Never copy-paste a drop.
-- **Drop 2 is smaller** (a strip-back, a vocal drop). Then go sparser and
-  darker than drop 1, not dimmer-the-same. Less, not quieter.
+- **The second drop turns on the first.** One is melodic or controlled, the
+  other suddenly noisy and distorted, flatness way up, the rate faster or
+  uglier. The sound changed character, so the light does: the size of the
+  change you measured is the size of the change you make, in palette, edge
+  and level. What it becomes comes from what the new bass is doing.
+- **The drops are twins.** The music repeats itself, so a quiet variation is
+  honest: move the same idea to other lights, turn it around, or answer the
+  gaps where it answered the hits. A copy is a missed chance; a new show is
+  a lie.
+- **The second drop is smaller** (a strip-back, a vocal drop). Sparser and
+  darker than the first, on fewer lights. Less, not the same thing dimmer.
 
 ## Builds and the bar before
 
 Ride the riser: one group pulsing, rate tightening — quarter, eighth,
 sixteenth — brightness terracing up, timed to where the riser actually peaks
-in the audio. Then the bar before the drop goes near-black. One or two bars of
-almost nothing makes the drop free. Do not decorate that bar; the snare rolls
-and vocal one-shots in it get nothing. And check the drop is real before you
+in the audio. Follow the fill that leads in: a snare roll or a stutter is
+detail worth placing, small and on few lights. If the music then empties out
+before the drop, the room empties with it, and that near-dark is what makes
+the drop land. And check the drop is real before you
 spend all this: `listen` the first bars after the build for sub and low at
 full level — a feint gets a dry cut, and the real drop gets the payload.
 
