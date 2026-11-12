@@ -219,9 +219,7 @@ impl Pipelines {
         let relight_layout = layout(
             "bounce-relight",
             &[
-                layout_entry(16, storage(true)),
                 layout_entry(17, storage(true)),
-                layout_entry(18, storage(true)),
                 layout_entry(19, storage(false)),
                 layout_entry(20, uniform()),
             ],
@@ -249,8 +247,7 @@ impl Pipelines {
                 layout_entry(5, storage(true)),
                 layout_entry(6, storage(true)),
                 layout_entry(7, storage(false)),
-                layout_entry(8, storage(false)),
-                layout_entry(9, storage_texture(wgpu::TextureViewDimension::D3)),
+                layout_entry(8, storage_texture(wgpu::TextureViewDimension::D3)),
             ],
         );
         let spread_module = shader(
@@ -287,10 +284,8 @@ impl Pipelines {
                 layout_entry(3, storage(true)),
                 layout_entry(4, storage(true)),
                 layout_entry(5, storage(true)),
-                layout_entry(6, storage(true)),
-                layout_entry(7, storage(true)),
-                layout_entry(8, storage_texture(wgpu::TextureViewDimension::D2)),
-                layout_entry(9, storage_texture(wgpu::TextureViewDimension::D2)),
+                layout_entry(6, storage_texture(wgpu::TextureViewDimension::D2)),
+                layout_entry(7, storage_texture(wgpu::TextureViewDimension::D2)),
             ],
         );
         let low = pipeline(
@@ -299,9 +294,10 @@ impl Pipelines {
             &shader(
                 "bounce-low",
                 format!(
-                    "{}{}",
+                    "{}{}{}",
                     prelude(),
-                    include_str!("../shaders/bounce_low.wgsl")
+                    include_str!("../shaders/bounce_low.wgsl"),
+                    include_str!("../shaders/bounce_lookup.wgsl")
                 ),
             ),
             "bounce_low",
@@ -340,13 +336,35 @@ struct Resident {
     /// The relight's group, and a still's first bounce's.
     relight: [wgpu::BindGroup; 2],
     spread: wgpu::BindGroup,
-    /// What the low pictures' group names of the stage: its discs, the
-    /// cells that find them, and the light on them.
-    disc_buffer: wgpu::Buffer,
-    cell_start: wgpu::Buffer,
-    cell_items: wgpu::Buffer,
-    gathered: wgpu::Buffer,
-    mirrored: wgpu::Buffer,
+    /// What a lookup reads (`bounce_lookup.wgsl`).
+    lookup: Lookup,
+}
+
+/// What finds the bounce at a point: the stage's discs, the cells that find
+/// them, and the light on each disc.
+struct Lookup {
+    discs: wgpu::Buffer,
+    cells: wgpu::Buffer,
+    landed: wgpu::Buffer,
+}
+
+impl Lookup {
+    /// An empty stage's, for the scene pass to bind before any is baked.
+    fn empty(device: &wgpu::Device) -> Self {
+        let buffer = |label: &str| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: 256,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
+        Self {
+            discs: buffer("bounce-no-discs"),
+            cells: buffer("bounce-no-cells"),
+            landed: buffer("bounce-no-light"),
+        }
+    }
 }
 
 /// One renderer's bounce: the stage it has baked, the bake under way, and
@@ -374,6 +392,10 @@ pub(crate) struct Bounce {
     held: (Option<u64>, u32),
     job: Option<Job>,
     stage: Option<Resident>,
+    /// What the scene pass binds when there is no stage.
+    empty: Lookup,
+    /// Stages put on the GPU so far.
+    stages: u64,
     /// Output pixels per texel of the low pictures this frame.
     step: u32,
     /// Whether this is a live view, which takes the bake when it comes and
@@ -437,6 +459,8 @@ impl Bounce {
             held: (None, 0),
             job: None,
             stage: None,
+            empty: Lookup::empty(device),
+            stages: 0,
             step: 4,
             live_view: false,
         }
@@ -445,11 +469,19 @@ impl Bounce {
     /// What the scene pass reads: the low pictures of the bounce on
     /// surfaces and off them, the field uniform, and the air's light.
     pub(crate) fn bindings(&self) -> crate::environment::LocalBounce<'_> {
+        let lookup = self
+            .stage
+            .as_ref()
+            .map_or(&self.empty, |stage| &stage.lookup);
         crate::environment::LocalBounce {
             matte: &self.matte,
             mirror: &self.mirror,
             air: &self.air,
             field: &self.field,
+            discs: &lookup.discs,
+            cells: &lookup.cells,
+            landed: &lookup.landed,
+            stage: self.stages,
         }
     }
 
@@ -582,7 +614,10 @@ impl Bounce {
                     });
                     self.job = Some(Job { stop, done });
                 }
-                None => self.stage = None,
+                None => {
+                    self.stage = None;
+                    self.stages += 1;
+                }
             }
             if !self.live_view {
                 self.finish(pipelines, device);
@@ -638,11 +673,9 @@ impl Bounce {
         let starts = storage_init("bounce-starts", bytemuck::cast_slice(&baked.starts));
         let links = storage_init("bounce-links", bytemuck::cast_slice(&baked.links));
         let balls = storage_init("bounce-balls", bytemuck::cast_slice(&stage.balls));
-        let cell_start = storage_init("bounce-cell-start", bytemuck::cast_slice(&stage.cell_start));
-        let cell_items = storage_init("bounce-cell-items", bytemuck::cast_slice(&stage.cell_items));
+        let cells = storage_init("bounce-cells", bytemuck::cast_slice(&stage.cell_discs));
         let radiosity = zeroed("bounce-radiosity", discs + patches + groups);
-        let gathered = zeroed("bounce-gathered", discs);
-        let mirrored = zeroed("bounce-mirrored", discs);
+        let landed = zeroed("bounce-landed", discs * 2);
         let air_points = stage.air.dims.x * stage.air.dims.y * stage.air.dims.z;
         let field = Field {
             origin: stage.cells.origin.extend(stage.cells.step).to_array(),
@@ -657,9 +690,7 @@ impl Bounce {
                 label: Some("bounce-relight"),
                 layout: &pipelines.relight_layout,
                 entries: &[
-                    entry(16, disc_buffer.as_entire_binding()),
                     entry(17, balls.as_entire_binding()),
-                    entry(18, gathered.as_entire_binding()),
                     entry(19, radiosity.as_entire_binding()),
                     entry(20, self.total[first].as_entire_binding()),
                 ],
@@ -676,9 +707,8 @@ impl Bounce {
                 entry(4, radiosity.as_entire_binding()),
                 entry(5, starts.as_entire_binding()),
                 entry(6, links.as_entire_binding()),
-                entry(7, gathered.as_entire_binding()),
-                entry(8, mirrored.as_entire_binding()),
-                entry(9, wgpu::BindingResource::TextureView(&self.air)),
+                entry(7, landed.as_entire_binding()),
+                entry(8, wgpu::BindingResource::TextureView(&self.air)),
             ],
         });
         self.stage = Some(Resident {
@@ -689,12 +719,13 @@ impl Bounce {
             air_points,
             relight,
             spread,
-            disc_buffer,
-            cell_start,
-            cell_items,
-            gathered,
-            mirrored,
+            lookup: Lookup {
+                discs: disc_buffer,
+                cells,
+                landed,
+            },
         });
+        self.stages += 1;
     }
 
     /// Light the discs by this frame's light, then spread it: before the
@@ -768,13 +799,11 @@ impl Bounce {
                 entry(0, self.field.as_entire_binding()),
                 entry(1, camera.as_entire_binding()),
                 entry(2, wgpu::BindingResource::TextureView(depth)),
-                entry(3, stage.disc_buffer.as_entire_binding()),
-                entry(4, stage.cell_start.as_entire_binding()),
-                entry(5, stage.cell_items.as_entire_binding()),
-                entry(6, stage.gathered.as_entire_binding()),
-                entry(7, stage.mirrored.as_entire_binding()),
-                entry(8, wgpu::BindingResource::TextureView(&self.matte)),
-                entry(9, wgpu::BindingResource::TextureView(&self.mirror)),
+                entry(3, stage.lookup.discs.as_entire_binding()),
+                entry(4, stage.lookup.cells.as_entire_binding()),
+                entry(5, stage.lookup.landed.as_entire_binding()),
+                entry(6, wgpu::BindingResource::TextureView(&self.matte)),
+                entry(7, wgpu::BindingResource::TextureView(&self.mirror)),
             ],
         });
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {

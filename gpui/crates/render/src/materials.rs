@@ -117,10 +117,11 @@ pub const VENUE_FLOOR: Material = Material {
     ..PLAIN
 };
 
-/// A room's walls and ceiling: matt black, as a venue paints them so that
-/// the only thing a beam shows is the beam.
+/// A room's walls and ceiling: matt dark grey, a hall's painted walls. Not
+/// black-box black: at a few percent a wall sends nothing back, and a room
+/// lit only by its own lamps is pools on a floor in the dark.
 pub const VENUE_WALL: Material = Material {
-    base_color: Vec3::splat(0.03),
+    base_color: Vec3::splat(0.18),
     roughness: 0.9,
     ..PLAIN
 };

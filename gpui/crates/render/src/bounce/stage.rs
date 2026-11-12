@@ -205,8 +205,7 @@ pub(crate) struct Stage {
     /// The cells that find the discs round a point, and each cell's discs
     /// ([`bake::grid`]).
     pub cells: Lattice,
-    pub cell_start: Vec<u32>,
-    pub cell_items: Vec<u32>,
+    pub cell_discs: Vec<u32>,
     /// The ball round each [`BLOCK`] of discs: xyz its centre, w its radius.
     pub balls: Vec<[f32; 4]>,
     /// The points in the air.
@@ -264,7 +263,7 @@ pub(crate) fn build(input: Input, stop: &AtomicBool) -> Option<Stage> {
         step: cell,
         dims: (extent / cell).ceil().as_uvec3().max(UVec3::ONE),
     };
-    let (cell_start, cell_items) = bake::grid(&baked.discs, cells.origin, cells.dims, cells.step);
+    let cell_discs = bake::grid(&baked, cells.origin, cells.dims, cells.step);
     let balls = baked
         .discs
         .chunks(BLOCK)
@@ -281,8 +280,7 @@ pub(crate) fn build(input: Input, stop: &AtomicBool) -> Option<Stage> {
     Some(Stage {
         baked,
         cells,
-        cell_start,
-        cell_items,
+        cell_discs,
         balls,
         air,
     })

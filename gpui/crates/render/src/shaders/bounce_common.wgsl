@@ -40,6 +40,30 @@ struct BounceField {
     eye: vec4<f32>,
 };
 
+/// A unit direction as one number a half float holds exactly: 32 steps on
+/// each axis of its octahedral square. Coarse, and enough to tell a floor
+/// from a wall.
+fn bounce_pack_facing(d: vec3<f32>) -> f32 {
+    let n = d / (abs(d.x) + abs(d.y) + abs(d.z));
+    var e = n.xy;
+    if n.z < 0.0 {
+        e = (1.0 - abs(n.yx)) * vec2<f32>(select(-1.0, 1.0, n.x >= 0.0), select(-1.0, 1.0, n.y >= 0.0));
+    }
+    let q = round(saturate(e * 0.5 + 0.5) * 31.0);
+    return q.x + q.y * 32.0;
+}
+
+fn bounce_unpack_facing(v: f32) -> vec3<f32> {
+    let q = vec2<f32>(v % 32.0, floor(v / 32.0));
+    let e = q / 31.0 * 2.0 - 1.0;
+    var n = vec3<f32>(e, 1.0 - abs(e.x) - abs(e.y));
+    if n.z < 0.0 {
+        let s = vec2<f32>(select(-1.0, 1.0, n.x >= 0.0), select(-1.0, 1.0, n.y >= 0.0));
+        n = vec3<f32>((1.0 - abs(n.yx)) * s, n.z);
+    }
+    return normalize(n);
+}
+
 /// A unit direction from 32 bits (`pack_direction` in `bounce/bake.rs`).
 fn bounce_unpack_direction(v: u32) -> vec3<f32> {
     let e = vec2<f32>(f32(v & 0xffffu), f32(v >> 16u)) / 65535.0 * 2.0 - 1.0;

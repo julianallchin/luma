@@ -479,3 +479,43 @@ fn a_truss_over_a_lit_deck_is_lit_from_below() {
         "the truss took nothing from the deck: {lit} against {dark}"
     );
 }
+
+/// A dark case stands against a wall lit by the floor's bounce. The wall
+/// over it is shaded by it, smoothly: along a row just over the case no
+/// pixel steps away from its neighbour, as it did when the case's own
+/// darkness spilt onto the wall in blocks.
+#[test]
+fn a_dark_case_against_a_wall_leaves_the_wall_alone() {
+    let mut renderer = Renderer::new().unwrap();
+    let mut frame = bare_hall(Vec3::new(0.0, -4.0, 1.5), Vec3::new(0.0, 2.9, 1.2));
+    let black = Material {
+        base_color: Vec3::splat(0.02),
+        ..MATTE
+    };
+    add_boxes(
+        &mut frame,
+        &[
+            (Vec3::new(0.0, 3.0, 2.0), Vec3::new(8.0, 0.2, 4.0), MATTE),
+            (Vec3::new(0.0, 2.7, 0.5), Vec3::new(2.0, 0.4, 1.0), black),
+        ],
+    );
+    frame.fixture_cones.push(wash(
+        Vec3::new(0.0, 0.0, 6.5),
+        Vec3::new(0.0, 0.5, 0.0),
+        Vec3::ONE,
+    ));
+    let pixels = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+    capture("case-against-wall", &pixels, WIDTH, HEIGHT);
+    let (left, row) = project(&frame, Vec3::new(-0.9, 2.9, 1.06));
+    let (right, _) = project(&frame, Vec3::new(0.9, 2.9, 1.06));
+    let red = |x: u32| f32::from(pixels[((row * WIDTH + x) * 4) as usize]) / 255.0;
+    let step = (left..right)
+        .map(|x| (red(x + 1) - red(x)).abs())
+        .fold(0.0, f32::max);
+    eprintln!(
+        "wall over the case: {:.3} at its middle, steps of {step:.3} at most",
+        red((left + right) / 2)
+    );
+    assert!(red((left + right) / 2) > 0.03, "the wall took no bounce");
+    assert!(step < 0.03, "the wall over the case steps by {step}");
+}

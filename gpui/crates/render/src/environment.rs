@@ -76,6 +76,14 @@ pub(crate) struct LocalBounce<'a> {
     pub air: &'a wgpu::TextureView,
     /// The field uniform.
     pub field: &'a wgpu::Buffer,
+    /// The stage's discs, the cells that find them and the light on them,
+    /// for a pixel the low pictures missed.
+    pub discs: &'a wgpu::Buffer,
+    pub cells: &'a wgpu::Buffer,
+    pub landed: &'a wgpu::Buffer,
+    /// Counts the stages baked: the buffers above are a new stage's when it
+    /// changes.
+    pub stage: u64,
 }
 
 /// Which probe a renderer currently has resident, and the bindings for it.
@@ -88,7 +96,7 @@ pub(crate) struct EnvironmentCache {
     /// authored environment does, not when the transport moves — so rebuilding
     /// a uniform buffer and a five-entry bind group every frame was per-frame
     /// garbage for a value that had not moved.
-    cached: Option<(SceneParams, wgpu::Buffer, wgpu::BindGroup)>,
+    cached: Option<((SceneParams, u64), wgpu::Buffer, wgpu::BindGroup)>,
     /// This renderer's frame-constant ambient value. One buffer per renderer,
     /// because two renderers on one device can hold different probes.
     ambient: Option<wgpu::Buffer>,
@@ -114,6 +122,9 @@ impl EnvironmentPipelines {
                 uniform_entry(7),
                 sampled_2d(8),
                 sampled(9, wgpu::TextureViewDimension::D3),
+                storage_buffer(10),
+                storage_buffer(11),
+                storage_buffer(12),
             ],
         });
         let equirect_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -306,6 +317,9 @@ impl EnvironmentPipelines {
                 binding(7, local.field.as_entire_binding()),
                 binding(8, wgpu::BindingResource::TextureView(local.mirror)),
                 binding(9, wgpu::BindingResource::TextureView(local.air)),
+                binding(10, local.discs.as_entire_binding()),
+                binding(11, local.cells.as_entire_binding()),
+                binding(12, local.landed.as_entire_binding()),
             ],
         })
     }
@@ -443,9 +457,11 @@ impl EnvironmentCache {
         );
         // The resident probe is part of the identity: a reprojected cube map
         // with identical parameters still needs a new bind group.
-        // The bounce's views are the renderer's own and never change.
+        // The bounce's views are the renderer's own and never change; its
+        // buffers are a stage's.
+        let key = (params, local.stage);
         if let Some((cached, uniform, groups)) = &self.cached {
-            if *cached == params {
+            if *cached == key {
                 return (uniform.clone(), groups.clone());
             }
         }
@@ -467,7 +483,7 @@ impl EnvironmentCache {
             ambient,
             local,
         );
-        self.cached = Some((params, uniform.clone(), groups.clone()));
+        self.cached = Some((key, uniform.clone(), groups.clone()));
         (uniform, groups)
     }
 }
@@ -833,6 +849,18 @@ fn storage_array(binding: u32) -> wgpu::BindGroupLayoutEntry {
             access: wgpu::StorageTextureAccess::WriteOnly,
             format: FORMAT,
             view_dimension: wgpu::TextureViewDimension::D2Array,
+        },
+        count: None,
+    }
+}
+fn storage_buffer(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
         },
         count: None,
     }

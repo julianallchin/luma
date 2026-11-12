@@ -3,9 +3,9 @@
 // what its links bring. Prefixed by `bounce_common.wgsl`.
 //
 // `radiosity` holds what each emitter sends out, W/m2: discs, then patches,
-// then groups. `gathered` is the bounced light landing on each disc, which
-// the next frame's relight sends out again: a bounce more each frame, at no
-// cost.
+// then groups. `landed` holds two values a disc: the bounced light landing
+// on it, which the next frame's relight sends out again (a bounce more each
+// frame, at no cost), and the bounced light it mirrors toward the eye.
 
 struct BouncePatch { start: u32, count: u32, group: u32, area: f32 };
 struct BounceGroup { start: u32, count: u32, area: f32, pad: f32 };
@@ -18,9 +18,8 @@ struct BounceLink { node: u32, weight: f32, size: f32, dir: u32 };
 @group(0) @binding(4) var<storage, read_write> radiosity: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> starts: array<u32>;
 @group(0) @binding(6) var<storage, read> links: array<BounceLink>;
-@group(0) @binding(7) var<storage, read_write> gathered: array<vec4<f32>>;
-@group(0) @binding(8) var<storage, read_write> mirrored: array<vec4<f32>>;
-@group(0) @binding(9) var air_out: texture_storage_3d<rgba16float, write>;
+@group(0) @binding(7) var<storage, read_write> landed: array<vec4<f32>>;
+@group(0) @binding(8) var air_out: texture_storage_3d<rgba16float, write>;
 
 @compute @workgroup_size(64)
 fn pull_patches(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -75,8 +74,8 @@ fn gather_discs(@builtin(global_invocation_id) id: vec3<u32>) {
         let fresnel = disc.f0 + (vec3<f32>(1.0) - disc.f0) * pow(1.0 - max(dot(v, h), 0.0), 5.0);
         shine += sent * (link.size * nol * d * visible) * fresnel;
     }
-    gathered[id.x] = vec4<f32>(sum, 0.0);
-    mirrored[id.x] = vec4<f32>(shine, 0.0);
+    landed[id.x * 2u] = vec4<f32>(sum, 0.0);
+    landed[id.x * 2u + 1u] = vec4<f32>(shine, 0.0);
 }
 
 // Each point in the air: the bounced light on six faces, +x -x +y -y +z -z,

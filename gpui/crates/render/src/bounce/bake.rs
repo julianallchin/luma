@@ -718,8 +718,16 @@ pub(crate) fn bake(
     stop: &AtomicBool,
 ) -> Option<Baked> {
     let mut discs = discs(faces, settings.spacing);
-    let (patches, groups) = cluster(&mut discs, blockers, settings.spacing * 3.0);
-    clips(&mut discs, blockers);
+    // What parts a surface in two is another surface standing on it: a
+    // tripod's leg in front of a wall hides some of it and parts nothing.
+    let surfaces = TriMesh::new(
+        faces.iter().flat_map(|face| face.corners).collect(),
+        (0..faces.len() as u32)
+            .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
+            .collect(),
+    );
+    let (patches, groups) = cluster(&mut discs, &surfaces, settings.spacing * 3.0);
+    clips(&mut discs, &surfaces);
     let emitters = Emitters {
         discs: &discs,
         patches: &patches,
@@ -738,9 +746,13 @@ pub(crate) fn bake(
 }
 
 /// The grid that finds the discs round a point: each cell lists the discs
-/// whose reach touches it. Returns each cell's start in the list, one more
-/// than the cells, and the list.
-pub(crate) fn grid(discs: &[Disc], lo: Vec3, dims: UVec3, cell: f32) -> (Vec<u32>, Vec<u32>) {
+/// whose reach touches it. A disc that takes light from nowhere is buried
+/// (the floor under a flight case) and is left out: it would speak for the
+/// surface beside it, in black. Returns each cell's start in the list, one
+/// more than the cells, then the list, in one run.
+pub(crate) fn grid(baked: &Baked, lo: Vec3, dims: UVec3, cell: f32) -> Vec<u32> {
+    let discs = &baked.discs;
+    let buried = |i: usize| baked.starts[i] == baked.starts[i + 1];
     let cells = (dims.x * dims.y * dims.z) as usize;
     let touched = |disc: &Disc| {
         let p = pos(disc);
@@ -765,7 +777,10 @@ pub(crate) fn grid(discs: &[Disc], lo: Vec3, dims: UVec3, cell: f32) -> (Vec<u32
             })
     };
     let mut start = vec![0u32; cells + 1];
-    for disc in discs {
+    for (i, disc) in discs.iter().enumerate() {
+        if buried(i) {
+            continue;
+        }
         for c in touched(disc) {
             start[c + 1] += 1;
         }
@@ -776,12 +791,16 @@ pub(crate) fn grid(discs: &[Disc], lo: Vec3, dims: UVec3, cell: f32) -> (Vec<u32
     let mut cursor = start.clone();
     let mut items = vec![0u32; start[cells] as usize];
     for (i, disc) in discs.iter().enumerate() {
+        if buried(i) {
+            continue;
+        }
         for c in touched(disc) {
             items[cursor[c] as usize] = i as u32;
             cursor[c] += 1;
         }
     }
-    (start, items)
+    start.extend(items);
+    start
 }
 
 #[cfg(test)]
@@ -994,6 +1013,65 @@ mod tests {
         let totals = totals(&baked);
         let mean = totals.iter().sum::<f32>() / totals.len() as f32;
         assert!((mean - 1.0).abs() < 0.06, "a disc takes {mean}");
+    }
+
+    /// A box of size `size` standing at `at`, faces out.
+    fn block(at: Vec3, size: Vec3) -> Vec<Face> {
+        room(at, at + size)
+            .into_iter()
+            .map(|face| Face {
+                corners: [face.corners[0], face.corners[2], face.corners[1]],
+                ..face
+            })
+            .collect()
+    }
+
+    /// A thin thing in front of a wall (a tripod's leg) hides some of the
+    /// room from it and parts nothing: no disc of the room gets a clip
+    /// plane from it, which showed as the leg's outline on the wall.
+    #[test]
+    fn a_thin_thing_parts_no_surface() {
+        let faces = room(Vec3::ZERO, Vec3::new(6.0, 6.0, 3.0));
+        // A leg leaning across the floor, too thin to carry discs.
+        let leg = block(Vec3::new(2.0, 2.0, 0.0), Vec3::new(2.0, 0.04, 0.04));
+        let mut all = faces.clone();
+        all.extend(leg);
+        let baked = bake(
+            &faces,
+            &mesh(&all),
+            &[],
+            Settings {
+                spacing: 0.5,
+                error: 0.01,
+            },
+            &AtomicBool::new(false),
+        )
+        .expect("not stopped");
+        assert!(
+            baked.discs.iter().all(|disc| disc.clip == [[0.0; 4]; 2]),
+            "the leg cut the floor in two"
+        );
+    }
+
+    /// The floor under a case takes light from nowhere. Its discs are left
+    /// out of the grid that finds discs: they would speak, in black, for
+    /// the floor round the case.
+    #[test]
+    fn buried_discs_speak_for_nothing() {
+        let mut faces = room(Vec3::ZERO, Vec3::new(8.0, 6.0, 4.0));
+        faces.extend(block(Vec3::new(2.0, 2.0, 0.0), Vec3::new(3.0, 2.0, 1.0)));
+        let baked = baked(&faces, &[], 0.5);
+        let buried: Vec<usize> = (0..baked.discs.len())
+            .filter(|&i| baked.starts[i] == baked.starts[i + 1])
+            .collect();
+        assert!(!buried.is_empty(), "the floor under the case is buried");
+        let dims = UVec3::new(8, 6, 4);
+        let cells = grid(&baked, Vec3::ZERO, dims, 1.0);
+        let listed = &cells[(dims.x * dims.y * dims.z) as usize + 1..];
+        assert!(!listed.is_empty());
+        for i in buried {
+            assert!(!listed.contains(&(i as u32)), "a buried disc is listed");
+        }
     }
 
     /// A raised flag stops the bake.

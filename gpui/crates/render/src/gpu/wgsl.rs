@@ -60,10 +60,11 @@ pub(super) fn composite_wgsl() -> String {
 /// group 3, so its copy is rebound by this one documented replace.
 pub(super) fn scene_wgsl() -> String {
     format!(
-        "{}{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}{}",
         scene_bindings_wgsl(),
         crate::bounce::prelude(),
         include_str!("../shaders/bounce_sample.wgsl"),
+        include_str!("../shaders/bounce_lookup.wgsl"),
         crate::light_index::prelude().replace("@group(1)", "@group(3)"),
         include_str!("../shaders/fixture_light.wgsl"),
         include_str!("../shaders/panel.wgsl"),

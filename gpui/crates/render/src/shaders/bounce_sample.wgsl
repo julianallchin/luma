@@ -3,14 +3,18 @@
 //
 // A pixel on a big surface takes it from the low pictures
 // (`bounce_low.wgsl`), from the texels round it that saw the same surface.
-// Anything else (a truss, a fixture, an edge no texel landed on) takes it
-// from the nearest points in the air, each of which holds the light landing
-// on six faces.
+// One that no texel saw (an edge, a narrow face) looks its own discs up
+// (`bounce_lookup.wgsl`). Anything no disc speaks for (a truss, a fixture)
+// takes it from the nearest points in the air, each of which holds the
+// light landing on six faces.
 
 @group(2) @binding(6) var bounce_matte: texture_2d<f32>;
 @group(2) @binding(7) var<uniform> bounce_field: BounceField;
 @group(2) @binding(8) var bounce_mirror: texture_2d<f32>;
 @group(2) @binding(9) var bounce_air: texture_3d<f32>;
+@group(2) @binding(10) var<storage, read> bounce_discs: array<BounceDisc>;
+@group(2) @binding(11) var<storage, read> bounce_cells: array<u32>;
+@group(2) @binding(12) var<storage, read> bounce_landed: array<vec4<f32>>;
 
 struct BounceLight {
     // Radiance along the reflection, for the split sum.
@@ -55,6 +59,7 @@ struct BounceTap { matte: vec3<f32>, mirror: vec3<f32>, weight: f32 };
 fn bounce_tap(
     texel: vec2<i32>,
     world: vec3<f32>,
+    n: vec3<f32>,
     pixel: vec2<f32>,
     dx: vec3<f32>,
     dy: vec3<f32>,
@@ -71,9 +76,13 @@ fn bounce_tap(
     let away = (vec2<f32>(texel) + 0.5) * bounce_field.air_dims.w - pixel;
     let there = dot(world + dx * away.x + dy * away.y - globals.camera_pos.xyz, forward);
     let depth = dot(world - globals.camera_pos.xyz, forward);
-    tap.weight = saturate(1.0 - abs(seen.a - there) / (0.02 * depth + 0.03));
+    let shine = textureLoad(bounce_mirror, texel, 0);
+    // And if it faces the same way: a case against a wall is as far away
+    // as the wall.
+    let facing = step(0.8, dot(bounce_unpack_facing(shine.a), n));
+    tap.weight = facing * saturate(1.0 - abs(seen.a - there) / (0.005 * depth + 0.03));
     tap.matte = seen.rgb;
-    tap.mirror = textureLoad(bounce_mirror, texel, 0).rgb;
+    tap.mirror = shine.rgb;
     return tap;
 }
 
@@ -106,7 +115,7 @@ fn bounce_light(
     var total = 0.0;
     for (var k = 0; k < 4; k++) {
         let o = vec2<i32>(k & 1, k >> 1);
-        let tap = bounce_tap(clamp(corner + o, vec2<i32>(0), last), world, pixel, dx, dy);
+        let tap = bounce_tap(clamp(corner + o, vec2<i32>(0), last), world, n, pixel, dx, dy);
         let share = (mix(1.0 - f.x, f.x, f32(o.x)) * mix(1.0 - f.y, f.y, f32(o.y)) + 0.01) * tap.weight;
         matte += share * tap.matte;
         mirror += share * tap.mirror;
@@ -120,7 +129,7 @@ fn bounce_light(
         for (var k = 0; k < 16; k++) {
             let o = vec2<i32>(k & 3, k >> 2) - 1;
             if (o.x == 0 || o.x == 1) && (o.y == 0 || o.y == 1) { continue; }
-            let tap = bounce_tap(clamp(corner + o, vec2<i32>(0), last), world, pixel, dx, dy);
+            let tap = bounce_tap(clamp(corner + o, vec2<i32>(0), last), world, n, pixel, dx, dy);
             matte += tap.weight * tap.matte;
             mirror += tap.weight * tap.mirror;
             total += tap.weight;
@@ -129,6 +138,12 @@ fn bounce_light(
     if total > 0.05 {
         result.diffuse = matte / total * RECIPROCAL_PI;
         result.mirror = mirror / total;
+        return result;
+    }
+    let found = bounce_at(world, n);
+    if found.weight > 0.0 {
+        result.diffuse = found.matte * RECIPROCAL_PI;
+        result.mirror = found.mirror;
         return result;
     }
     let g = (world - bounce_field.air_origin.xyz) / bounce_field.air_origin.w;

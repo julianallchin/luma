@@ -19,10 +19,8 @@
 
 const BOUNCE_LIGHTS: u32 = 127u;
 
-@group(1) @binding(16) var<storage, read> bounce_discs: array<BounceDisc>;
 // The ball round each workgroup's discs: xyz its centre, w its radius.
 @group(1) @binding(17) var<storage, read> bounce_balls: array<vec4<f32>>;
-@group(1) @binding(18) var<storage, read> bounce_gathered: array<vec4<f32>>;
 @group(1) @binding(19) var<storage, read_write> bounce_radiosity: array<vec4<f32>>;
 // x: fixture cones in `fixture_cores`. y: discs. z: 1 to send out the direct
 // light alone, which starts a still's bounces from nothing. The relight's
@@ -190,7 +188,8 @@ fn bounce_relight(
     let disc = bounce_discs[id.x];
     var landing = bounce_sky_light(disc) + bounce_fixture_light(disc, lights);
     if bounce_total.z == 0u {
-        landing += bounce_gathered[id.x].rgb;
+        // What the last frame gathered for it (`bounce_spread.wgsl`).
+        landing += bounce_landed[id.x * 2u].rgb;
     }
     bounce_radiosity[id.x] = vec4<f32>(disc.matte * landing, 0.0);
 }
