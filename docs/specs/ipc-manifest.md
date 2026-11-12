@@ -5,7 +5,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` fails when it is stale and
 rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 
-**138 commands** across **27 domains**
+**139 commands** across **27 domains**
 
 ## Domains
 
@@ -35,10 +35,10 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `stage` | 11 | `backend/src/dispatch/handlers/stage.rs` |
 | `sync` | 2 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
-| `tracks` | 5 | `backend/src/dispatch/handlers/tracks.rs` |
+| `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 11 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **138** | |
+| **total** | **139** | |
 
 ## Commands
 
@@ -294,6 +294,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_track_beat_validation` | `trackId: String` | `Option<BeatValidation>` |
 | `set_track_beat_validation` | `trackId: String`<br>`grid: BeatGrid`<br>`verdict: BeatValidationVerdict`<br>`reason: Option<BeatValidationReason>` | `()` |
 | `import_tracks` | `filePaths: Vec<String>` | `TrackImportResult` |
+| `reprocess_track` | `trackId: String` | `()` |
 
 ### `venues`
 

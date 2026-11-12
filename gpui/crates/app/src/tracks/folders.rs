@@ -293,6 +293,22 @@ impl Luma {
         self.change_folders(pending, cx);
     }
 
+    /// The song menu's "Reprocess": analyse the song again. The status bar
+    /// shows it running.
+    fn reprocess_track(&mut self, track_id: &str, cx: &mut Context<Self>) {
+        self.close_song_menu(cx);
+        let pending = self.library.reprocess_track(track_id);
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = pending.await {
+                this.update(cx, |this, cx| {
+                    this.report_failure("Could not reprocess the song", error, cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     fn set_folder_track(
         &mut self,
         folder_id: &str,
@@ -568,15 +584,18 @@ pub(super) fn menu(state: &Tracks, app: &Entity<Luma>) -> Option<AnyElement> {
     }
 }
 
-/// The folders a song can be in, each with a checkbox. Ticking one stays in
-/// the menu, so a song can be put in several folders at once.
+/// The folders a song can be in, each with a checkbox, then Reprocess.
+/// Ticking a folder stays in the menu, so a song can be put in several
+/// folders at once.
 fn song_menu(state: &Tracks, at: Point<Pixels>, track_id: &str, app: &Entity<Luma>) -> AnyElement {
     let dismissed = app.clone();
+    let (reprocessed, reprocess_id) = (app.clone(), track_id.to_string());
     let card = float::popover_card()
         .min_w(px(SONG_MENU_WIDTH))
         .child(float::section_heading("Folders").pt(px(4.)))
         .when(state.folders.is_empty(), |card| {
-            card.child(float::empty_row("No folders yet"))
+            // A line among a menu's rows, not a picker's empty list.
+            card.child(float::empty_row("No folders yet").py(px(6.)))
         })
         .children(state.folders.iter().map(|folder| {
             let linked = folder.track_ids.iter().any(|id| id == track_id);
@@ -599,7 +618,17 @@ fn song_menu(state: &Tracks, at: Point<Pixels>, track_id: &str, app: &Entity<Lum
                         .child(folder.name.clone()),
                 )
                 .agent_node(Role::Checkbox, folder.name.clone())
-        }));
+        }))
+        .child(float::divider().my(px(4.)))
+        .child(
+            float::menu_row(RowState::Rest, "song-reprocess")
+                .id("song-reprocess")
+                .on_click(move |_, _, cx| {
+                    reprocessed.update(cx, |this, cx| this.reprocess_track(&reprocess_id, cx));
+                })
+                .child(REPROCESS)
+                .agent_node(Role::Button, REPROCESS),
+        );
     float::anchored_at(
         "song-menu",
         at,
@@ -612,6 +641,8 @@ fn song_menu(state: &Tracks, at: Point<Pixels>, track_id: &str, app: &Entity<Lum
             .into_any_element(),
     )
 }
+
+const REPROCESS: &str = "Reprocess";
 
 /// Wide enough for a folder name of a few words beside its checkbox.
 const SONG_MENU_WIDTH: f32 = 200.;

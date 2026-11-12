@@ -81,6 +81,10 @@ before the Python environment was last installed, and those other versions of
 each preprocessor recorded, so a repaired environment or a bumped `version`
 retries every track the old one failed on, with a fresh backoff.
 
+A person can ask for one track again (`scheduler::rerun_track`, the song
+menu's Reprocess): every step reruns, complete or in backoff, and each
+artifact stays as it was until its step rewrites it.
+
 ## Scheduler
 
 See [`scheduler.rs`](scheduler.rs). Two-tier parallelism:

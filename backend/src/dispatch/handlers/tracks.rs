@@ -67,6 +67,19 @@ pub async fn import_tracks(
         .await?)
 }
 
+/// Analyse a track again; see [`track_service::reprocess_track`]. It returns
+/// once the work is queued, and `background_work` shows it running.
+pub async fn reprocess_track(services: &AppServices, track_id: String) -> Result<(), CommandError> {
+    services.require_session().await?;
+    Ok(track_service::reprocess_track(
+        &services.db.0,
+        &services.storage,
+        &services.workers,
+        &services.analysis_tasks,
+        track_id,
+    )?)
+}
+
 /// The import driver over this host's catalog, storage and analysis tasks.
 pub(crate) fn importer(services: &AppServices) -> track_service::Importer<'_> {
     track_service::Importer {

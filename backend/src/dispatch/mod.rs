@@ -424,6 +424,7 @@ commands! {
     ) -> TrackImportResult;
 
     tracks::import_tracks(file_paths: Vec<String>) -> TrackImportResult;
+    tracks::reprocess_track(track_id: String) -> ();
 
     auth::current_account() -> Option<crate::database::local::auth::AuthAccount>;
     auth::send_login_code(email: String) -> ();

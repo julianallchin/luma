@@ -640,6 +640,26 @@ pub async fn delete_track(
 ) -> Result<(), String> {
     recover_track_deletions(pool, storage).await?;
     let mut transaction = pool
+/// Analyse a track again from its audio, in the background: every step
+/// reruns, and what the track has stays in place until a step rewrites it.
+pub fn reprocess_track(
+    pool: &SqlitePool,
+    storage: &StorageRoot,
+    workers: &WorkerEnvironment,
+    tasks: &AnalysisTaskGroup,
+    track_id: String,
+) -> Result<(), String> {
+    let (pool, storage, workers) = (pool.clone(), storage.clone(), workers.clone());
+    tasks.spawn(tasks.current_epoch()?, move |analysis| async move {
+        if let Err(error) =
+            scheduler::rerun_track(&pool, &storage, &workers, &track_id, &analysis).await
+        {
+            eprintln!("[preprocessing] reprocessing track {track_id} failed: {error}");
+        }
+    })?;
+    Ok(())
+}
+
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|error| format!("Failed to begin track deletion: {error}"))?;
