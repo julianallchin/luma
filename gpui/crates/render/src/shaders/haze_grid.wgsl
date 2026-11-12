@@ -59,7 +59,7 @@ fn light_grid(@builtin(global_invocation_id) cell: vec3<u32>) {
                     * exp(-light_optical_depth(li, world)));
                 continue;
             }
-            let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, dist), rest.cos_beam, rest.cos_field);
+            let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, dist, rest.cos_field), rest.cos_beam, rest.cos_field);
             if angular <= 0.0 { continue; }
             var visibility = 1.0;
             if haze.shadow.x > 0.0 && (visible & (1u << bit)) == 0u {

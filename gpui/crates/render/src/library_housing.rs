@@ -27,6 +27,7 @@ pub(crate) fn draws(
     light: impl Fn(u32, &mut Material),
 ) -> Vec<Draw> {
     let mut out = Vec::new();
+    let dies = dies(built);
     for (n, (node, world)) in built.nodes.iter().zip(worlds).enumerate() {
         let cover = cover(&node.meshes);
         for (m, mesh) in node.meshes.iter().enumerate() {
@@ -36,12 +37,29 @@ pub(crate) fn draws(
             });
             let mut material = material(built, mesh.material);
             if mesh.cell.is_some() {
-                // Off, an emitter is the dark die behind its lens, tinted
-                // the colour it makes; on, it is the light it gives.
-                material.base_color *= 0.15;
+                // Off, an emitter is the clear lens over its die: grey,
+                // barely tinted by the colour it makes.
+                material.base_color = Vec3::splat(0.2).lerp(material.base_color, 0.08);
             }
             if let Some(cell) = shows(mesh, cover) {
                 light(cell, &mut material);
+                if mesh.cell.is_some() {
+                    // A lit die glows evenly: its light drowns what its lens
+                    // reflects, so it takes no shading from the room.
+                    let glow = (material.emissive.max_element() / GLOW_FULL).clamp(0.0, 1.0);
+                    material.base_color *= 1.0 - glow;
+                    material.metallic *= 1.0 - glow;
+                    material.roughness += (1.0 - material.roughness) * glow;
+                }
+                // A cell of several die colours mixes its light on its own
+                // lens and in the air, so its face reads as the mix: each die
+                // only leans towards its own share of it.
+                if let Some(kinds) = dies.get(&cell).filter(|k| k.len() > 1) {
+                    if let Some(tint) = die_tint(built, mesh.material) {
+                        let own = die_share(material.emissive, tint, kinds);
+                        material.emissive = material.emissive.lerp(own, DIE_LEAN);
+                    }
+                }
             }
             if let Some(pattern) = mesh.pattern {
                 let gap = self::material(built, pattern.gap);
@@ -62,6 +80,64 @@ pub(crate) fn draws(
         }
     }
     out
+}
+
+/// Emission at which a die's own glow fully hides its reflections.
+const GLOW_FULL: f32 = 0.01;
+
+/// How far a lit die leans from its cell's mix towards its own colour.
+const DIE_LEAN: f32 = 0.25;
+
+/// The distinct die colours (emission tints, linear) on each cell. Only
+/// single-colour dies count: a mixing emitter shows its cell's own colour.
+fn dies(built: &Built) -> std::collections::HashMap<u32, Vec<Vec3>> {
+    let mut out: std::collections::HashMap<u32, Vec<(MaterialSlot, Vec3)>> = Default::default();
+    for mesh in built.nodes.iter().flat_map(|node| &node.meshes) {
+        let (Some(cell), Some(tint)) = (mesh.cell, die_tint(built, mesh.material)) else {
+            continue;
+        };
+        let kinds = out.entry(cell).or_default();
+        if !kinds.iter().any(|(slot, _)| *slot == mesh.material) {
+            kinds.push((mesh.material, tint));
+        }
+    }
+    out.into_iter()
+        .map(|(cell, kinds)| (cell, kinds.into_iter().map(|(_, tint)| tint).collect()))
+        .collect()
+}
+
+/// The colour a single-colour die gives off, linear and brightest channel 1.
+fn die_tint(built: &Built, slot: MaterialSlot) -> Option<Vec3> {
+    use MaterialSlot as M;
+    if !matches!(
+        slot,
+        M::EmitterW | M::EmitterR | M::EmitterG | M::EmitterB | M::EmitterA | M::EmitterUv
+    ) {
+        return None;
+    }
+    let (_, m) = built.materials.iter().find(|(s, _)| *s == slot)?;
+    let tint = Vec3::from(m.emit.map(linear));
+    (tint.max_element() > 0.0).then(|| tint / tint.max_element())
+}
+
+/// What a die of colour `tint` shows of its cell's light `mixed`, in a cell
+/// of dies `kinds`: as much of its own colour as fits inside the mix, scaled
+/// so the face's dies together are as bright as the mix (an equal number of
+/// each kind).
+fn die_share(mixed: Vec3, tint: Vec3, kinds: &[Vec3]) -> Vec3 {
+    let level = |t: Vec3| {
+        (0..3)
+            .filter(|&c| t[c] > 0.2)
+            .map(|c| mixed[c] / t[c])
+            .fold(f32::INFINITY, f32::min)
+            .max(0.0)
+    };
+    let luma = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+    let mean = kinds.iter().map(|&t| t * level(t)).sum::<Vec3>() / kinds.len() as f32;
+    if luma(mean) <= 0.0 {
+        return Vec3::ZERO;
+    }
+    tint * level(tint) * (luma(mixed) / luma(mean))
 }
 
 /// The cell a diffuser among `meshes` (one node's) covers: the one whose
@@ -138,18 +214,20 @@ fn material(built: &Built, slot: MaterialSlot) -> Material {
     let Some((_, m)) = built.materials.iter().find(|(s, _)| *s == slot) else {
         return crate::materials::POWDER_COAT;
     };
-    let linear = |c: f32| {
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
     Material {
         base_color: Vec3::from(m.rgb.map(linear)),
         metallic: m.metal,
         roughness: m.rough.max(0.05),
         ..Material::default()
+    }
+}
+
+/// A display (sRGB) channel in linear light.
+fn linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
     }
 }
 
@@ -188,6 +266,28 @@ fn mesh_data(mesh: &luma_fixture::Mesh) -> MeshData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lit white, an RGB cell's red dies show only red, and its dies
+    /// together are as bright as the white; lit red, the green and blue dies
+    /// stay dark.
+    #[test]
+    fn each_die_shows_its_own_share_of_the_mix() {
+        let kinds = [Vec3::X, Vec3::Y, Vec3::Z];
+        let luma = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        let white = Vec3::ONE;
+        let red_die = die_share(white, Vec3::X, &kinds);
+        assert!(red_die.x > 0.0 && red_die.y == 0.0 && red_die.z == 0.0);
+        let face = kinds
+            .iter()
+            .map(|&t| die_share(white, t, &kinds))
+            .sum::<Vec3>()
+            / 3.0;
+        assert!((luma(face) - luma(white)).abs() < 1e-4);
+        let red = Vec3::X;
+        assert!(die_share(red, Vec3::X, &kinds).x > 0.0);
+        assert_eq!(die_share(red, Vec3::Y, &kinds), Vec3::ZERO);
+        assert_eq!(die_share(red, Vec3::Z, &kinds), Vec3::ZERO);
+    }
 
     /// A lamp with one diffuser over its LEDs shows its light on the
     /// diffuser: that is the face anyone sees, and the dies behind it show
