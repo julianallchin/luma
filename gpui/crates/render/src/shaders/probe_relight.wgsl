@@ -186,7 +186,7 @@ fn probe_fixture_light(
         let from_light = q / distance;
         var cos_angle = dot(from_light, rest.direction);
         if rest.lens_distance > 0.0 {
-            cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, distance);
+            cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, distance, rest.cos_field);
         }
         let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
         if angular <= 0.0 {

@@ -564,7 +564,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
                 * transport_transmittance(ray, li, t, world) * mis_w);
             continue;
         }
-        let cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, dist);
+        let cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, dist, rest.cos_field);
 
         let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
         if angular <= 0.0 {
@@ -713,7 +713,7 @@ fn interval_integral(li: u32, ray: SceneRay, a: f32, b: f32, traced: bool) -> ve
                 panel_sum += panel_tint(cells) * (value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j]);
                 continue;
             }
-            let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance), rest.cos_beam, rest.cos_field);
+            let angular = angular_profile(lens_cos_angle(q, rest.direction, rest.lens_distance, distance, rest.cos_field), rest.cos_beam, rest.cos_field);
             let phase = haze_phase(-dot(q, ray.dir) / max(distance, 1e-4));
             let source_weight = 1.0 - grid_share(rest.handover, distance);
             let world = haze.camera_pos.xyz + ray.dir * t;

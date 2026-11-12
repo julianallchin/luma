@@ -197,6 +197,11 @@ pub enum EmitterShape {
     Tube,
 }
 
+/// How far a lens moves forward to clear emitters that stand proud of it,
+/// metres at most: a die or an LED dome, not a part that only shares the
+/// head's node.
+const MAX_EMITTER_RISE: f64 = 0.02;
+
 /// A head's lens: where its beam leaves and which way it goes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Head {
@@ -629,12 +634,26 @@ pub(crate) fn assemble(f: &Fixture, mut b: Rig) -> Built {
     let heads = b
         .lenses
         .iter()
-        .map(|l| Head {
-            node: l.node,
-            lens_centre: v3(to_root(l.centre, l.node)),
-            beam: v3(dir_root(l.normal, l.node)),
-            size: l.size.map(|x| x as f32),
-            round: l.round,
+        .map(|l| {
+            let centre = to_root(l.centre, l.node);
+            let beam = dir_root(l.normal, l.node).normalize_or_zero();
+            // The beam leaves in front of the emitters it is made of, so it
+            // lights none of its own face.
+            let front = b
+                .items
+                .iter()
+                .filter(|it| it.node == l.node && it.emit.is_some())
+                .flat_map(|it| &it.mesh.v)
+                .map(|p| (*p - centre).dot(beam))
+                .fold(0.0, f64::max)
+                .min(MAX_EMITTER_RISE);
+            Head {
+                node: l.node,
+                lens_centre: v3(centre + beam * front),
+                beam: v3(beam),
+                size: l.size.map(|x| x as f32),
+                round: l.round,
+            }
         })
         .collect();
     let sources = b

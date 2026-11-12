@@ -787,7 +787,7 @@ fn shade(fragment: VsOut, surface: Surface, dx: vec3<f32>, dy: vec3<f32>) -> vec
             // the beam's own footprint; falloff below stays from the lens.
             var cos_angle = dot(from_light, rest.direction);
             if rest.lens_distance > 0.0 {
-                cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, distance);
+                cos_angle = lens_cos_angle(q, rest.direction, rest.lens_distance, distance, rest.cos_field);
             }
             let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
             if angular <= 0.0 {

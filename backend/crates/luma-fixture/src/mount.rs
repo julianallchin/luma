@@ -604,6 +604,10 @@ fn luminaire(b: &mut Rig, c: &Chain) -> Res {
                 );
                 ty = top + 0.03 + hl / 2.0 - off;
             }
+            // A bracket hinges where the spec says; the body sits `off` from
+            // that pivot along its beam.
+            (None, MountType::Bracket) => {}
+            // A bail or loose body stands on its base, beam up at tilt 0.
             (None, _) => ty = hl / 2.0 - off + by,
         }
         let head = |b: &mut Rig| -> Res {
