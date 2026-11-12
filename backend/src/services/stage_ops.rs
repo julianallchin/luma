@@ -953,8 +953,9 @@ impl<'a> Stage<'a> {
     /// deleted lights can be undone: a fixture node the snapshot holds and the
     /// venue has lost comes back with its patch row from `patch`, and one the
     /// venue holds and the snapshot does not leaves with its patch row. A light
-    /// in both keeps the patch row it has now, because a patch edit is not a
-    /// stage edit. One transaction: reconcile changed rows, preserving
+    /// in both keeps the patch row and the groups it has now, because a patch
+    /// or group edit is not a stage edit; a light that returns is back in the
+    /// groups it was in. One transaction: reconcile changed rows, preserving
     /// unchanged rows and their sync receipts, then re-solve.
     ///
     /// # Errors
@@ -993,6 +994,10 @@ impl<'a> Stage<'a> {
                 ))
             })?;
             fixture_create::restore(&mut access, row, node).await?;
+            // Its groups went with it, so they come back with it.
+            for membership in rows.memberships.iter().filter(|m| m.fixture_id == node.id) {
+                crate::database::local::groups::restore_membership(&mut access, membership).await?;
+            }
         }
 
         // Structure: new rows in, changed rows (placements included) back to

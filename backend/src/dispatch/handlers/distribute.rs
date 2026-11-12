@@ -1174,6 +1174,65 @@ mod tests {
         );
     }
 
+    /// A light deleted from the room leaves its groups, and undo brings it
+    /// back into them: a score that plays the group plays the light again.
+    #[tokio::test]
+    async fn undoing_a_deleted_light_puts_it_back_in_its_groups() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        let placed = spread(&services, &venue, &run, "face_-y", 2, even())
+            .await
+            .unwrap();
+        let lights: Vec<&str> = placed["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap())
+            .collect();
+        dispatch(
+            &services,
+            "save_venue_group",
+            &json!({
+                "venueId": venue, "groupId": null, "label": "front",
+                "added": lights, "removed": [],
+            }),
+        )
+        .await
+        .unwrap();
+        let members = || async {
+            sqlx::query_as::<_, (String, String, String)>(
+                "SELECT id, fixture_id, group_id FROM fixture_group_members ORDER BY id",
+            )
+            .fetch_all(&services.db.0)
+            .await
+            .unwrap()
+        };
+        let grouped = members().await;
+        assert_eq!(grouped.len(), 2, "both lights are in the group");
+        let snapshot = dispatch(&services, "get_venue_graph", &json!({ "venueId": venue }))
+            .await
+            .unwrap();
+        let before = patch(&services, &venue).await;
+
+        dispatch(
+            &services,
+            "delete_subtree",
+            &json!({ "venueId": venue, "nodeId": lights[0] }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(members().await.len(), 1, "the deleted light left the group");
+
+        dispatch(
+            &services,
+            "restore_graph",
+            &json!({ "venueId": venue, "rows": snapshot, "patch": before }),
+        )
+        .await
+        .expect("the delete would not undo");
+        assert_eq!(members().await, grouped);
+    }
+
     // -----------------------------------------------------------------------
     // Plumbing
     // -----------------------------------------------------------------------
