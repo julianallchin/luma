@@ -271,6 +271,47 @@ impl TriMesh {
         self.triangles.len()
     }
 
+    /// Whether anything stands within `limit` along `ray`. Stops at the
+    /// first hit and allocates nothing: a bake asks this millions of times.
+    pub fn blocked(&self, ray: Ray, limit: f32) -> bool {
+        if self.triangles.is_empty() {
+            return false;
+        }
+        let inv_dir = Vec3::new(1.0 / ray.dir.x, 1.0 / ray.dir.y, 1.0 / ray.dir.z);
+        // A binned-SAH tree over a mesh is far shallower than this.
+        let mut stack = [0u32; 64];
+        let mut top = 1;
+        while top > 0 {
+            top -= 1;
+            let node = &self.bvh.nodes[stack[top] as usize];
+            if !slab_test(&node.bounds, ray.origin, inv_dir, limit) {
+                continue;
+            }
+            if node.count == 0 {
+                if top + 2 > stack.len() {
+                    return true;
+                }
+                stack[top] = node.first;
+                stack[top + 1] = node.first + 1;
+                top += 2;
+                continue;
+            }
+            for i in node.first..node.first + node.count {
+                let [a, b, c] = self.triangles[self.bvh.tri_indices[i as usize] as usize];
+                let hit = intersect_triangle(
+                    ray,
+                    self.positions[a as usize],
+                    self.positions[b as usize],
+                    self.positions[c as usize],
+                );
+                if hit.is_some_and(|t| t < limit) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Nearest forward hit, in the mesh's own space. Double-sided: stage GLBs
     /// are not reliably wound, and a back-facing floor still stops a
     /// downward probe.
@@ -382,6 +423,22 @@ mod tests {
             }
         }
         TriMesh::new(positions, triangles)
+    }
+
+    /// `blocked` says what `raycast` says, with a limit: a hit past the
+    /// limit is not in the way.
+    #[test]
+    fn blocked_is_a_hit_within_the_limit() {
+        let mesh = grid_quad(16);
+        let down = Ray::new(Vec3::new(0.3, -0.2, 2.0), Vec3::NEG_Z);
+        assert!(mesh
+            .raycast(down)
+            .is_some_and(|hit| (hit.t - 2.0).abs() < 1e-5));
+        assert!(mesh.blocked(down, 2.5));
+        assert!(!mesh.blocked(down, 1.5), "the quad is past the limit");
+        let past = Ray::new(Vec3::new(3.0, 0.0, 2.0), Vec3::NEG_Z);
+        assert!(mesh.raycast(past).is_none());
+        assert!(!mesh.blocked(past, 10.0));
     }
 
     #[test]
