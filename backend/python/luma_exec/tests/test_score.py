@@ -130,6 +130,36 @@ class ScoreTests(unittest.TestCase):
         with self.assertRaisesRegex(TrackError, "label 'kept' is on two clips"):
             edit.replace_source(json.dumps({"clips": {kept.id: stored, "other": stored}}))
 
+    def rendered(self, level):
+        """A 48-bar track whose render is `level(seconds)` per light: (lights, rgb level)."""
+        import numpy as np
+        def call(method, payload):
+            times = np.arange(payload["startTime"], payload["endTime"], 0.125)
+            values = np.zeros((10, len(times), 3))
+            for index, time in enumerate(times):
+                lights, value = level(time)
+                values[:lights, index, :] = value
+            return {"values": values, "timesS": list(times)}
+        beats = [beat * 0.5 for beat in range(48 * 4 + 1)]
+        return GraphTrack({"id": "track", "title": "Test", "editable": True, "beat_origin_s": 0.0,
+                           "duration_s": 96.0, "document": {"clips": {}}}, nodes=[],
+                          features={"beats": beats, "downbeats": beats[::4]}, host_call=call)
+
+    def test_a_review_warns_about_a_flat_bright_show_and_not_a_shaped_one(self):
+        flat = self.rendered(lambda time: (10, 0.9)).review()
+        self.assertTrue(any("mean level" in warning for warning in flat.warnings))
+        self.assertTrue(any("quietest section" in warning for warning in flat.warnings))
+        # Sixteen seconds is eight bars: dim, a peak in bars 17-24, then nothing.
+        shape = {0: (2, 0.2), 1: (4, 0.3), 2: (8, 0.9), 3: (2, 0.2), 4: (1, 0.1), 5: (0, 0.0)}
+        shaped = self.rendered(lambda time: shape[int(time // 16)]).review()
+        self.assertEqual(shaped.warnings, ())
+        self.assertEqual(max(shaped.sections, key=lambda section: section[1])[0], 17)
+        self.assertLess(shaped.level, flat.level)
+        self.assertLess(shaped.lit, flat.lit)
+        self.assertIn("brightest in bars 17-24", repr(shaped))
+        self.assertIn("dark: bars 41-48", repr(shaped))
+        self.assertNotIn("warning", repr(shaped))
+
     def track(self):
         nodes = [{"kind": "color", "output": "color", "inputs": {
             "color": {"type": "color", "unit": "rgb", "default": None}}, "settings": {}}]
