@@ -165,6 +165,11 @@ after it. A new migration adds its line here.
   layer; until it runs, a venue member cannot download the audio of a song
   another member owns unless that owner scored it in the venue. Server only;
   there is no local migration
+- `20261112140000_scores_are_their_authors.sql` — any time before shipping
+  the client that opens other people's scores read-only; until it runs, only
+  the app keeps a member from writing a score someone else owns. After it, an
+  older client's edit of such a score uploads to no rows and is undone by the
+  next download. Server only; there is no local migration
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an

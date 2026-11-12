@@ -313,6 +313,9 @@ pub(crate) struct Score {
     /// Its name as the listing read it when it was opened, kept current by a
     /// rename from the song list; `None` when it has none.
     pub(crate) name: Option<SharedString>,
+    /// Whether the signed-in account may write it: its own score. Someone
+    /// else's opens to read and play, and is duplicated to be changed.
+    pub(crate) editable: bool,
 }
 
 /// One clip, with everything a draw *and* a write need already resolved.
@@ -461,6 +464,11 @@ impl Editor {
             .unwrap_or_else(|| self.score_label().into())
     }
 
+    /// Whether the open score is the reader's to change.
+    pub(crate) fn score_editable(&self) -> bool {
+        self.score.editable
+    }
+
     /// The open score's id.
     pub(crate) fn target_score_id(&self) -> &str {
         &self.score.id
@@ -566,8 +574,14 @@ impl Editor {
     /// funnels through here, which is what makes "a lane is a function of
     /// every clip's priority" a fact rather than a convention.
     /// This also keeps
-    /// [`Editor::dirty`] from being something a caller can forget to set.
+    /// [`Editor::dirty`] from being something a caller can forget to set,
+    /// and is where a score that is not the reader's stays as it was read: no
+    /// gesture or command changes it, so none owes a write the backend would
+    /// refuse.
     fn replace_clips(&mut self, mut clips: Vec<Clip>) {
+        if !self.score.editable {
+            return;
+        }
         assign_rows(&mut clips);
         self.clips = clips.into();
         self.dirty = true;

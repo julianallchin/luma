@@ -34,8 +34,9 @@ the server remembers are in [data-layer.md](data-layer.md).
   (`SyncedTable::slot`).
 - Postgres row-level security decides who may read and write a row. Owner or
   venue member for venue content, the venue row included; owner for private
-  content and for the venue's door (its owner, its share code, deleting it,
-  removing members). A policy asks whether a row's parents are live, never
+  content, for the venue's door (its owner, its share code, deleting it,
+  removing members) and for a score and its clips, which members read and
+  copy (`VenueAccess` asks the same locally; see `VenueResource::Score`). A policy asks whether a row's parents are live, never
   whether the row itself is. `public.history` records who made each change.
   The app validates before it writes. The server does not re-run domain rules.
 - Concurrent edits to one row merge per column, last write wins. PowerSync

@@ -17,6 +17,11 @@ pub struct Score {
     /// track was analysed, which reads the track's current grid.
     #[sqlx(rename = "grid_id")]
     pub grid_id: Option<String>,
+    /// Whether the reader may write it: a score is edited by the account
+    /// that owns it and read by everyone else who can open its venue, who
+    /// copy it to change it. Computed at read time for the signed-in
+    /// principal and never stored.
+    pub editable: bool,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
     #[sqlx(rename = "updated_at")]
@@ -42,6 +47,8 @@ pub struct ScoreSummary {
     /// a list, so deleting the first score renumbers the rest and anything
     /// that had written the old number down would be wrong.
     pub ordinal: i64,
+    /// Whether the reader may write it: see [`Score::editable`].
+    pub editable: bool,
     #[sqlx(rename = "annotation_count")]
     pub annotation_count: i64,
     /// When that edit landed. The score row's own `updated_at` moves for

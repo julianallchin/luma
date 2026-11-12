@@ -1,8 +1,10 @@
 //! A venue shared by code, walked command by command as one of its members.
 //!
-//! Members are collaborators: everything in the venue is theirs to edit, and
-//! the server's history says who changed what. Only the venue's door — its
-//! share code and who holds a membership — stays the owner's.
+//! Members are collaborators: the venue's rig, stage, groups and perform set
+//! are theirs to edit, and the server's history says who changed what. A
+//! score is its author's: everyone else reads it and copies it to change it.
+//! The venue's door — its share code and who holds a membership — stays the
+//! owner's.
 
 use serde_json::{json, Value};
 
@@ -338,6 +340,109 @@ async fn a_member_edits_the_room_its_rig_and_its_set() {
         json!({ "venueId": venue, "layout": layout }),
     )
     .await;
+}
+
+/// Someone else's score reads, and copies into one of the reader's own; it is
+/// not renamed, written or deleted — by the venue's owner either.
+#[tokio::test]
+async fn a_score_is_edited_by_its_author_and_copied_by_everyone_else() {
+    let directory = tempfile::tempdir().unwrap();
+    let (services, venue, _stage) = shared(directory.path()).await;
+    sqlx::query(
+        "INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('song', ?, 'h', '/song.wav')",
+    )
+    .bind(MEMBER)
+    .execute(&services.db.0)
+    .await
+    .unwrap();
+    let score = run(
+        &services,
+        "create_score",
+        json!({ "trackId": "song", "venueId": venue, "name": "Members" }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let wash = |start: f64| {
+        let clip = luma_patterns::presets()
+            .clip("Wash")
+            .expect("the Wash preset")
+            .clip(start, 4.);
+        json!({
+            "edit": luma_patterns::ScoreEdit::between(
+                &luma_patterns::Score::default(),
+                &luma_patterns::Score {
+                    clips: [(uuid::Uuid::new_v4().to_string(), clip)].into_iter().collect(),
+                },
+            ),
+        })
+    };
+    let write = |score: &str, start: f64| {
+        let mut args = wash(start);
+        args["scoreId"] = json!(score);
+        args
+    };
+    run(&services, "edit_score_document", write(&score, 0.)).await;
+
+    arm_write_admission(&services.db.0, Some(TEST_OWNER))
+        .await
+        .unwrap();
+    async fn listed(services: &AppServices, venue: &str) -> Value {
+        run(
+            services,
+            "list_scores_for_track",
+            json!({ "trackId": "song", "venueId": venue }),
+        )
+        .await
+    }
+    let editable = |listing: &Value, id: &str| {
+        listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap_or_else(|| panic!("score {id} is not listed"))["editable"]
+            .clone()
+    };
+    assert_eq!(
+        editable(&listed(&services, &venue).await, &score),
+        json!(false)
+    );
+    async fn clips(services: &AppServices, score: &str) -> usize {
+        run(services, "get_score_document", json!({ "scoreId": score })).await["clips"]
+            .as_object()
+            .unwrap()
+            .len()
+    }
+    assert_eq!(clips(&services, &score).await, 1, "the score does not read");
+
+    for (name, args) in [
+        ("rename_score", json!({ "scoreId": score, "name": "Taken" })),
+        ("edit_score_document", write(&score, 8.)),
+        ("delete_score", json!({ "id": score })),
+    ] {
+        assert!(
+            dispatch(&services, name, &args).await.is_err(),
+            "`{name}` changed someone else's score"
+        );
+    }
+    assert_eq!(clips(&services, &score).await, 1);
+
+    let copy = run(
+        &services,
+        "duplicate_score",
+        json!({ "scoreId": score, "name": "Members copy" }),
+    )
+    .await;
+    assert_eq!(copy["editable"], json!(true));
+    let copy = copy["id"].as_str().unwrap().to_owned();
+    run(&services, "edit_score_document", write(&copy, 8.)).await;
+    assert_eq!(clips(&services, &copy).await, 2);
+    assert_eq!(clips(&services, &score).await, 1);
+    let listing = listed(&services, &venue).await;
+    assert_eq!(editable(&listing, &copy), json!(true));
+    assert_eq!(editable(&listing, &score), json!(false));
 }
 
 #[tokio::test]

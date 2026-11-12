@@ -87,6 +87,7 @@ pub async fn list_scores_for_track(
                 ",
         score_ordinal!(),
         ",
+                score.uid IS ? AS editable,
                 (SELECT COUNT(*) FROM clips WHERE clips.score_id = score.id) AS annotation_count,
                 ",
         provenance!(),
@@ -99,6 +100,7 @@ pub async fn list_scores_for_track(
         newest_first!()
     );
     sqlx::query_as::<_, ScoreSummary>(ONE_VENUE)
+        .bind(access.principal().to_owned())
         .bind(track_id)
         .bind(access.venue_id().to_owned())
         .fetch_all(&mut *access.connection())
@@ -117,6 +119,7 @@ pub async fn list_accessible_scores_for_track(
                 ",
         score_ordinal!(),
         ",
+                score.uid IS access.principal AS editable,
                 (SELECT COUNT(*) FROM clips WHERE clips.score_id = score.id) AS annotation_count,
                 ",
         provenance!(),
@@ -139,9 +142,11 @@ pub async fn list_accessible_scores_for_track(
 /// Fetch a score by ID
 pub async fn get_score(access: &mut impl AuthorizedVenue, id: &str) -> Result<Score, String> {
     sqlx::query_as::<_, Score>(
-        "SELECT id, uid, track_id, venue_id, name, grid_id, created_at, updated_at
+        "SELECT id, uid, track_id, venue_id, name, grid_id, uid IS ? AS editable,
+                created_at, updated_at
          FROM scores WHERE id = ? AND venue_id = ?",
     )
+    .bind(access.principal().to_owned())
     .bind(id)
     .bind(access.venue_id().to_owned())
     .fetch_one(&mut *access.connection())

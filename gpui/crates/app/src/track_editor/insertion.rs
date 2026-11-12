@@ -178,7 +178,19 @@ impl Editor {
 }
 
 impl Luma {
+    /// Whether the open score takes a new pattern: someone else's offers
+    /// none, where a dialog whose every answer does nothing would.
+    fn takes_patterns(&self) -> bool {
+        matches!(
+            self.workspace.active_body(),
+            Some(Body::TrackEditor(editor)) if editor.score_editable()
+        )
+    }
+
     pub(super) fn add_pattern(&mut self, cx: &mut Context<Self>) {
+        if !self.takes_patterns() {
+            return;
+        }
         self.with_track_editor(cx, |editor| {
             let time = editor
                 .cursor
@@ -213,6 +225,9 @@ impl Luma {
     /// gesture opens a new layer there, and anywhere else it drops onto the
     /// lane under the pointer.
     pub(super) fn timeline_insert_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if !self.takes_patterns() {
+            return;
+        }
         self.with_track_editor(cx, |editor| {
             editor.menu = editor.insertion_at(at, 1);
             editor.menu_scroll.scroll_to_item(0);

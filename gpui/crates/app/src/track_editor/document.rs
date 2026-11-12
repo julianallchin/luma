@@ -113,7 +113,8 @@ impl Editor {
         self.clips = clips?.into();
         self.beats = beats.map(Rc::new);
         self.graph_score = Some(score);
-        self.dirty = split;
+        // Someone else's score is shown split and left as it is stored.
+        self.dirty = split && self.score.editable;
         self.sheet.invalidate();
         self.previews.borrow_mut().clear();
         self.preview_failed.clear();

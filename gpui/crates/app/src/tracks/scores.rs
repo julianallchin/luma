@@ -48,6 +48,9 @@ pub(crate) struct ScoreRow {
     pub(crate) venue: SharedString,
     /// Whose score it is.
     author: SharedString,
+    /// Whether the reader may change it: their own. Someone else's is read
+    /// and duplicated.
+    pub(crate) editable: bool,
     /// The score's own name, when it was given one. Most are unnamed, which
     /// is why the owner and not this is the row's leading word.
     name: Option<SharedString>,
@@ -68,9 +71,8 @@ pub(crate) struct ScoreRow {
 /// and is preserved, so "which score is newest" is a property of the list and
 /// not something this level re-decides per venue.
 ///
-/// `user` is the signed-in account, and only names the author: every listed
-/// score is in a venue the reader can open, and whoever can open a venue can
-/// edit all of it.
+/// `user` is the signed-in account, and only names the author: whether the
+/// reader may change a score is the listing's own answer.
 pub(crate) fn rows(summaries: &[ScoreSummary], user: &str) -> Rc<[ScoreRow]> {
     summaries
         .iter()
@@ -91,6 +93,7 @@ pub(crate) fn rows(summaries: &[ScoreSummary], user: &str) -> Rc<[ScoreRow]> {
                     .unwrap_or_else(|| "Unknown venue".into())
                     .into(),
                 author,
+                editable: score.editable,
                 name: score.name.clone().map(SharedString::from),
                 clips: score.annotation_count,
                 age: crate::welcome::relative_age(
@@ -297,6 +300,8 @@ pub(crate) struct ScoreMenu {
     clips: i64,
     /// What a copy is named after: the score's name, or its `#n`.
     title: SharedString,
+    /// Whether the score is the reader's to rename and delete.
+    editable: bool,
 }
 
 impl ScoreRow {
@@ -757,6 +762,7 @@ pub(crate) fn open_row(row: &ScoreRow) -> crate::track_editor::Score {
         id: row.id.to_string(),
         ordinal: row.ordinal,
         name: row.name.clone(),
+        editable: row.editable,
     }
 }
 
@@ -880,6 +886,7 @@ pub(super) fn column(
 
 /// The context menu over a right-clicked score, if one is up: the score
 /// crumb's acts on this row's score — Rename in place, Duplicate — and Delete.
+/// Someone else's score has Duplicate alone.
 pub(super) fn menu(state: &super::Tracks, app: &Entity<Luma>) -> Option<AnyElement> {
     let level = state.scores.as_ref()?;
     let open = level.menu.as_ref()?;
@@ -889,31 +896,32 @@ pub(super) fn menu(state: &super::Tracks, app: &Entity<Luma>) -> Option<AnyEleme
     let (rename_track, rename_score) = (track_id.clone(), open.score_id.clone());
     let (copy_track, copy_score, copy_title) =
         (track_id.clone(), open.score_id.clone(), open.title.clone());
-    Some(
-        luma_ui::menu::ContextMenu::new("score-menu", open.at)
-            .item("Rename", move |window, cx| {
-                let (track_id, score_id) = (rename_track.clone(), rename_score.clone());
-                renamed.update(cx, |this, cx| {
-                    this.start_score_rename(track_id, score_id, window, cx)
-                });
-            })
-            .item("Duplicate", move |_, cx| {
-                duplicated.update(cx, |this, cx| {
-                    this.close_score_menu(cx);
-                    this.duplicate_score(&copy_track, &copy_score, &copy_title, cx)
-                });
-            })
-            .separator()
-            .destructive("Delete score", move |_, cx| {
-                let track_id = track_id.clone();
-                deleted.update(cx, |this, cx| this.request_delete_score(track_id, cx));
-            })
-            .render(move |_, cx| {
-                dismissed.update(cx, |this, cx| {
-                    this.close_score_menu(cx);
-                });
-            }),
-    )
+    let mut menu = luma_ui::menu::ContextMenu::new("score-menu", open.at);
+    if open.editable {
+        menu = menu.item("Rename", move |window, cx| {
+            let (track_id, score_id) = (rename_track.clone(), rename_score.clone());
+            renamed.update(cx, |this, cx| {
+                this.start_score_rename(track_id, score_id, window, cx)
+            });
+        });
+    }
+    menu = menu.item("Duplicate", move |_, cx| {
+        duplicated.update(cx, |this, cx| {
+            this.close_score_menu(cx);
+            this.duplicate_score(&copy_track, &copy_score, &copy_title, cx)
+        });
+    });
+    if open.editable {
+        menu = menu.separator().destructive("Delete score", move |_, cx| {
+            let track_id = track_id.clone();
+            deleted.update(cx, |this, cx| this.request_delete_score(track_id, cx));
+        });
+    }
+    Some(menu.render(move |_, cx| {
+        dismissed.update(cx, |this, cx| {
+            this.close_score_menu(cx);
+        });
+    }))
 }
 
 /// Every other venue's rows, grouped under the venue's name, in the order the
@@ -980,6 +988,7 @@ fn score_row(
             let menu_track = track.id.clone();
             let (score_id, venue_id, ordinal, clips) =
                 (row.id.clone(), row.venue_id.clone(), row.ordinal, row.clips);
+            let editable = row.editable;
             let title: SharedString = row
                 .name
                 .clone()
@@ -993,6 +1002,7 @@ fn score_row(
                     venue_id: venue_id.clone(),
                     clips,
                     title: title.clone(),
+                    editable,
                 };
                 raised.update(cx, |this, cx| this.open_score_menu(&menu_track, menu, cx));
             })

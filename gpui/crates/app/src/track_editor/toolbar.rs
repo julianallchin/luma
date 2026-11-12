@@ -11,6 +11,7 @@ const EDIT_READOUTS_WIDTH: f32 = 190.;
 pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readout>) -> Div {
     let insert = app.clone();
     let export = app.clone();
+    let editable = state.score.editable;
     div()
         .flex()
         .flex_wrap()
@@ -30,7 +31,7 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readou
                 .agent_node(Role::Text, state.track_name.clone()),
         )
         .child(
-            luma_ui::button("Add pattern", Enabled::Yes)
+            luma_ui::button("Add pattern", editable.into())
                 .id("add-score-pattern")
                 .on_click(move |_, _, cx| insert.update(cx, |app, cx| app.add_pattern(cx)))
                 .agent_node(Role::Button, "Add pattern"),
@@ -45,6 +46,36 @@ pub(super) fn toolbar(state: &Editor, app: &Entity<Luma>, readout: Entity<Readou
             1 => "1 pattern".to_string(),
             count => format!("{count} patterns"),
         }))
+        .when(!editable, |el| {
+            let copy = app.clone();
+            let (track_id, score_id, title) = (
+                state.track_id.clone(),
+                state.score.id.clone(),
+                state.score_title(),
+            );
+            el.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .child(
+                        gpui_component::Icon::new(luma_ui::icons::IconName::Lock)
+                            .size(px(12.))
+                            .text_color(ladder::muted_foreground()),
+                    )
+                    .child(luma_ui::caption("Read-only").agent_node(Role::Text, "Read-only score")),
+            )
+            .child(
+                luma_ui::button("Duplicate to edit", Enabled::Yes)
+                    .id("duplicate-read-only-score")
+                    .on_click(move |_, _, cx| {
+                        copy.update(cx, |app, cx| {
+                            app.duplicate_score(&track_id, &score_id, &title, cx)
+                        })
+                    })
+                    .agent_node(Role::Button, "Duplicate to edit"),
+            )
+        })
         .when(
             state
                 .beats
