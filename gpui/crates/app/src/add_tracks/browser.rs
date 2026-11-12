@@ -98,10 +98,9 @@ impl Luma {
         else {
             return;
         };
-        let request_id = uuid::Uuid::new_v4().to_string();
         let pending = self
             .library
-            .ensure_track_in_venue(&request_id, &track_id, &venue_id, None);
+            .ensure_track_in_venue(&track_id, &venue_id, None);
         cx.spawn(async move |this, cx| match pending.await {
             Ok(_) => {
                 let Ok(rows) = this.read_with(cx, |this, _| this.library.tracks(&venue_id)) else {

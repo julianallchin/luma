@@ -240,11 +240,11 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | --- | --- | --- |
 | `list_scores_for_track` | `trackId: String`<br>`venueId: String` | `Vec<ScoreSummary>` |
 | `list_scores_across_venues` | `trackId: String` | `Vec<ScoreSummary>` |
-| `create_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
-| `ensure_venue_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
+| `create_score` | `trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
+| `ensure_venue_score` | `trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
 | `delete_score` | `id: String` | `()` |
 | `rename_score` | `scoreId: String`<br>`name: String` | `()` |
-| `duplicate_score` | `requestId: String`<br>`scoreId: String`<br>`name: String` | `Score` |
+| `duplicate_score` | `scoreId: String`<br>`name: String` | `Score` |
 | `get_score_document` | `scoreId: String` | `Option<luma_patterns::Score>` |
 | `edit_score_document` | `scoreId: String`<br>`edit: luma_patterns::ScoreEdit` | `()` |
 | `preview_score_clips` | `scoreId: String`<br>`clipIds: Vec<String>`<br>`score: Option<luma_patterns::Score>` | `Vec<crate::services::graph_scores::ClipStrip>` |

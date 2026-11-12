@@ -72,41 +72,16 @@ fn library_creates_idempotent_empty_membership_and_persists_session_items() {
     runtime.block_on(async {
         let venue = library.create_venue("Venue", None).await.unwrap();
         let first = library
-            .create_score(
-                "f4034256-5f2f-4c6a-b5df-f64aac717ce8",
-                "track",
-                &venue.id,
-                None,
-            )
+            .create_score("track", &venue.id, None)
             .await
             .unwrap();
-        let replay = library
-            .create_score(
-                "f4034256-5f2f-4c6a-b5df-f64aac717ce8",
-                "track",
-                &venue.id,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(first.id, replay.id, "request replay created a second score");
 
         let first_add = library
-            .ensure_track_in_venue(
-                "484d62bc-6088-47bb-989d-61e91f57b727",
-                "track",
-                &venue.id,
-                None,
-            )
+            .ensure_track_in_venue("track", &venue.id, None)
             .await
             .unwrap();
         let repeated_add = library
-            .ensure_track_in_venue(
-                "2cd7fd0a-a1ea-4a12-aee2-0c5995428763",
-                "track",
-                &venue.id,
-                None,
-            )
+            .ensure_track_in_venue("track", &venue.id, None)
             .await
             .unwrap();
         assert_eq!(first.id, first_add.id);
@@ -119,12 +94,7 @@ fn library_creates_idempotent_empty_membership_and_persists_session_items() {
         assert_eq!(row.venue_annotation_count, 0);
 
         let another_score = library
-            .create_score(
-                "83d83dd9-09ab-4fdb-9d19-aa15c612c347",
-                "track",
-                &venue.id,
-                Some("Alternate"),
-            )
+            .create_score("track", &venue.id, Some("Alternate"))
             .await
             .unwrap();
         assert_ne!(first.id, another_score.id);

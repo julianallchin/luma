@@ -844,8 +844,7 @@ impl Fixture {
                 &services,
                 "create_score",
                 json!({
-                    "requestId": request_id(0), "trackId": TRACK,
-                    "venueId": VENUE, "name": "Fixture Score",
+                    "trackId": TRACK, "venueId": VENUE, "name": "Fixture Score",
                 }),
             )
             .await;
@@ -860,12 +859,11 @@ impl Fixture {
         };
 
         let mut scores: Vec<String> = score_id.iter().cloned().collect();
-        for extra in 0..self.extra_scores {
+        for _ in 0..self.extra_scores {
             let score = call(
                 &services,
                 "create_score",
                 json!({
-                    "requestId": request_id(900 + extra),
                     "trackId": TRACK,
                     "venueId": VENUE,
                     "name": null,

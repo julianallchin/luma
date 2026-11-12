@@ -448,10 +448,7 @@ impl Luma {
             return;
         };
         let venue_id = songs.venue_id().to_string();
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let pending = self
-            .library
-            .create_score(&request_id, track_id, &venue_id, None);
+        let pending = self.library.create_score(track_id, &venue_id, None);
         self.open_minted_score(track_id, pending, "Could not create the score", cx);
     }
 
@@ -475,11 +472,9 @@ impl Luma {
         title: &str,
         cx: &mut Context<Self>,
     ) {
-        let pending = self.library.duplicate_score(
-            &uuid::Uuid::new_v4().to_string(),
-            score_id,
-            &format!("{title} copy"),
-        );
+        let pending = self
+            .library
+            .duplicate_score(score_id, &format!("{title} copy"));
         self.open_minted_score(track_id, pending, "Could not duplicate the score", cx);
     }
 

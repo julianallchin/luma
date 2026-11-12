@@ -596,7 +596,7 @@ async fn bind_venue(
         // Named by nobody: a score's title is the operator's to give, and a
         // run that invented one would be guessing at the show it is about to
         // author. The app shows an unnamed score by its track.
-        let score = catalog::create_score(pool, &uuid(), track_id, &venue_id, None, minting)
+        let score = catalog::create_score(pool, track_id, &venue_id, None, minting)
             .await
             .map_err(|error| format!("create_score: {error}"))?;
         return Ok((venue_id, score.id));
@@ -610,7 +610,7 @@ async fn bind_venue(
     if let Some(score) = existing.as_array().and_then(|scores| scores.first()) {
         return Ok((venue_id, string(score, "id")));
     }
-    let score = catalog::ensure_venue_score(pool, &uuid(), track_id, &venue_id, None, minting)
+    let score = catalog::ensure_venue_score(pool, track_id, &venue_id, None, minting)
         .await
         .map_err(|error| format!("ensure_venue_score: {error}"))?;
     Ok((venue_id, score.id))

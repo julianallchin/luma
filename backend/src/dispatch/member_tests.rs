@@ -261,7 +261,6 @@ async fn a_member_edits_the_room_its_rig_and_its_set() {
         &services,
         "create_score",
         json!({
-            "requestId": "6f1c1d1e-0000-4000-8000-000000000001",
             "trackId": "song", "venueId": venue, "name": "Mine",
         }),
     )
@@ -320,7 +319,7 @@ async fn a_member_edits_the_room_its_rig_and_its_set() {
     run(
         &services,
         "duplicate_score",
-        json!({ "requestId": uuid::Uuid::new_v4().to_string(), "scoreId": score, "name": "Still mine copy" }),
+        json!({ "scoreId": score, "name": "Still mine copy" }),
     )
     .await;
     run(&services, "delete_score", json!({ "id": score })).await;

@@ -413,9 +413,8 @@ impl Luma {
         let pending: Vec<_> = track_ids
             .iter()
             .map(|track_id| {
-                let request_id = uuid::Uuid::new_v4().to_string();
                 self.library
-                    .ensure_track_in_venue(&request_id, track_id, &venue_id, None)
+                    .ensure_track_in_venue(track_id, &venue_id, None)
             })
             .collect();
         cx.spawn(async move |this, cx| {

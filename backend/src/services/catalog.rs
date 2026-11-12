@@ -1,14 +1,8 @@
 //! Creating and deleting the scores a person owns.
-//!
-//! Every id here is derived from the caller's `request_id`, so a retried
-//! request finds the row it made the first time instead of making a second one.
-//! There is no operation ledger: the row either exists or it does not.
 
-use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::database::local::auth::principal_key;
 use crate::database::local::scores::{get_score, rows};
 use crate::database::local::tracks::current_grid_id;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, VenueResource, Write};
@@ -21,81 +15,50 @@ use crate::sync::triggers::Attribution;
 /// client opening a session mints its score before it has a thread.
 pub async fn create_score(
     pool: &SqlitePool,
-    request_id: &str,
     track_id: &str,
     venue_id: &str,
     name: Option<&str>,
     attribution: Attribution<'_>,
 ) -> Result<Score, String> {
-    insert_score(
-        pool,
-        request_id,
-        track_id,
-        venue_id,
-        name,
-        attribution,
-        false,
-    )
-    .await
+    insert_score(pool, track_id, venue_id, name, attribution, false).await
 }
 
 /// Give the track durable membership in the venue: an existing score for the
 /// pair is returned rather than joined by a second one.
 pub async fn ensure_venue_score(
     pool: &SqlitePool,
-    request_id: &str,
     track_id: &str,
     venue_id: &str,
     name: Option<&str>,
     attribution: Attribution<'_>,
 ) -> Result<Score, String> {
-    insert_score(
-        pool,
-        request_id,
-        track_id,
-        venue_id,
-        name,
-        attribution,
-        true,
-    )
-    .await
+    insert_score(pool, track_id, venue_id, name, attribution, true).await
 }
 
 async fn insert_score(
     pool: &SqlitePool,
-    request_id: &str,
     track_id: &str,
     venue_id: &str,
     name: Option<&str>,
     attribution: Attribution<'_>,
     reuse_existing: bool,
 ) -> Result<Score, String> {
-    let request_id = request_uuid(request_id)?;
     let mut access =
         VenueAccess::<Write>::write_as(pool, VenueResource::Venue(venue_id), attribution).await?;
     let owner = access.principal().to_owned();
-    let score_id = derived_id(&principal_key(&owner), "score", &request_id, "subject");
-    let existing: Option<String> = if reuse_existing {
-        sqlx::query_scalar(
-            "SELECT id FROM scores WHERE (track_id = ? AND venue_id = ?) OR id = ?
-             ORDER BY id = ? DESC, created_at, id LIMIT 1",
+    if reuse_existing {
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM scores WHERE track_id = ? AND venue_id = ?
+             ORDER BY created_at, id LIMIT 1",
         )
         .bind(track_id)
         .bind(venue_id)
-        .bind(&score_id)
-        .bind(&score_id)
         .fetch_optional(access.connection())
         .await
-        .map_err(|error| format!("find an existing score: {error}"))?
-    } else {
-        sqlx::query_scalar("SELECT id FROM scores WHERE id = ?")
-            .bind(&score_id)
-            .fetch_optional(access.connection())
-            .await
-            .map_err(|error| format!("find an existing score: {error}"))?
-    };
-    if let Some(existing) = existing {
-        return crate::database::local::scores::get_score(&mut access, &existing).await;
+        .map_err(|error| format!("find an existing score: {error}"))?;
+        if let Some(existing) = existing {
+            return get_score(&mut access, &existing).await;
+        }
     }
     let visible: Option<i64> =
         sqlx::query_scalar("SELECT 1 FROM auth_visible_tracks WHERE track_id = ?")
@@ -109,6 +72,7 @@ async fn insert_score(
     // Written against the track's current grid, and read on it from then
     // on: a later analysis of the song does not move this score's clips.
     let grid_id = current_grid_id(access.connection(), track_id).await?;
+    let score_id = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO scores (id, uid, track_id, venue_id, name, grid_id)
          VALUES (?, ?, ?, ?, ?, ?)",
@@ -122,7 +86,7 @@ async fn insert_score(
     .execute(access.connection())
     .await
     .map_err(|error| format!("insert score: {error}"))?;
-    let score = crate::database::local::scores::get_score(&mut access, &score_id).await?;
+    let score = get_score(&mut access, &score_id).await?;
     access.commit().await?;
     Ok(score)
 }
@@ -131,20 +95,15 @@ async fn insert_score(
 /// into a new score of the same track in the same venue, named `name`, in one
 /// transaction. The copy is
 /// the caller's, as a score they created would be; a member may copy a score
-/// they can write. Idempotent on `request_id`, like [`create_score`].
+/// they can write.
 pub async fn duplicate_score(
     pool: &SqlitePool,
-    request_id: &str,
     score_id: &str,
     name: &str,
 ) -> Result<Score, String> {
-    let request_id = request_uuid(request_id)?;
     let mut access = VenueAccess::<Write>::write(pool, VenueResource::Score(score_id)).await?;
     let owner = access.principal().to_owned();
-    let copy_id = derived_id(&principal_key(&owner), "score", &request_id, "duplicate");
-    if let Ok(existing) = get_score(&mut access, &copy_id).await {
-        return Ok(existing);
-    }
+    let copy_id = Uuid::new_v4().to_string();
     let source = get_score(&mut access, score_id).await?;
     // The copied clips are in the beats of the source's grid, so the copy
     // names the same one.
@@ -190,26 +149,4 @@ pub async fn delete_score(pool: &SqlitePool, score_id: &str) -> Result<(), Strin
         .await
         .map_err(|error| format!("delete score: {error}"))?;
     access.commit().await
-}
-
-fn request_uuid(request_id: &str) -> Result<String, String> {
-    Uuid::parse_str(request_id)
-        .map(|id| id.to_string())
-        .map_err(|_| "creation request_id must be a UUID".to_string())
-}
-
-/// The same `(principal, kind, request, role)` always names the same row, so a
-/// retry is a lookup rather than a second creation.
-fn derived_id(principal_key: &str, kind: &str, request_id: &str, role: &str) -> String {
-    let mut hash = Sha256::new();
-    for field in ["luma.creation-id.v1", principal_key, kind, request_id, role] {
-        hash.update((field.len() as u64).to_be_bytes());
-        hash.update(field.as_bytes());
-    }
-    let digest = hash.finalize();
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x80;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    Uuid::from_bytes(bytes).to_string()
 }

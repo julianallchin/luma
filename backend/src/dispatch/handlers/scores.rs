@@ -119,18 +119,15 @@ pub async fn list_scores_across_venues(
     Ok(db::list_accessible_scores_for_track(&services.db.0, &track_id).await?)
 }
 
-/// Idempotent on `request_id`: the score id is derived from it, so a replay
-/// returns the existing score instead of creating a second one.
+/// A new score on the track/venue pair, beside any the pair already has.
 pub async fn create_score(
     services: &AppServices,
-    request_id: String,
     track_id: String,
     venue_id: String,
     name: Option<String>,
 ) -> Result<Score, CommandError> {
     Ok(catalog::create_score(
         &services.db.0,
-        &request_id,
         &track_id,
         &venue_id,
         name.as_deref(),
@@ -139,18 +136,16 @@ pub async fn create_score(
     .await?)
 }
 
-/// Idempotent venue-membership operation. Unlike [`create_score`], a fresh
-/// request id still returns an existing score for the track/venue pair.
+/// Idempotent venue-membership operation. Unlike [`create_score`], this
+/// returns an existing score for the track/venue pair.
 pub async fn ensure_venue_score(
     services: &AppServices,
-    request_id: String,
     track_id: String,
     venue_id: String,
     name: Option<String>,
 ) -> Result<Score, CommandError> {
     Ok(catalog::ensure_venue_score(
         &services.db.0,
-        &request_id,
         &track_id,
         &venue_id,
         name.as_deref(),
@@ -178,10 +173,9 @@ pub async fn rename_score(
 }
 
 /// Copy a score and its clips into a new score of the same song in the same
-/// venue, named `name`. Idempotent on `request_id`.
+/// venue, named `name`.
 pub async fn duplicate_score(
     services: &AppServices,
-    request_id: String,
     score_id: String,
     name: String,
 ) -> Result<Score, CommandError> {
@@ -189,7 +183,7 @@ pub async fn duplicate_score(
     if name.is_empty() {
         return Err(CommandError::Invalid("A score name cannot be empty".into()));
     }
-    Ok(catalog::duplicate_score(&services.db.0, &request_id, &score_id, name).await?)
+    Ok(catalog::duplicate_score(&services.db.0, &score_id, name).await?)
 }
 
 /// A delete is a delete: the score's clips, definitions and drafts go with it.
@@ -237,7 +231,6 @@ mod tests {
             &services,
             "create_score",
             &json!({
-                "requestId": uuid::Uuid::new_v4().to_string(),
                 "trackId": "track",
                 "venueId": venue,
                 "name": "Draft",
@@ -295,8 +288,7 @@ mod tests {
     }
 
     /// A copy is a new score of the same song and venue, with the source's
-    /// clips and the given name; the source is untouched, and a replay of the
-    /// request returns the same copy. The copy's clips are rows of their own:
+    /// clips and the given name; the source is untouched. The copy's clips are rows of their own:
     /// new ids, with the labels the source's clips have.
     #[tokio::test]
     async fn duplicate_score_copies_the_clips_under_a_new_name() {
@@ -307,12 +299,10 @@ mod tests {
         edit(&services, &id, &luma_patterns::Score::default(), &clips).await;
 
         let args = json!({
-            "requestId": uuid::Uuid::new_v4().to_string(),
             "scoreId": id,
             "name": "Draft copy",
         });
-        let duplicate = || dispatch(&services, "duplicate_score", &args);
-        let copy = duplicate().await.unwrap();
+        let copy = dispatch(&services, "duplicate_score", &args).await.unwrap();
         let copy_id = copy["id"].as_str().unwrap().to_owned();
         assert_ne!(copy_id, id);
         assert_eq!(copy["name"], "Draft copy");
@@ -336,8 +326,6 @@ mod tests {
         )
         .await;
         assert_eq!(stored(&services, &id).await, clips);
-
-        assert_eq!(duplicate().await.unwrap()["id"], copy_id.as_str());
     }
 
     fn clip(name: &str, start: f64) -> luma_patterns::Clip {
