@@ -681,6 +681,22 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
                 ..Applied::default()
             }
         }
+        TurnEvent::ContextAttached { id, context } => {
+            let Some(row) = transcript
+                .messages
+                .iter()
+                .rposition(|message| message.id == *id)
+            else {
+                return Applied::default();
+            };
+            transcript.messages[row]
+                .parts
+                .push(super::context::part(context));
+            Applied {
+                row: Some(row),
+                ..Applied::default()
+            }
+        }
         TurnEvent::MessageEnded {
             id,
             stop_reason,

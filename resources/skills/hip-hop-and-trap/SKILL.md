@@ -8,6 +8,11 @@ The vocal is the frontman and the 808 is the band. This isn't EDM halftime —
 nothing here builds to a rave drop. It rides a pocket, and the show's job is
 swagger: confident, unhurried, dark more often than bright.
 
+Read `reading-music-into-light` first. It is how a sound becomes a look;
+this adds what is particular to the style. What follows are the habits of
+the genre and what to listen for, not instructions: the track in front of
+you decides.
+
 ## The one idea
 
 Serve the voice. The rapper/singer is where every ear points, so the lighting

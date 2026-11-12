@@ -935,6 +935,26 @@ legs = luma.venue.nodes(label="*leg")
         out.stdout
     );
 
+    // A group the agent made can be taken away again, and only that one goes.
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            "v = luma.venue\n\
+             before = v.groups().names()\n\
+             v.group('scratch', [])\n\
+             said = v.remove_group('scratch')\n\
+             (said, v.groups().names() == before)",
+        )
+        .await;
+    expect_ok(&out, "remove a group");
+    assert_eq!(
+        out.repr.as_deref(),
+        Some("('removed group scratch', True)"),
+        "{}",
+        out.stdout
+    );
+
     f.service.shutdown_all();
 }
 
@@ -1642,4 +1662,95 @@ async fn seed_venue(pool: &sqlx::SqlitePool, venue_id: &str, name: &str) {
         .execute(pool)
         .await
         .unwrap();
+}
+
+/// `luma.scores` reads the user's other scores and nobody else's: one of
+/// their own opens with its looks and its rig, and a score someone else made
+/// in the same venue is neither listed nor opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_track_thread_reads_the_users_other_scores_and_only_theirs() {
+    use crate::database::local::scores::rows;
+    let Some(f) = Fixture::new("other scores").await else {
+        return;
+    };
+    let thread = f.editable_thread().await;
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &thread,
+        AppendAgentThreadMessagesInput {
+            operation_id: session_turn(&thread),
+            expected_head_message_id: None,
+            messages: vec![NewAgentThreadMessage {
+                id: Some(session_turn(&thread)),
+                role: "session".into(),
+                parts: json!([{ "type": "text", "text": "Session opened." }]),
+            }],
+        },
+        "owner",
+    )
+    .await
+    .expect("open the thread's session");
+    let clip = |name: &str, start: f64| {
+        json!({
+            "name": name, "start": start, "duration": 1.0, "seed": 1,
+            "selection": {"all": true}, "blend_mode": "add",
+            "graph": {"version": 3, "nodes": {"color1": {"kind": "color"}}},
+        })
+    };
+    let score: luma_patterns::Score = serde_json::from_value(json!({"clips": {
+        "a": clip("Snare 1.2", 1.0), "b": clip("Snare 2.2", 5.0), "c": clip("Floor", 0.0),
+    }}))
+    .unwrap();
+    let mut connection = f.pool.acquire().await.unwrap();
+    for (id, owner, name) in [
+        ("mine", "owner", "Fantastic"),
+        ("theirs", "someone-else", "Secret"),
+    ] {
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(owner)
+        .bind(TRACK_ID)
+        .bind(&f.venue_id)
+        .bind(name)
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+        rows::save_score(&mut connection, id, &score).await.unwrap();
+    }
+    drop(connection);
+
+    let mut scope = f.scope();
+    scope.score_id = Some(SCORE_ID.into());
+    let out = f
+        .run_scoped(
+            &thread,
+            r#"
+from luma_exec.host_errors import LumaHostCallError
+found = luma.scores.find(track=luma.track.id)
+assert [s.name for s in found] == ["Fantastic"], repr(found)
+assert [s.name for s in luma.scores.find("fantas")] == ["Fantastic"]
+assert len(luma.scores.find("no such show")) == 0
+ref = luma.scores.open(found[0])
+assert ref.same_track and len(ref.clips) == 3
+looks = ref.looks()
+assert "Snare: 2x color add, 1 beats, on all" in looks, looks
+assert "all: the whole rig: Floor 1x, Snare 2x" in ref.roles(), ref.roles()
+assert ref.look("Snare").at == ("1.2.1", "1.3.1"), ref.look("Snare").at
+assert ref.venue.name and isinstance(ref.venue.groups(), tuple)
+try:
+    luma.scores.open("theirs")
+    raise AssertionError("another person's score opened")
+except LumaHostCallError as error:
+    assert "only your own" in str(error), str(error)
+print("other scores passed")
+"#,
+            scope,
+            Some(session_turn(&thread)),
+            &|_| {},
+        )
+        .await;
+    expect_ok(&out, "other scores");
+    assert!(out.stdout.contains("other scores passed"), "{out:?}");
 }

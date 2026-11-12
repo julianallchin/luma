@@ -808,6 +808,9 @@ impl Lowering<'_> {
                     _ => SplitBy::Fixture,
                 };
                 heads.units = heads.units.split(&self.cells, by);
+                // A new span is measured where its heads now stand: after
+                // a mirror, a bar on the folded side is its image's ruler.
+                heads.unfolded = heads.positions.clone();
             }
             Kind::Shuffle => {
                 heads.shuffle = Some(match self.wire(id, "time") {

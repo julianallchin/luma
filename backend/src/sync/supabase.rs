@@ -104,6 +104,12 @@ impl Storage {
     }
 }
 
+/// The header a PostgREST request names the data format this build reads in:
+/// [`crate::database::local::database::PROJECTION_VERSION`]. The server
+/// refuses a write from a build behind its data with a 426. See
+/// `supabase/migrations/20261111120000_client_format.sql`.
+pub const FORMAT_HEADER: &str = "x-luma-format";
+
 /// The PostgREST endpoint and the key it wants beside a user's token.
 pub struct Postgrest {
     http: reqwest::Client,
@@ -154,6 +160,10 @@ impl Postgrest {
             .post(format!("{}/rpc/{function}", self.url.trim_end_matches('/')))
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {token}"))
+            .header(
+                FORMAT_HEADER,
+                crate::database::local::database::PROJECTION_VERSION,
+            )
             .json(args)
             .send()
             .await

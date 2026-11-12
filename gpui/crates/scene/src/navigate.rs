@@ -154,11 +154,22 @@ impl FlyKeys {
     }
 }
 
-/// Fly speed at the default multiple, in metres per second: half the rig's
-/// size, so a fly crosses any rig in a few seconds.
+/// Fly speed at the default multiple, in metres per second, after the keys
+/// have been held for `held` seconds.
+///
+/// A fixed pace that grows the longer the fly keeps moving, as Unity's scene
+/// view flies: slow enough at the start to place the eye, and fast enough a
+/// few seconds in to cross a hall. It does not follow the rig's size, which
+/// made the same keys crawl in a small venue.
 #[must_use]
-pub fn fly_speed(framing: &Framing) -> f32 {
-    framing.radius() * 0.5
+pub fn fly_speed(held: f32) -> f32 {
+    /// The pace a fly starts at, in metres per second.
+    const START: f32 = 4.0;
+    /// How much faster the fly is after each second of moving.
+    const GROWTH: f32 = 1.8;
+    /// The most the hold multiplies the starting pace by.
+    const MOST: f32 = 10.0;
+    START * GROWTH.powf(held.max(0.0)).min(MOST)
 }
 
 impl Camera {

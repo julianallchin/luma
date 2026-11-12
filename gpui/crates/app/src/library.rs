@@ -222,6 +222,10 @@ pub struct Library {
     /// Redeems login codes in Supabase's place — see [`SignInFixture`].
     #[cfg(feature = "agent")]
     sign_in_fixture: Option<SignInFixture>,
+    /// The accounts that have yet to accept the terms, in the server's
+    /// place — see [`Library::set_terms_fixture`].
+    #[cfg(feature = "agent")]
+    terms_fixture: Option<Arc<Mutex<std::collections::HashSet<String>>>>,
     /// Fires when the backend learns the session is revoked; see
     /// [`Library::session_revoked`].
     session_revoked: tokio::sync::broadcast::Sender<()>,
@@ -468,6 +472,8 @@ impl Library {
             background_work_fixture: None,
             #[cfg(feature = "agent")]
             sign_in_fixture: None,
+            #[cfg(feature = "agent")]
+            terms_fixture: None,
             session_revoked,
             replica_changed,
             sync_shutdown,

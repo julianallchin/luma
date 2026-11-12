@@ -40,9 +40,10 @@ add impact at the peak; you can only avoid spending it early.
 - **Floors matter more than ceilings.** The dim state between hits decides how
   the hits read. Accents over a 10% floor punch; the same accents over a 50%
   floor mush. When a drop feels weak, lower its floor before raising its hits.
-- **Rarity is a budget.** Count uses per show: full white — a few. Full rig
-  strobe — once, maybe twice. Red flip — once. The unrepeatable move — one,
-  or zero. Spending twice halves the value both times.
+- **Rarity is a budget.** Whatever is the biggest thing this show does, count
+  how often it does it. The music sets the number: a track with one true
+  peak gets the move once, a relentless one can live there for a whole
+  drop. Spending it where the music did not peak halves it everywhere.
 - **Darkness needs safety.** Near-black, not literal zero, for anything longer
   than a beat — one ember somewhere keeps the room from reading "power cut."
   Unless "power cut" is the effect, in which case commit fully and briefly.

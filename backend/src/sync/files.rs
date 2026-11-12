@@ -23,17 +23,6 @@ pub struct FileSyncStats {
     pub errors: Vec<String>,
 }
 
-fn audio_content_type(ext: &str) -> &'static str {
-    match ext {
-        "mp3" => "audio/mpeg",
-        "m4a" | "aac" => "audio/mp4",
-        "flac" => "audio/flac",
-        "wav" => "audio/wav",
-        "ogg" => "audio/ogg",
-        _ => "application/octet-stream",
-    }
-}
-
 fn stem_content_type(ext: &str) -> &'static str {
     match ext {
         "flac" => "audio/flac",
@@ -118,39 +107,6 @@ async fn download(
 // Upload
 // ============================================================================
 
-/// Transcode an audio file to OGG Opus using the bundled ffmpeg.
-/// Returns the compressed bytes, or None if transcoding fails.
-fn transcode_to_ogg_opus(source: &std::path::Path) -> Option<Vec<u8>> {
-    let tmp = tempfile::Builder::new().suffix(".ogg").tempfile().ok()?;
-    let tmp_path = tmp.path().to_path_buf();
-
-    let ffmpeg = crate::runtime::ffmpeg::ffmpeg_path();
-    let output = crate::runtime::command::command(&ffmpeg)
-        .args([
-            "-i",
-            source.to_str()?,
-            "-c:a",
-            "libopus",
-            "-b:a",
-            "96k",
-            "-vn",
-            "-y",
-            tmp_path.to_str()?,
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        eprintln!(
-            "[file-sync] ffmpeg transcode failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return None;
-    }
-
-    std::fs::read(&tmp_path).ok()
-}
-
 #[derive(sqlx::FromRow)]
 struct PendingAudioUpload {
     id: String,
@@ -158,8 +114,8 @@ struct PendingAudioUpload {
     file_path: String,
 }
 
-/// Upload audio files that have a local file but no storage_path.
-/// Audio is transcoded to OGG Opus before upload to reduce storage/bandwidth.
+/// Upload audio that is on this machine in the stored format and has no
+/// storage_path. The bytes go up as they are.
 pub async fn upload_pending_audio(
     pool: &SqlitePool,
     remote: &Storage,
@@ -170,9 +126,10 @@ pub async fn upload_pending_audio(
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingAudioUpload>(
         "SELECT id, track_hash, file_path FROM tracks
-         WHERE uid = ? AND storage_path IS NULL AND file_path NOT LIKE '%.stub'",
+         WHERE uid = ? AND storage_path IS NULL AND file_path LIKE ?",
     )
     .bind(uid)
+    .bind(format!("%.{}", crate::audio::stored::EXTENSION))
     .fetch_all(pool)
     .await?;
 
@@ -184,38 +141,20 @@ pub async fn upload_pending_audio(
             continue;
         }
 
-        // Transcode to OGG Opus; fall back to original if ffmpeg fails
-        let (bytes, storage_path, content_type) =
-            if let Some(compressed) = transcode_to_ogg_opus(file_path) {
-                (
-                    compressed,
-                    format!("{uid}/{}/audio.ogg", row.track_hash),
-                    "audio/ogg",
-                )
-            } else {
-                let ext = file_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("bin");
-                let bytes = match std::fs::read(file_path) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        stats.errors.push(format!("read audio {}: {e}", row.id));
-                        continue;
-                    }
-                };
-                (
-                    bytes,
-                    format!("{uid}/{}/audio.{ext}", row.track_hash),
-                    audio_content_type(ext),
-                )
-            };
+        let bytes = match std::fs::read(file_path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                stats.errors.push(format!("read audio {}: {e}", row.id));
+                continue;
+            }
+        };
+        let storage_path = format!("{uid}/{}/audio.ogg", row.track_hash);
 
         let recorded = upload(
             remote,
             token,
             ("track-audio", &storage_path),
-            (bytes, content_type),
+            (bytes, "audio/ogg"),
             &format!("audio {}", row.id),
             &mut stats.errors,
             |full_path| async move {

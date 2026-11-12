@@ -190,6 +190,46 @@ pub async fn get_track_by_id(
     .map_err(|e| format!("Failed to fetch track by id: {}", e))
 }
 
+/// The track `uid` already has for this audio: the one imported from the
+/// same source item, else the one with the same content hash. Ownership is
+/// part of both identities: separate principals may legitimately import the
+/// same source item or bytes.
+///
+/// [`insert_track_record`] decides with this inside its transaction. An
+/// import may also ask first, to skip work on a song it already has; that
+/// answer is a shortcut, and the insert still has the last word.
+pub async fn existing_track(
+    connection: &mut sqlx::SqliteConnection,
+    uid: &str,
+    track_hash: &str,
+    source: Option<(&str, &str)>,
+) -> Result<Option<String>, String> {
+    if let Some((source_type, source_id)) = source {
+        let source_match = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM tracks
+             WHERE uid = ? AND source_type = ? AND source_id = ?
+             LIMIT 1",
+        )
+        .bind(uid)
+        .bind(source_type)
+        .bind(source_id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| format!("Failed to resolve track source identity: {error}"))?;
+        if source_match.is_some() {
+            return Ok(source_match);
+        }
+    }
+    sqlx::query_scalar::<_, String>(
+        "SELECT id FROM tracks WHERE uid = ? AND track_hash = ? LIMIT 1",
+    )
+    .bind(uid)
+    .bind(track_hash)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(|error| format!("Failed to resolve track content identity: {error}"))
+}
+
 pub async fn insert_track_record(
     pool: &SqlitePool,
     track_hash: &str,
@@ -229,34 +269,14 @@ pub async fn insert_track_record(
     // Deduplication belongs to this immediate transaction. The write lock
     // makes the lookup plus insert one atomic conflict-resolution operation,
     // so two concurrent imports cannot both observe absence and publish two
-    // rows. Ownership is part of both identities: separate principals may
-    // legitimately import the same source item or bytes.
-    let source_match = match (source_type, source_id) {
-        (Some(source_type), Some(source_id)) => sqlx::query_scalar::<_, String>(
-            "SELECT id FROM tracks
-             WHERE uid = ? AND source_type = ? AND source_id = ?
-             LIMIT 1",
-        )
-        .bind(uid)
-        .bind(source_type)
-        .bind(source_id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| format!("Failed to resolve track source identity: {error}"))?,
-        _ => None,
-    };
-    let existing = if source_match.is_some() {
-        source_match
-    } else {
-        sqlx::query_scalar::<_, String>(
-            "SELECT id FROM tracks WHERE uid = ? AND track_hash = ? LIMIT 1",
-        )
-        .bind(uid)
-        .bind(track_hash)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| format!("Failed to resolve track content identity: {error}"))?
-    };
+    // rows.
+    let existing = existing_track(
+        &mut transaction,
+        uid,
+        track_hash,
+        source_type.zip(source_id),
+    )
+    .await?;
     if let Some(id) = existing {
         transaction
             .rollback()

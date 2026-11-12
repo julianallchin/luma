@@ -18,6 +18,7 @@ use crate::storage::StorageRoot;
 use crate::sync::supabase::Storage;
 
 use super::files::{self, FileSyncStats};
+use super::legacy_audio;
 use super::progress::Progress;
 
 /// How often the loop looks for work. Media is bulk, not interactive.
@@ -90,6 +91,7 @@ impl Media {
         let _activity = self.progress.start(&uid);
         let mut stats = FileSyncStats::default();
         let remote = self.remote.as_ref();
+        legacy_audio::convert(&self.pool, &self.storage, &uid, &mut stats.errors).await?;
         files::upload_pending_audio(&self.pool, remote, &uid, &token, &mut stats, &self.progress)
             .await?;
         files::upload_pending_stems(&self.pool, remote, &uid, &token, &mut stats, &self.progress)

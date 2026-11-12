@@ -7,6 +7,7 @@
 //! one `replica-changed` event.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,6 +31,11 @@ use super::schema;
 /// started syncing yet).
 const SESSION_POLL: Duration = Duration::from_secs(5);
 
+/// How often a connected build asks whether the server's data has moved past
+/// it. A release migrates the server while older builds are running; this is
+/// how long one of them goes on applying what it downloads.
+const FORMAT_POLL: Duration = Duration::from_secs(60);
+
 /// How long writes are gathered before one `replica-changed` goes out.
 const COALESCE: Duration = Duration::from_millis(100);
 
@@ -51,6 +57,9 @@ struct Observed {
 pub struct Service {
     database: Arc<Database>,
     observed: Arc<Mutex<Observed>>,
+    /// The server's data is past what this build reads: the connector found
+    /// out, and nothing connects again until the app is updated.
+    outdated: Arc<AtomicBool>,
     /// Wakes [`sessions`] ahead of its poll — see [`Self::session_changed`].
     session: Arc<Notify>,
     shutdown: watch::Sender<bool>,
@@ -95,6 +104,7 @@ impl Service {
         let service = Self {
             database: Arc::clone(&database),
             observed: Arc::default(),
+            outdated: Arc::default(),
             session: Arc::default(),
             shutdown: shutdown.clone(),
         };
@@ -103,6 +113,7 @@ impl Service {
             state_pool,
             events.clone(),
             Arc::clone(&service.session),
+            Arc::clone(&service.outdated),
             shutdown.subscribe(),
         ));
         tokio::spawn(statuses(
@@ -112,6 +123,13 @@ impl Service {
         ));
         tokio::spawn(replicas(database, events, shutdown.subscribe()));
         Ok(service)
+    }
+
+    /// The flag a connector raises when the server's data is past this
+    /// build: a test's own connector shares it with the status.
+    #[cfg(test)]
+    pub(super) fn outdated(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.outdated)
     }
 
     /// This process just signed someone in: connect now, not at the next
@@ -150,6 +168,7 @@ impl Service {
             last_synced_at: observed.last_synced_at.clone(),
             caught_up: observed.caught_up,
             pending_uploads: usize::try_from(pending).unwrap_or(0),
+            update_required: self.outdated.load(Ordering::Acquire),
             refused,
             media: None,
         })
@@ -198,10 +217,17 @@ async fn sessions(
     state_pool: SqlitePool,
     events: Events,
     session: Arc<Notify>,
+    outdated: Arc<AtomicBool>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut current: Option<String> = None;
     let mut revoked = false;
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap_or_default();
+    let mut format_checked = tokio::time::Instant::now();
     loop {
         let signed_in = match crate::database::local::auth::get_current_user_id(&state_pool).await {
             Ok(user) => user,
@@ -237,6 +263,7 @@ async fn sessions(
                     database.sync.clone(),
                     database.sql.clone(),
                     state_pool.clone(),
+                    Arc::clone(&outdated),
                 ) {
                     // The sync rules declare `owned`, `venue` and `library`
                     // with `auto_subscribe: true`, and `SyncOptions` includes
@@ -246,6 +273,20 @@ async fn sessions(
                     Err(error) => log::error!("[sync] {error}"),
                 }
             }
+        }
+        if current.is_some()
+            && !outdated.load(Ordering::Acquire)
+            && format_checked.elapsed() >= FORMAT_POLL
+        {
+            format_checked = tokio::time::Instant::now();
+            if behind(&http, &state_pool).await {
+                outdated.store(true, Ordering::Release);
+            }
+        }
+        // A build behind the server's data would read it wrongly and have
+        // every write refused: stop, rather than let the SDK retry forever.
+        if outdated.load(Ordering::Acquire) {
+            database.sync.disconnect().await;
         }
         announce_revocation(&state_pool, &events, &mut revoked).await;
         tokio::select! {
@@ -258,6 +299,23 @@ async fn sessions(
         }
     }
     database.sync.disconnect().await;
+}
+
+/// Whether the server's data is past what this build reads, as far as the
+/// server will say.
+async fn behind(http: &reqwest::Client, state_pool: &SqlitePool) -> bool {
+    let Ok(Some(token)) = crate::database::local::auth::get_current_access_token(state_pool).await
+    else {
+        return false;
+    };
+    super::connector::server_format(
+        http,
+        &crate::config::postgrest_url(),
+        crate::config::SUPABASE_ANON_KEY,
+        &token,
+    )
+    .await
+    .is_some_and(|server| server > crate::database::local::database::PROJECTION_VERSION)
 }
 
 /// Emit [`Event::SessionRevoked`] when the stored session turns out revoked,
