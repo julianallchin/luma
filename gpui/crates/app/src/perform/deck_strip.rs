@@ -143,10 +143,21 @@ pub(crate) fn strip(
         )
         .child(
             div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
                 .font_family(luma_ui::fonts::MONO)
                 .text_size(px(11.))
                 .text_color(ladder::foreground_alpha(0.8))
-                .child(format!("{} {readout}", if playing { "▶" } else { "❚❚" })),
+                .child(
+                    gpui_component::Icon::new(if playing {
+                        luma_ui::icons::IconName::Play
+                    } else {
+                        luma_ui::icons::IconName::Pause
+                    })
+                    .size(px(10.)),
+                )
+                .child(readout.clone()),
         )
         .children(controls);
     let wave = canvas(

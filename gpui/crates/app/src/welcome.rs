@@ -2044,13 +2044,14 @@ fn commit_chip(
     let (glyph, label, enabled, act): (_, _, _, fn(&mut Luma, &mut Context<Luma>)) = match route {
         Route::Browse if !state.loaded || state.load_failed => return None,
         Route::Browse => (
-            luma_ui::shortcut::text(&crate::keymap::CreateVenue, cx),
+            luma_ui::shortcut::text(&crate::keymap::CreateVenue, cx)
+                .map(IntoElement::into_any_element),
             "Create venue",
             true,
             Luma::show_create_venue,
         ),
         Route::Create => (
-            Some("↵".to_string()),
+            Some(return_glyph()),
             if state.creating {
                 "Creating…"
             } else {
@@ -2060,7 +2061,7 @@ fn commit_chip(
             Luma::create_venue,
         ),
         Route::Join => (
-            Some("↵".to_string()),
+            Some(return_glyph()),
             if state.joining { "Joining…" } else { "Join" },
             !state.join_code.trim().is_empty() && !state.joining,
             Luma::join_venue,
@@ -2090,6 +2091,13 @@ fn commit_chip(
     )
 }
 
+/// The Return key on a commit chip, in the chip's own ink.
+fn return_glyph() -> AnyElement {
+    gpui_component::Icon::new(IconName::Return)
+        .size(px(12.5))
+        .into_any_element()
+}
+
 fn footer(state: &VenuePicker, route: Route, cx: &App) -> Div {
     let mut band = float::footer_band();
     band = match route {
@@ -2108,10 +2116,10 @@ fn footer(state: &VenuePicker, route: Route, cx: &App) -> Div {
             ),
         Route::Create => band
             .child(float::key_hint(IconName::ArrowLeft, "Back"))
-            .child(float::key_hint_text("↵", "Create")),
+            .child(float::key_hint(IconName::Return, "Create")),
         Route::Join => band
             .child(float::key_hint(IconName::ArrowLeft, "Back"))
-            .child(float::key_hint_text("↵", "Join")),
+            .child(float::key_hint(IconName::Return, "Join")),
         Route::Share => band
             .child(float::key_hint(IconName::ArrowLeft, "Back"))
             .when(
@@ -2379,7 +2387,11 @@ fn create(state: &VenuePicker) -> AnyElement {
     };
     prompt(
         heading,
-        "Name it in the field above, then press ↵.",
+        if cfg!(target_os = "macos") {
+            "Name it in the field above, then press Return."
+        } else {
+            "Name it in the field above, then press Enter."
+        },
         state
             .create_failed
             .then(|| "The venue was not created".to_owned()),

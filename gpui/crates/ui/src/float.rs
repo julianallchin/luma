@@ -510,6 +510,18 @@ pub fn key_hint_text(cap: impl Into<SharedString>, label: impl Into<SharedString
         .child(key_hint_label(label))
 }
 
+/// [`key_hint`] for a chord whose modifier has no glyph: the word, then the
+/// key's glyph, in one cap (`[Ctrl/Cmd ↵] Apply`).
+pub fn key_hint_chord(
+    modifier: impl Into<SharedString>,
+    icon: IconName,
+    label: impl Into<SharedString>,
+) -> Div {
+    hint_row()
+        .child(key_cap().child(modifier.into()).child(cap_glyph(icon)))
+        .child(key_hint_label(label))
+}
+
 /// [`key_hint`] for a pair of keys that share one verb — `[↑|↓] Navigate`.
 /// Two caps would claim two behaviours; one split cap says "either of these".
 pub fn key_hint_pair(first: IconName, second: IconName, label: impl Into<SharedString>) -> Div {

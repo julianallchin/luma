@@ -703,9 +703,17 @@ fn row(state: &FixturePicker, group: &Group, app: &Entity<Luma>) -> AnyElement {
 fn footer(state: &FixturePicker) -> impl IntoElement {
     let summary: SharedString = state.spelled(&state.selection()).into();
     float::footer_band()
-        .child(float::key_hint_text("↑ ↓", "Navigate"))
-        .child(float::key_hint_text("↵", "Toggle"))
-        .child(float::key_hint_text("Ctrl/Cmd ↵", "Apply"))
+        .child(float::key_hint_pair(
+            luma_ui::icons::IconName::ArrowUp,
+            luma_ui::icons::IconName::ArrowDown,
+            "Navigate",
+        ))
+        .child(float::key_hint(luma_ui::icons::IconName::Return, "Toggle"))
+        .child(float::key_hint_chord(
+            "Ctrl/Cmd",
+            luma_ui::icons::IconName::Return,
+            "Apply",
+        ))
         .child(div().flex_1().min_w_0())
         .child(
             div()

@@ -542,8 +542,12 @@ pub(crate) fn render(state: &Picker, editor: &Editor, app: &Entity<Luma>) -> Any
         )
         .child(
             float::footer_band()
-                .child(float::key_hint_text("↑ ↓", "Navigate"))
-                .child(float::key_hint_text("↵", "Insert"))
+                .child(float::key_hint_pair(
+                    luma_ui::icons::IconName::ArrowUp,
+                    luma_ui::icons::IconName::ArrowDown,
+                    "Navigate",
+                ))
+                .child(float::key_hint(luma_ui::icons::IconName::Return, "Insert"))
                 .child(float::key_hint_text("esc", "Cancel")),
         );
     morph::fixed_card("Insert pattern dialog", SIZE, content.into_any_element())
