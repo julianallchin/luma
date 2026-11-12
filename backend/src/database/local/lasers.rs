@@ -76,12 +76,13 @@ pub async fn save_zone(
 /// Every projector limit in the venue.
 pub async fn list_limits(access: &mut impl AuthorizedVenue) -> Result<Vec<LaserLimit>, String> {
     let venue_id = access.venue_id().to_owned();
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT id, points FROM laser_limits WHERE venue_id = ? ORDER BY id")
-            .bind(&venue_id)
-            .fetch_all(&mut *access.connection())
-            .await
-            .map_err(|error| format!("Failed to list laser limits: {error}"))?;
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT fixture_id, points FROM laser_limits WHERE venue_id = ? ORDER BY fixture_id",
+    )
+    .bind(&venue_id)
+    .fetch_all(&mut *access.connection())
+    .await
+    .map_err(|error| format!("Failed to list laser limits: {error}"))?;
     Ok(rows
         .into_iter()
         .filter_map(|(fixture_id, points)| match serde_json::from_str(&points) {

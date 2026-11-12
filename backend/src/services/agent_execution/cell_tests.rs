@@ -189,8 +189,7 @@ impl Fixture {
         )
         .unwrap();
 
-        seed_venue(&self.pool, &self.venue_id, "Basement").await;
-        let root = crate::venue_graph::root_id(&self.venue_id);
+        let root = seed_venue(&self.pool, &self.venue_id, "Basement").await;
         for (i, id) in ["fix-a", "fix-b"].iter().enumerate() {
             sqlx::query(
                 "INSERT INTO fixtures (id, venue_id, universe, address, num_channels,
@@ -220,8 +219,10 @@ impl Fixture {
             .unwrap();
             for (key, value) in [("u", i as f64), ("v", 0.0), ("trim", 2.0)] {
                 sqlx::query(
-                    "INSERT INTO venue_node_params (node_id, venue_id, key, value) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO venue_node_params (id, node_id, venue_id, key, value)
+                     VALUES (?, ?, ?, ?, ?)",
                 )
+                .bind(uuid::Uuid::new_v4().to_string())
                 .bind(id)
                 .bind(&self.venue_id)
                 .bind(key)
@@ -1648,8 +1649,10 @@ assert row.ok
     f.service.shutdown_all();
 }
 
-/// The owner's venue and its root, as `create_venue` writes them.
-async fn seed_venue(pool: &sqlx::SqlitePool, venue_id: &str, name: &str) {
+/// The owner's venue and its root, as `create_venue` writes them. Answers
+/// the root's id.
+async fn seed_venue(pool: &sqlx::SqlitePool, venue_id: &str, name: &str) -> String {
+    let root = uuid::Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, 'owner', ?)")
         .bind(venue_id)
         .bind(name)
@@ -1657,11 +1660,12 @@ async fn seed_venue(pool: &sqlx::SqlitePool, venue_id: &str, name: &str) {
         .await
         .unwrap();
     sqlx::query("INSERT INTO venue_nodes (id, venue_id, kind) VALUES (?, ?, 'venue')")
-        .bind(crate::venue_graph::root_id(venue_id))
+        .bind(&root)
         .bind(venue_id)
         .execute(pool)
         .await
         .unwrap();
+    root
 }
 
 /// `luma.scores` reads the user's other scores and nobody else's: one of

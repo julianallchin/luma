@@ -50,10 +50,11 @@ async fn shared(directory: &std::path::Path) -> (AppServices, String, String) {
         .unwrap();
     enter_remote_writes(&mut download).await.unwrap();
     sqlx::query(
-        "INSERT INTO venue_members (id, uid, venue_id, role) VALUES (?1 || ':' || ?2, ?2, ?1, 'member')",
+        "INSERT INTO venue_members (id, uid, venue_id, role) VALUES (?3, ?2, ?1, 'member')",
     )
     .bind(&venue)
     .bind(MEMBER)
+    .bind(uuid::Uuid::new_v4().to_string())
     .execute(&mut *download)
     .await
     .unwrap();

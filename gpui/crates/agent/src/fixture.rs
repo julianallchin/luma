@@ -690,14 +690,17 @@ impl Fixture {
             .execute(pool)
             .await
             .expect("failed to seed the venue");
-        // Every venue has its root from the moment it exists.
-        sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'venue')")
-            .bind(luma_lib::venue_graph::root_id(VENUE))
-            .bind(session::PRINCIPAL)
-            .bind(VENUE)
-            .execute(pool)
-            .await
-            .expect("failed to seed the venue root");
+        // Every venue has its root from the moment it exists, under a random
+        // id like any row's: a test finds it by its kind.
+        sqlx::query(
+            "INSERT INTO venue_nodes (id, uid, venue_id, kind)
+             VALUES (lower(hex(randomblob(16))), ?, ?, 'venue')",
+        )
+        .bind(session::PRINCIPAL)
+        .bind(VENUE)
+        .execute(pool)
+        .await
+        .expect("failed to seed the venue root");
         if self.seed_track {
             sqlx::query(
                 "INSERT INTO tracks
@@ -1093,7 +1096,9 @@ impl Fixture {
         sqlx::query(
             "INSERT INTO venue_nodes
                  (id, uid, venue_id, kind, catalog_ref, label, parent_id, my_socket, their_socket, roll)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0)",
+             VALUES (?, ?, ?, ?, ?, ?,
+                     (SELECT id FROM venue_nodes WHERE venue_id = ? AND kind = 'venue'),
+                     ?, ?, 0.0)",
         )
         .bind(id)
         .bind(session::PRINCIPAL)
@@ -1101,7 +1106,7 @@ impl Fixture {
         .bind(kind)
         .bind(catalog_ref)
         .bind(label)
-        .bind(luma_lib::venue_graph::root_id(VENUE))
+        .bind(VENUE)
         .bind(my_socket)
         .bind(their_socket)
         .execute(pool)
@@ -1109,8 +1114,8 @@ impl Fixture {
         .expect("failed to place a venue node");
         for (key, value) in [("u", u), ("v", v), ("trim", trim)] {
             sqlx::query(
-                "INSERT INTO venue_node_params (node_id, uid, venue_id, key, value)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO venue_node_params (id, node_id, uid, venue_id, key, value)
+                 VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?, ?)",
             )
             .bind(id)
             .bind(session::PRINCIPAL)

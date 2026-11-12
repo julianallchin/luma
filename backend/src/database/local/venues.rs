@@ -111,7 +111,7 @@ pub async fn create_venue(
     // The root is part of the venue, so it is written with it: a venue with
     // no root is one whose rows are still arriving from sync.
     sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'venue')")
-        .bind(crate::venue_graph::root_id(&id))
+        .bind(Uuid::new_v4().to_string())
         .bind(&principal)
         .bind(&id)
         .execute(&mut *transaction)
