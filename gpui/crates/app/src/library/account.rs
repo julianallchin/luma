@@ -124,6 +124,37 @@ impl Library {
         }
     }
 
+    /// Whether the signed-in account has accepted the terms, as the server
+    /// records it.
+    pub fn terms_accepted(&self) -> impl Future<Output = Result<bool, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.terms_fixture.clone().zip(self.user_id());
+        self.call("terms_accepted", move |services| async move {
+            #[cfg(feature = "agent")]
+            if let Some((pending, account)) = fixture {
+                return Ok(!pending.lock().unwrap().contains(&account));
+            }
+            handlers::auth::terms_accepted(&services).await
+        })
+    }
+
+    /// Record that the signed-in account accepts `version` of the terms.
+    pub fn accept_terms(
+        &self,
+        version: i32,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.terms_fixture.clone().zip(self.user_id());
+        self.call("accept_terms", move |services| async move {
+            #[cfg(feature = "agent")]
+            if let Some((pending, account)) = fixture {
+                pending.lock().unwrap().remove(&account);
+                return Ok(());
+            }
+            handlers::auth::accept_terms(&services, version).await
+        })
+    }
+
     /// Whether this library talks to the cloud at all — the one thing the
     /// status bar's sync item is conditioned on.
     pub(crate) fn cloud_sync_enabled(&self) -> bool {

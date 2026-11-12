@@ -70,6 +70,7 @@ mod stage;
 mod status_bar;
 mod subagents;
 mod sync_status;
+mod terms;
 mod track_editor;
 mod tracks;
 mod update;
@@ -212,6 +213,9 @@ pub struct Luma {
     /// subscriptions, and `Luma` is one entity that would otherwise carry all
     /// of that for the entire session it is not showing.
     pub(crate) sign_in: Option<Box<signin::SignIn>>,
+    /// The terms page, while the signed-in account still owes an acceptance:
+    /// up instead of the shell, like the sign-in screen.
+    pub(crate) terms: Option<terms::Terms>,
     /// A lapsed session is being asked online whether it still proves anyone;
     /// the window shows [`signin::splash`] until it answers.
     pub(crate) refreshing_session: bool,
@@ -333,6 +337,7 @@ impl Luma {
             visualizer_split: shell::visualizer_split(),
             score_editor_split: luma_ui::split::SplitFraction::new(0.65, 300., 240.),
             sign_in: None,
+            terms: None,
             refreshing_session: false,
             sync_status: sync_status::SyncState::default(),
             background: background_work::BackgroundState::default(),
@@ -370,7 +375,7 @@ impl Luma {
         // gate. The gate is a first screen, not a failure, and it lands on
         // exactly what the signed-in branch opens.
         if app.library.user_id().is_some() {
-            app.restore_venue(cx);
+            app.enter(cx);
         } else if app.library.lapsed().is_some() {
             app.refresh_session(cx);
         } else {
@@ -491,6 +496,9 @@ impl Render for Luma {
         // the app, until the update is in or someone puts it off.
         if self.sync_status.status.update_required && !self.update.put_off {
             return update::required(self, window, cx);
+        }
+        if self.terms.is_some() {
+            return terms::screen(self, window, cx);
         }
         // A window with no venue *is* the venue picker: keep the overlay up
         // while no venue is open and nothing else is up.

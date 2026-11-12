@@ -228,6 +228,7 @@ impl Luma {
         self.venue_menu = luma_ui::dialog::Popup::default();
         self.score_switcher = luma_ui::dialog::Popup::default();
         self.settings = None;
+        self.terms = None;
         self.sign_in_generation = self.sign_in_generation.wrapping_add(1);
         let generation = self.sign_in_generation;
         self.sign_in = Some(Box::new(SignIn::new(generation, expired, cx)));
@@ -255,7 +256,7 @@ impl Luma {
             this.update(cx, |this, cx| {
                 this.refreshing_session = false;
                 match result {
-                    Ok(Some(_)) => this.restore_venue(cx),
+                    Ok(Some(_)) => this.enter(cx),
                     Ok(None) => this.show_sign_in(true, cx),
                     Err(error) => {
                         log::warn!("the stored session could not be refreshed: {error}");
@@ -407,7 +408,7 @@ impl Luma {
                             .is_some_and(|state| state.generation == generation);
                         if current {
                             this.sign_in = None;
-                            this.restore_venue_once_synced(cx);
+                            this.enter_after_sign_in(cx);
                             cx.notify();
                         }
                     }

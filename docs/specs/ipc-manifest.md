@@ -5,7 +5,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` fails when it is stale and
 rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 
-**136 commands** across **27 domains**
+**138 commands** across **27 domains**
 
 ## Domains
 
@@ -13,7 +13,7 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | --- | ---: | --- |
 | `agent_execution` | 2 | `backend/src/dispatch/handlers/agent_execution.rs` |
 | `agent_threads` | 6 | `backend/src/dispatch/handlers/agent_threads.rs` |
-| `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
+| `auth` | 9 | `backend/src/dispatch/handlers/auth.rs` |
 | `background` | 1 | `backend/src/dispatch/handlers/background.rs` |
 | `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
@@ -38,7 +38,7 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `tracks` | 5 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 11 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **136** | |
+| **total** | **138** | |
 
 ## Commands
 
@@ -69,6 +69,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `current_account` | — | `Option<crate::database::local::auth::AuthAccount>` |
 | `send_login_code` | `email: String` | `()` |
 | `verify_login_code` | `email: String`<br>`code: String` | `String` |
+| `terms_accepted` | — | `bool` |
+| `accept_terms` | `version: i32` | `()` |
 | `get_session_item` | `key: String` | `Option<String>` |
 | `set_session_item` | `key: String`<br>`value: String` | `()` |
 | `remove_session_item` | `key: String` | `()` |

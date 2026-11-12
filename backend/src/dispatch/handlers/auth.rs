@@ -105,6 +105,50 @@ pub async fn current_account(
     Ok(crate::database::local::auth::load_current_account(&services.state_db.0).await?)
 }
 
+/// Whether the signed-in account has accepted the terms, as the server
+/// records it — see `public.terms_accepted`.
+///
+/// # Errors
+///
+/// If nobody is signed in, or the server could not be asked.
+pub async fn terms_accepted(services: &AppServices) -> Result<bool, CommandError> {
+    let accepted: Option<i32> =
+        terms_rpc(services, "terms_accepted", serde_json::json!({})).await?;
+    Ok(accepted.is_some())
+}
+
+/// Record that the signed-in account accepts `version` of the terms. The
+/// server stamps the time, and keeps the first acceptance of a version.
+///
+/// # Errors
+///
+/// If nobody is signed in, or the server did not record it.
+pub async fn accept_terms(services: &AppServices, version: i32) -> Result<(), CommandError> {
+    let _held: i32 = terms_rpc(
+        services,
+        "accept_terms",
+        serde_json::json!({ "accepted_version": version }),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn terms_rpc<T: serde::de::DeserializeOwned>(
+    services: &AppServices,
+    function: &str,
+    args: serde_json::Value,
+) -> Result<T, CommandError> {
+    let token = crate::database::local::auth::get_current_access_token(&services.state_db.0)
+        .await?
+        .ok_or_else(|| {
+            CommandError::Unauthorized(crate::database::local::auth::SIGN_IN_REQUIRED.to_string())
+        })?;
+    crate::sync::supabase::Postgrest::from_config()
+        .rpc(function, &args, &token)
+        .await
+        .map_err(|error| CommandError::Internal(error.to_string()))
+}
+
 /// One POST to a GoTrue endpoint that answers with JSON, returned verbatim.
 ///
 /// Verbatim matters: `/verify`'s body *is* the session blob the host persists,
