@@ -56,6 +56,15 @@ the published stable still uses. So the release also passes the latest
 *published* stable version (`--published`): a contract runs only once the
 release it names is out.
 
+A migration that changes what synced rows mean cannot only add. It is a new
+data format: it raises `public.data_format()`, the commit raises
+`PROJECTION_VERSION` with it, and every older build is refused its writes and
+told to update ([docs/design/sync.md](../docs/design/sync.md), "Required
+updates"). It converts every row itself, since no client will, and it still
+carries the contract marker for what it removes.
+[docs/design/data-layer.md](../docs/design/data-layer.md) has the rules such
+a migration keeps.
+
 The same check refuses a file not named `<14-digit version>_<name>.sql` (the
 CLI would skip it) or sharing another's version, and a `pg_temp` function
 created without `or replace`: the push runs every pending file over one

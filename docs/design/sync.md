@@ -4,6 +4,9 @@ Luma syncs rows. PowerSync moves rows between the local SQLite database and
 Supabase Postgres. There is no write server, no revision blobs, no projection
 layer. Every domain writes its own tables in ordinary SQLite transactions.
 
+This file is the transport. What a row's id is, what a delete means and what
+the server remembers are in [data-layer.md](data-layer.md).
+
 ## Rules
 
 - The synced tables are the app tables. PowerSync raw tables map onto them
@@ -32,12 +35,16 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
 - Postgres row-level security decides who may read and write a row. Owner or
   venue member for venue content, the venue row included; owner for private
   content and for the venue's door (its owner, its share code, deleting it,
-  removing members). `public.history` records who made each change. The app
-  validates before it writes. The server does not re-run domain rules.
+  removing members). A policy asks whether a row's parents are live, never
+  whether the row itself is. `public.history` records who made each change.
+  The app validates before it writes. The server does not re-run domain rules.
 - Concurrent edits to one row merge per column, last write wins. PowerSync
   uploads only the columns a local write changed (`PATCH`).
-- A device deletes for real and holds no flagged rows. What a delete means to
-  the server is in [data-layer.md](data-layer.md).
+- A device deletes for real, cascades included, and holds no flagged rows:
+  local tables have no `deleted_at`. The server keeps a deleted source row
+  and flags it; the sync rules select `deleted_at IS NULL`, so the row and
+  its children leave every other device in one checkpoint. A derived or
+  scratch row is deleted on both sides.
 - Local-only tables never appear in the PowerSync schema or the sync rules.
 - A synced table's foreign keys are `DEFERRABLE INITIALLY DEFERRED`. A
   download is one transaction holding a consistent snapshot of the server in
@@ -71,15 +78,18 @@ A score is rows.
 
 | table | columns |
 |---|---|
-| `scores` | id, uid, track_id, venue_id, name, created_at, updated_at |
-| `clips` | id, uid, score_id, name, graph_json, start, duration, seed (TEXT, decimal u64), selection_json, z_index, blend_mode, created_at, updated_at; `graph` and `inputs_json` are retired form columns, written empty and never read; `selection_seed` (TEXT, nullable) is retired too and never read |
+| `scores` | id, uid, track_id, venue_id, grid_id, name, authored_at, created_at, updated_at |
+| `clips` | id, uid, score_id, label, name, graph_json, start, duration, seed (TEXT, decimal u64), selection_json, z_index, blend_mode, created_at, updated_at; `graph` and `inputs_json` are retired form columns, written empty and never read; `selection_seed` (TEXT, nullable) is retired too and never read |
 
-A clip key is unique inside its score, not across the library — two scores
-may each have a `flash`. Sync addresses every row by one global `id`, so
-`clips` carries an ordinary `id` column the writer sets to
-`score_id || ':' || key`, and the key is read back off it
-(`backend/src/database/local/scores/rows.rs`). A score id is a uuid and carries
-no colon, so the split is unambiguous however the key is spelled.
+A clip's `id` is a random UUID like any source row's, and says nothing about
+its score. `label` is the handle an agent gave a clip it wants to refer to
+later. It is unique within its score, so two scores may each have a `flash`,
+and a clip nobody named has none. Each clip holds its own graph
+(`graph_json`).
+
+`scores.grid_id` names the `track_beats` row the score was written against.
+A track has one `track_beats` row per analysis, never edited, and its current
+grid is the newest.
 
 `luma_patterns::Score` stays the in-memory type. Loading a score reads its
 `scores` row and its clips into a `Score`. Saving a score diffs the candidate against the
@@ -87,33 +97,25 @@ rows and writes only the rows that changed. Editors and agents keep sending a
 whole `Score`; the row diff happens once in the backend. There is no revision
 token. A stale candidate simply overwrites the rows it touches.
 
-The old row format (`track_scores` with `pattern_id`) is gone. The cutover
-migration copied its rows into the local-only table `legacy_scores_backup`.
-
-Migration `20260923100000_drop_cues_and_pattern_library.sql` (local and
-Supabase) drops the pattern library and MIDI cues: `patterns`,
-`implementations`, `cues`, `pattern_categories`, `venue_implementation_overrides`,
-`scores_pending_cutover`, `legacy_scores_backup` and the `auth_visible_patterns`
-view. It also deletes MIDI bindings whose action fired a cue or a blackout.
-Each clip holds its own graph (`graph_json`).
-
 ## History
 
-History is the server's and does not sync. A Postgres trigger on each authored
-table (venues and their content, `scores`, `clips`) appends to `public.history` on every insert, update and delete:
+History is the server's and does not sync. One trigger, `record_history`, on
+every source table except the three conversation tables appends to
+`public.history` on each insert, update and delete. A delete arrives as an
+update that sets the flag. An update whose only difference is `updated_at`
+is skipped. The columns and what they mean are in
+[data-layer.md](data-layer.md); `uid` is who made the change, and only they
+can read their entries.
 
-`history(id, uid, table_name, row_id, op, before, after, actor, at)`
-
-An update whose only difference is `updated_at` is skipped. `uid` is who made
-the change, and only they can read it. `actor` is `user:<uid>` for a person, or
-a model id or MCP client label for an agent. An agent's write runs in a
-transaction attributed with `sync::triggers::attribute`, which takes an
-`Attribution`: the actor, the thread, the message and the change group. The
-upload triggers put it in each `powersync_crud` entry's metadata as one JSON
-object, and the connector sends its parts as the `x-luma-actor`,
-`x-luma-thread`, `x-luma-message` and `x-luma-group` headers. Upserts
-attributed differently are never batched into one request. See
-`supabase/migrations/20260924000000_server_history.sql`.
+The client's part is to say who is writing. A write by an agent, or by the
+app itself (analysis, import, media sync), runs in a transaction attributed
+with `sync::triggers::attribute`, which takes an `Attribution`: the actor,
+the thread, the message and the change group. The upload triggers put it in
+each `powersync_crud` entry's metadata as one JSON object, and the connector
+sends its parts as the `x-luma-actor`, `x-luma-thread`, `x-luma-message` and
+`x-luma-group` headers. An unattributed write has no metadata and sends no
+header, and the server records it as the signed-in person's. Upserts
+attributed differently are never batched into one request.
 
 Session undo in the editors stays in memory. A score's "last edited" time is
 `scores.authored_at`, which `save_score` sets when a save moves something.
@@ -140,13 +142,17 @@ is an upsert.
 ## Synced tables
 
 venues, venue_members, fixtures, fixture_groups, fixture_group_members,
-venue_nodes, venue_edges, venue_node_params, venue_constraints, folders,
+venue_nodes, venue_node_params, venue_constraints, folders,
 folder_tracks, laser_zones, laser_limits, perform_patterns, perform_layouts,
 perform_controllers, control_bindings, tracks,
 track_beats, track_roots, track_stems, track_drum_onsets,
 track_bar_classifications, track_genres, track_beat_validations, scores,
 clips, agent_threads, agent_thread_messages,
 agent_thread_transcript_heads, drafts.
+
+Each has a `Kind` in `backend/src/sync/schema.rs`: source, derived
+(`track_stems`, `track_roots`, `track_drum_onsets`,
+`track_bar_classifications`, `track_genres`) or scratch (`drafts`).
 
 Local only: settings, control_bindings_unsynced (the bindings a machine kept
 before they synced, until its venue's inputs move them), dmx_routes, preprocessing_failures,
@@ -155,13 +161,18 @@ agent_thread_usage, agent_thread_score_marks, sync_rejections, auth_write_admiss
 auth session, and the columns `tracks.file_path`, `tracks.album_art_path`,
 `track_roots.logits_path`, `track_stems.file_path`.
 
+`venues.environment` and `venues.haze` are **not** on that list: what kind of
+room a venue is and what atmosphere it has are venue truth, so they follow the
+venue between devices.
+
 The local copy is a projection of the server and is never converted in place.
 A local migration is DDL only; a format change is a server migration. When a
 client can no longer read what an older one downloaded, bump
 `PROJECTION_VERSION` in `backend/src/database/local/database.rs`. At startup a
 library at another version clears its synced tables without queueing anything
-for upload, and PowerSync downloads them again. A change still waiting to
-upload postpones that to a later launch.
+for upload, and PowerSync downloads them again. Edits still waiting to upload
+were written in the old format and cannot be sent, so they are moved to the
+"not saved" list before the clear. Local-only tables and files are kept.
 
 ## Required updates
 
@@ -193,14 +204,15 @@ reconnects. The updated build re-downloads either way, because the number
 that changed is `PROJECTION_VERSION`. A release older than 0.7.1 has no read
 check at all; the server still refuses its writes.
 
-To require an update, in one change: replace `public.data_format()` with the
-next number in the Supabase migration that changes the rows, bump
-`PROJECTION_VERSION`, and give a new synced table the `_client_format`
-trigger (`supabase/migrations/20261111120000_client_format.sql`).
-
-`venues.environment` and `venues.haze` are **not** on that list: what kind of
-room a venue is and what atmosphere it has are venue truth, so they follow the
-venue between devices. Only the three hardware-port columns above are local.
+A migration that changes what synced rows mean is a new data format. In one
+change: the Supabase migration replaces `public.data_format()` with the next
+number, converts every row server-side, flagged ones included, and ships the
+function that reads a row of the previous format as the new one
+(`public.row_from_format_1`); the commit bumps `PROJECTION_VERSION`; and a
+new synced table gets the `_client_format` trigger
+(`supabase/migrations/20261111120000_client_format.sql`). There is no
+compatibility between formats on either side.
+[data-layer.md](data-layer.md) has the rules a migration keeps.
 
 ## Code layout
 
@@ -215,11 +227,16 @@ venue between devices. Only the three hardware-port columns above are local.
 - `backend/src/sync/connector.rs`: `fetch_credentials` returns the PowerSync
   Cloud endpoint and the Supabase access token. `upload_data` posts each CRUD
   transaction to Supabase PostgREST (`POST` with `Prefer:
-  resolution=merge-duplicates` for PUT, `PATCH` by id, `DELETE` by id).
+  resolution=merge-duplicates` for PUT, `PATCH` by id for an update). A
+  queued delete of a source row is a `PATCH` that sets `deleted_at`, since
+  the app's role has no `DELETE` there; a derived or scratch row is a
+  `DELETE` by id. Every upsert carries `deleted_at: null`, so inserting a
+  flagged id again brings the row back.
   A row-level-security policy refuses an upsert with a 403 but filters an
   update or delete to no row, which PostgREST answers with a 204. So `PATCH`
   and `DELETE` send `Prefer: count=exact`, and zero rows changed is a refusal
-  (a delete of a row the user can no longer see is already done). Every
+  (a delete of a row the user can no longer see is already done). An edit
+  that arrives after its row was flagged changes no row either. Every
   refusal is recorded in the local `sync_rejections` table and taken off the
   queue; the next download puts the server's row back. The status bar counts
   the undismissed ones as `N not saved`.
@@ -235,14 +252,15 @@ venue between devices. Only the three hardware-port columns above are local.
 - `supabase/migrations/20260912000000_row_model.sql`: drops the old schema and
   creates every synced table, its RLS policies and the `powersync`
   publication. `supabase/migrations/20260916000000_stage_child_venue_id.sql`
-  adds `venue_id` to `venue_edges`, `venue_node_params`, `venue_constraints`
-  and `fixture_group_members` so the sync rules can filter on it in one hop.
-  `supabase/migrations/20260923100000_drop_cues_and_pattern_library.sql`
-  drops `patterns`, `implementations` and `cues` and their read functions.
-  All three are required on the server.
+  adds `venue_id` to `venue_node_params`, `venue_constraints` and
+  `fixture_group_members` so the sync rules can filter on it in one hop.
+  `supabase/migrations/20261112120000_data_layer.sql` makes the server the
+  permanent record: the flags, the random ids, the `_live` views and the
+  history log. `deploy/README.md` lists every migration and its order.
 - `deploy/powersync/sync-config.yaml`: the PowerSync Cloud sync rules. A `with:` clause is
   a parameter query and may return at most a thousand rows, so every one of
-  them counts venues, scores or shared tracks — never their children.
+  them counts venues, scores or shared tracks — never their children. Every
+  query on a source table selects `deleted_at IS NULL`.
 - `deploy/test-stack/run.py`: disposable Postgres, PostgREST and PowerSync
   containers for the two-device tests.
 

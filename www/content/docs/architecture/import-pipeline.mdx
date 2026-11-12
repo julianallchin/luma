@@ -69,6 +69,10 @@ by dependency at startup. The registry is `registry.rs`.
   `(RAM in GB − 4) / 3`, clamped to 1–6.
 - Each artifact row has a `processor_version`. A row with an older version runs
   again. A row downloaded by sync counts as complete.
+- A beat grid is written once. A new analysis inserts a new `track_beats` row,
+  and the newest row is the track's current grid. The other artifacts are a
+  cache: one row per track (one per stem for stems), replaced when the
+  preprocessor runs again.
 - A failure is stored in the local `preprocessing_failures` table. The retry
   uses exponential backoff, up to 24 hours. Until then the preprocessor is
   skipped on that track, and so are the preprocessors that depend on its
