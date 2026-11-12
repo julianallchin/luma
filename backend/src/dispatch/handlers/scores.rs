@@ -1,4 +1,5 @@
 use crate::database::local::scores::{self as db, rows};
+use crate::database::local::tracks::Grid;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
@@ -63,7 +64,7 @@ pub async fn preview_score_clips(
         &mut access,
         &services.fixtures_root,
         &services.storage,
-        &metadata.track_id,
+        Grid::of_score(&metadata.track_id, &score_id),
         &candidate,
         &clip_ids,
     )
@@ -86,7 +87,7 @@ pub async fn prepare_score_clip_preview(
         &services.fixtures_root,
         &services.storage,
         &services.controls,
-        &metadata.track_id,
+        Grid::of_score(&metadata.track_id, &score_id),
         &score,
         &clip_id,
     )
@@ -375,8 +376,8 @@ mod tests {
     async fn previews_come_back_per_clip_and_one_failure_stays_its_own() {
         let (_directory, services, id) = library().await;
         sqlx::query(
-            "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
-             VALUES ('track', '[0.0,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5,8.0,8.5,9.0,9.5,10.0]', '[0.0,2.0,4.0,6.0,8.0,10.0]', 120.0, 4)",
+            "INSERT INTO track_beats (id, track_id, beats_json, downbeats_json, bpm, beats_per_bar)
+             VALUES ('grid', 'track', '[0.0,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5,8.0,8.5,9.0,9.5,10.0]', '[0.0,2.0,4.0,6.0,8.0,10.0]', 120.0, 4)",
         )
         .execute(&services.db.0)
         .await

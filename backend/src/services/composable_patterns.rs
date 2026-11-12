@@ -33,7 +33,10 @@ pub(crate) async fn preview(
     let principal = access.principal().to_owned();
     let beat_grid = crate::database::local::tracks::get_track_beats_for_connection(
         access.connection(),
-        &request.track_id,
+        crate::database::local::tracks::Grid::in_scope(
+            &request.track_id,
+            request.score_id.as_deref(),
+        ),
     )
     .await?
     .ok_or_else(|| {
@@ -42,13 +45,7 @@ pub(crate) async fn preview(
     })?;
     let clock = beat_grid.timeline().map_err(|error| error.to_string())?;
     let elements = request.graph.laser().map(|laser| laser.count());
-    let cells = resolve_cells(
-        &mut access,
-        fixtures_root,
-        &request.targets,
-        elements,
-    )
-    .await?;
+    let cells = resolve_cells(&mut access, fixtures_root, &request.targets, elements).await?;
     if cells.is_empty() {
         return Err("the targets contain no placed, controllable cells".into());
     }

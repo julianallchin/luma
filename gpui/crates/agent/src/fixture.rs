@@ -1131,8 +1131,8 @@ impl Fixture {
             .collect();
         let downbeats: Vec<f64> = beats.iter().copied().step_by(4).collect();
         sqlx::query(
-            "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)
-             VALUES (?, ?, ?, ?, 120.0, 0.0, 4)",
+            "INSERT INTO track_beats (id, track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)
+             VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?, 120.0, 0.0, 4)",
         )
         .bind(TRACK)
         .bind(session::PRINCIPAL)

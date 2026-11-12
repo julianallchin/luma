@@ -51,7 +51,7 @@ impl Luma {
         }
 
         let waveform = self.library.track_waveform(track_id);
-        let beats = self.library.track_beats(track_id);
+        let beats = self.library.track_beats(track_id, Some(&score.id));
         let validation = self.library.track_beat_validation(track_id);
         let contents = self.library.score_contents(&score.id, track_id);
 

@@ -10,6 +10,10 @@ use std::collections::BTreeMap;
 pub struct ComposablePreviewRequest {
     pub venue_id: String,
     pub track_id: String,
+    /// The score the preview is for, whose beat grid times it. Without one
+    /// it runs on the track's current grid.
+    #[serde(default)]
+    pub score_id: Option<String>,
     /// The clip graph to preview, such as a shipped preset's.
     pub graph: ClipGraph,
     /// Each selection is one mapping group. Overlaps are rejected rather than

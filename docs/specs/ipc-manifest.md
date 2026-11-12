@@ -290,7 +290,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `list_tracks_enriched` | `venueId: Option<String>` | `Vec<TrackBrowserRow>` |
-| `get_track_beats` | `trackId: String` | `Option<BeatGrid>` |
+| `get_track_beats` | `trackId: String`<br>`scoreId: Option<String>` | `Option<BeatGrid>` |
 | `get_track_beat_validation` | `trackId: String` | `Option<BeatValidation>` |
 | `set_track_beat_validation` | `trackId: String`<br>`grid: BeatGrid`<br>`verdict: BeatValidationVerdict`<br>`reason: Option<BeatValidationReason>` | `()` |
 | `import_tracks` | `filePaths: Vec<String>` | `TrackImportResult` |

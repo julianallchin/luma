@@ -3,12 +3,12 @@
 //! whose, and whether the write lands on the live rows or on the thread's
 //! draft.
 use super::*;
+use crate::agent_execution::spoken_groups::SpokenGroups;
 use crate::database::local::scores::rows;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
 use crate::services::{drafts, graph_scores};
-use crate::agent_execution::spoken_groups::SpokenGroups;
 use luma_patterns::{Score, ScoreEdit};
 
 impl TrackHost {
@@ -97,7 +97,7 @@ impl TrackHost {
             &self.resource_root,
             &self.storage,
             &self.controls,
-            &self.scope.track_id,
+            self.scope.grid(),
             candidate,
         )
         .await

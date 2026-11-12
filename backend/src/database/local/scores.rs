@@ -139,7 +139,7 @@ pub async fn list_accessible_scores_for_track(
 /// Fetch a score by ID
 pub async fn get_score(access: &mut impl AuthorizedVenue, id: &str) -> Result<Score, String> {
     sqlx::query_as::<_, Score>(
-        "SELECT id, uid, track_id, venue_id, name, created_at, updated_at
+        "SELECT id, uid, track_id, venue_id, name, grid_id, created_at, updated_at
          FROM scores WHERE id = ? AND venue_id = ?",
     )
     .bind(id)

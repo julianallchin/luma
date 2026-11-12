@@ -245,10 +245,13 @@ fn artifact_current(p: &(impl Preprocessor + ?Sized)) -> String {
         at("b.downbeats_json", "$[0]"),
         at("b.downbeats_json", "$[1]"),
     );
+    // The track's current grid: an earlier one is kept beside it for the
+    // scores written against it, and would call every row stale.
+    let current_grid = crate::database::local::tracks::current_grid!("a.track_id");
     format!(
         "({rows} AND NOT EXISTS (
             SELECT 1 FROM {table} a
-              JOIN track_beats b ON b.track_id = a.track_id
+              JOIN track_beats b ON b.id = {current_grid}
              WHERE a.track_id = t.id
                AND (ABS(({row_start}) - ({grid_start})) >= {SAME_BAR_SECS:?}
                  OR ABS(({row_end}) - ({grid_end})) >= {SAME_BAR_SECS:?})

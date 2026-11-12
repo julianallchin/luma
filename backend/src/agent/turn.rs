@@ -746,8 +746,11 @@ impl Turn {
         let pool = &self.service.services().db().0;
         match super::hand_edits::since(pool, &self.thread_id, score_id).await {
             Ok(Some(edits)) if !edits.is_empty() => {
-                let grid =
-                    crate::database::local::tracks::get_track_beats(pool, &scope.subject_id).await;
+                let grid = crate::database::local::tracks::get_track_beats(
+                    pool,
+                    crate::database::local::tracks::Grid::of_score(&scope.subject_id, score_id),
+                )
+                .await;
                 match grid {
                     Ok(grid) => editor.note_hand_edits(edits, grid.as_ref()),
                     Err(error) => log::warn!(

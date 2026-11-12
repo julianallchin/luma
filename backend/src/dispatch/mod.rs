@@ -223,7 +223,7 @@ commands! {
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
 
     tracks::list_tracks_enriched(venue_id: Option<String>) -> Vec<TrackBrowserRow>;
-    tracks::get_track_beats(track_id: String) -> Option<BeatGrid>;
+    tracks::get_track_beats(track_id: String, score_id: Option<String>) -> Option<BeatGrid>;
     tracks::get_track_beat_validation(track_id: String) -> Option<BeatValidation>;
     tracks::set_track_beat_validation(track_id: String, grid: BeatGrid, verdict: BeatValidationVerdict, reason: Option<BeatValidationReason>) -> ();
 

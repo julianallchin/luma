@@ -161,8 +161,9 @@ impl Fixture {
         .unwrap();
 
         sqlx::query(
-            "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
-             VALUES (?, ?, '[0.5,2.5]', 120.0, 4)",
+            "INSERT INTO track_beats
+                (id, track_id, beats_json, downbeats_json, bpm, beats_per_bar)
+             VALUES (lower(hex(randomblob(16))), ?, ?, '[0.5,2.5]', 120.0, 4)",
         )
         .bind(TRACK_ID)
         .bind(json!(BEATS).to_string())
@@ -460,10 +461,14 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
 
     // §22.5 — the analysis changes underneath the conversation. The next cell
     // sees the new beats; the helper and `kicks` survive.
-    sqlx::query("UPDATE track_beats SET beats_json = ? WHERE track_id = ?")
-        .bind(json!([0.0, 2.0, 4.0]).to_string())
-        .bind(TRACK_ID)
-        .execute(&f.pool)
+    let reanalysed = crate::models::beat_grid::BeatGrid {
+        beats: vec![0.0, 2.0, 4.0],
+        downbeats: vec![0.5, 2.5],
+        bpm: 120.0,
+        downbeat_offset: 0.5,
+        beats_per_bar: 4,
+    };
+    crate::database::local::tracks::record_track_beats(&f.pool, TRACK_ID, &reanalysed, 1)
         .await
         .unwrap();
     let out = f
