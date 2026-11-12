@@ -71,6 +71,7 @@ impl InsertChoice {
             Self::Preset(preset) => preset.clip(start, duration),
             Self::Blank(kind) => luma_patterns::Clip {
                 name: kind.label().into(),
+                label: None,
                 start,
                 duration,
                 seed: 0,

@@ -15,6 +15,7 @@ fn error(nodes: Value) -> String {
 fn clip(graph: ClipGraph) -> Clip {
     Clip {
         name: "Chase".into(),
+        label: None,
         start: 32.,
         duration: 8.,
         seed: 7,

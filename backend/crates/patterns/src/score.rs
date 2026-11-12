@@ -9,6 +9,10 @@ pub struct Clip {
     /// What the clip is called. The checker requires one.
     #[serde(default)]
     pub name: String,
+    /// The handle an agent gave the clip to find it again, unique among its
+    /// score's clips. The clip's identity is its id; most clips have no label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub start: f64,
     pub duration: f64,
     pub seed: u64,
@@ -34,8 +38,8 @@ fn replace_blend() -> crate::BlendMode {
 /// back bit for bit.
 const TOUCH: f64 = 1e-6;
 
-/// Canonical score document: clips keyed by their stable identity. Every clip
-/// owns one graph.
+/// Canonical score document: clips keyed by their id, a random UUID the
+/// writer generated. Every clip owns one graph.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Score {
@@ -43,21 +47,40 @@ pub struct Score {
 }
 impl Score {
     pub fn validate(&self, base: &Library) -> Result<()> {
-        if self.clips.len() > 2048 {
-            return Err(Error("a score supports at most 2,048 clips".into()));
-        }
+        self.validate_whole()?;
         self.clips
             .iter()
             .try_for_each(|(id, clip)| Self::validate_clip(base, id, clip))
+    }
+
+    /// What holds across clips: the size limit, and that a label names one
+    /// clip.
+    fn validate_whole(&self) -> Result<()> {
+        if self.clips.len() > 2048 {
+            return Err(Error("a score supports at most 2,048 clips".into()));
+        }
+        self.unique_labels()
+    }
+
+    /// Refuse a label two clips carry. Storage checks this on every save,
+    /// whoever writes: the server holds one live clip per label and score.
+    pub fn unique_labels(&self) -> Result<()> {
+        let mut labels = BTreeSet::new();
+        for label in self.clips.values().filter_map(|clip| clip.label.as_deref()) {
+            if !labels.insert(label) {
+                return Err(Error(format!(
+                    "two clips are labelled `{label}`; a label names one clip in its score"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// [`Score::validate`] for a write over `stored`: only the clips that
     /// differ from it are checked, so a stored clip that no longer passes
     /// does not block edits to the rest of the score.
     pub fn validate_changes(&self, base: &Library, stored: &Score) -> Result<()> {
-        if self.clips.len() > 2048 {
-            return Err(Error("a score supports at most 2,048 clips".into()));
-        }
+        self.validate_whole()?;
         self.clips
             .iter()
             .filter(|(id, clip)| stored.clips.get(*id) != Some(*clip))
@@ -76,6 +99,10 @@ impl Score {
                 Error(format!("clip {name} ({id}): {error}"))
             }
         };
+        if let Some(label) = clip.label.as_deref() {
+            crate::graph::identity(label)
+                .map_err(|error| prefix(Error(format!("label: {error}"))))?;
+        }
         crate::clip_graph::check_clip(clip).map_err(prefix)?;
         // Lower it without venue geometry: fixed timing and values fail here.
         PreparedGraph::new(
@@ -206,6 +233,7 @@ mod tests {
                 .map(|&(id, start, end, z)| {
                     let clip = Clip {
                         name: id.into(),
+                        label: None,
                         start,
                         duration: end - start,
                         seed: 0,
@@ -226,6 +254,30 @@ mod tests {
             .iter()
             .map(|(id, clip)| (id.as_str(), clip.z_index))
             .collect()
+    }
+
+    #[test]
+    fn a_label_names_one_clip() {
+        let library = crate::standard_library();
+        let mut labelled = score(&[("a", 0., 2., 0), ("b", 2., 4., 0)]);
+        labelled.clips.get_mut("a").unwrap().label = Some("drop".into());
+        let stored = labelled.clone();
+        labelled.clips.get_mut("b").unwrap().label = Some("drop".into());
+        let error = labelled.validate_changes(&library, &stored).unwrap_err();
+        assert!(error.to_string().contains("`drop`"), "{error}");
+        // The label goes with the clip, so it frees up when the clip does.
+        labelled.clips.remove("a");
+        assert!(labelled.unique_labels().is_ok());
+    }
+
+    /// A stored clip without a label reads, and writes back without the key,
+    /// so documents saved before labels compare equal.
+    #[test]
+    fn an_unlabelled_clip_has_no_label_key() {
+        let plain = score(&[("a", 0., 2., 0)]);
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json["clips"]["a"].get("label").is_none());
+        assert_eq!(serde_json::from_value::<Score>(json).unwrap(), plain);
     }
 
     #[test]

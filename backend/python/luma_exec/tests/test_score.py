@@ -14,22 +14,27 @@ from luma_exec.score import GraphTrack
 from luma_exec.track import BarGrid, TrackError
 
 
+def by_label(clips):
+    """Stored clips under their labels; a clip without one stays under its id."""
+    return {clip.get("label", id): clip for id, clip in clips.items()}
+
+
 class ScoreTests(unittest.TestCase):
     def test_new_clips_get_nonoverlapping_layers_unless_explicitly_chosen(self):
         track = self.track()
         edit = track.edit()
         graph = color()
-        first = edit.add_clip(graph, name="Wash", id="first", at=("1", "2"))
-        second = edit.add_clip(graph, name="Wash", id="second", at=("1.3", "2.3"))
-        adjacent = edit.add_clip(graph, name="Wash", id="adjacent", at=("2.3", "3"))
-        explicit = edit.add_clip(graph, name="Wash", id="explicit", at=("1", "2"), z=0)
+        first = edit.add_clip(graph, name="Wash", label="first", at=("1", "2"))
+        second = edit.add_clip(graph, name="Wash", label="second", at=("1.3", "2.3"))
+        adjacent = edit.add_clip(graph, name="Wash", label="adjacent", at=("2.3", "3"))
+        explicit = edit.add_clip(graph, name="Wash", label="explicit", at=("1", "2"), z=0)
         self.assertEqual((first.z, second.z, adjacent.z, explicit.z), (0, 1, 0, 0))
         receipt = edit.apply()
         self.assertEqual(repr(receipt).splitlines()[0], "applied: +3 added, ~0 changed, -0 removed")
         self.assertIn("3 clips of 1 distinct graphs on 2 layers", repr(receipt))
         self.assertNotIn("graph", repr(receipt).split("distinct graphs")[1])
-        self.assertEqual(set(receipt["clips"]), {"second", "adjacent", "explicit"})
-        saved = self.calls[-1][1]["candidate"]["clips"]
+        self.assertEqual(set(by_label(receipt["clips"])), {"second", "adjacent", "explicit"})
+        saved = by_label(self.calls[-1][1]["candidate"]["clips"])
         self.assertEqual(saved["second"]["z_index"], 1)
         self.assertEqual(saved["explicit"]["z_index"], 0)
         # The explicit clip covers first whole in its z.
@@ -39,28 +44,91 @@ class ScoreTests(unittest.TestCase):
         track = self.track()
         edit = track.edit()
         graph = color()
-        edit.add_clip(graph, name="Wash", id="around", at=("1", "3"), z=0)
-        edit.add_clip(graph, name="Wash", id="before", at=("3", "4"), z=1)
-        edit.add_clip(graph, name="Wash", id="after", at=("4", "5"), z=1)
-        edit.add_clip(graph, name="Wash", id="other", at=("1", "5"), z=2)
+        around = edit.add_clip(graph, name="Wash", label="around", at=("1", "3"), z=0).id
+        before = edit.add_clip(graph, name="Wash", label="before", at=("3", "4"), z=1).id
+        after = edit.add_clip(graph, name="Wash", label="after", at=("4", "5"), z=1).id
+        edit.add_clip(graph, name="Wash", label="other", at=("1", "5"), z=2)
         with redirect_stdout(io.StringIO()) as out:
-            edit.add_clip(graph, name="Wash", id="placed", at=("1.3", "2"), z=0)
+            edit.add_clip(graph, name="Wash", label="placed", at=("1.3", "2"), z=0)
             edit.update_clip("placed", at=("3.3", "4.3"), z=1)
         # Each cut says what it took away.
         self.assertEqual(out.getvalue().splitlines(), [
-            "cut: clip Wash (around) at z 0 is now 1.1.1-1.3.1 and 2.1.1-3.1.1",
-            "cut: clip Wash (before) at z 1 is now 3.1.1-3.3.1",
-            "cut: clip Wash (after) at z 1 is now 4.3.1-5.1.1"])
-        spans = {id: (clip["start"], clip["start"] + clip["duration"], clip["z_index"])
-                 for id, clip in edit.candidate["clips"].items()}
-        # Split in two, trimmed at each end, and left alone in another z.
+            f"cut: clip Wash ({around}) at z 0 is now 1.1.1-1.3.1 and 2.1.1-3.1.1",
+            f"cut: clip Wash ({before}) at z 1 is now 3.1.1-3.3.1",
+            f"cut: clip Wash ({after}) at z 1 is now 4.3.1-5.1.1"])
+        spans = {label: (clip["start"], clip["start"] + clip["duration"], clip["z_index"])
+                 for label, clip in by_label(edit.candidate["clips"]).items()}
+        # Split in two, trimmed at each end, and left alone in another z. The
+        # near piece keeps the label; the far piece is a new clip without one.
         tail = next(id for id in spans if id not in {"around", "before", "after", "other", "placed"})
         self.assertEqual(spans.pop(tail), (4, 8, 0))
         self.assertEqual(spans, {"around": (0, 2, 0), "before": (8, 10, 1), "after": (14, 16, 1),
                                  "other": (0, 16, 2), "placed": (10, 14, 1)})
         # A clip that only touches another cuts nothing.
-        edit.add_clip(graph, name="Wash", id="touching", at=("5", "6"), z=1)
-        self.assertEqual(edit.candidate["clips"]["after"]["duration"], 2)
+        edit.add_clip(graph, name="Wash", label="touching", at=("5", "6"), z=1)
+        self.assertEqual(edit.candidate["clips"][after]["duration"], 2)
+
+    def test_a_clip_gets_a_generated_id_and_is_found_by_its_label(self):
+        import uuid
+        track = self.track()
+        edit = track.edit()
+        drop = edit.add_clip(color(), name="Wash", label="drop", at=("1", "2"))
+        plain = edit.add_clip(color(), name="Wash", at=("2", "3"))
+        self.assertEqual((drop.label, plain.label), ("drop", None))
+        for clip in (drop, plain):
+            self.assertEqual(str(uuid.UUID(clip.id)), clip.id)
+        # An id is never the caller's to choose.
+        with self.assertRaises(TypeError):
+            edit.add_clip(color(), name="Wash", id="mine", at=("3", "4"))
+        self.assertNotIn("label", edit.candidate["clips"][plain.id])
+        # The label, the id and the Clip all name the same clip.
+        self.assertEqual(edit.update_clip("drop", name="Hit").id, drop.id)
+        self.assertEqual(edit.update_clip(drop.id, z=3).z, 3)
+        self.assertEqual(edit._preview("drop")["clips"].keys(), {drop.id})
+        with self.assertRaisesRegex(TrackError, "unknown clip 'intro': no clip in this edit has that id or label"):
+            edit.update_clip("intro", z=1)
+        with self.assertRaisesRegex(TrackError, "unknown clip 'intro'"):
+            edit.remove_clip("intro")
+        # One clip per label; moving it takes it off the first clip.
+        with self.assertRaisesRegex(TrackError, f"label 'drop' is already on clip Hit \\({drop.id}\\)"):
+            edit.add_clip(color(), name="Wash", label="drop", at=("3", "4"))
+        with self.assertRaisesRegex(TrackError, "label 'drop' is already on clip"):
+            edit.update_clip(plain, label="drop")
+        with self.assertRaisesRegex(TrackError, "label needs text"):
+            edit.add_clip(color(), name="Wash", label=" ", at=("3", "4"))
+        self.assertEqual(edit.update_clip(drop, label="").label, None)
+        self.assertEqual(edit.update_clip(plain, label="drop").label, "drop")
+        edit.apply()
+        # The label is in the saved score, so a later edit finds the clip.
+        later = track.edit()
+        later.remove_clip("drop")
+        self.assertEqual([clip.id for clip in later.clips], [drop.id])
+
+    def test_a_source_names_a_new_clip_by_label_and_never_by_id(self):
+        track = self.track()
+        setup = track.edit()
+        kept = setup.add_clip(color(), name="Wash", label="kept", at=("1", "2"))
+        setup.apply()
+        edit = track.edit()
+        document = json.loads(edit.source())
+        stored = document["clips"][kept.id]
+        plain = {key: value for key, value in stored.items() if key != "label"}
+        document["clips"]["intro"] = dict(plain, start=8)
+        document["clips"]["3f2504e0-4f89-41d3-9a0c-0305e82c3301"] = dict(plain, start=12, label="outro")
+        edit.replace_source(json.dumps(document))
+        clips = edit.candidate["clips"]
+        # The clip it read keeps its id; the two it wrote get new ones.
+        self.assertEqual(clips[kept.id], stored)
+        self.assertEqual(len(clips), 3)
+        self.assertNotIn("intro", clips)
+        self.assertNotIn("3f2504e0-4f89-41d3-9a0c-0305e82c3301", clips)
+        self.assertEqual({label: clip["start"] for label, clip in by_label(clips).items()},
+                         {"kept": 0, "intro": 8, "outro": 12})
+        # A key that is a clip's label is that clip.
+        edit.replace_source(json.dumps({"clips": {"kept": dict(plain, start=4)}}))
+        self.assertEqual(edit.candidate["clips"], {kept.id: dict(stored, start=4)})
+        with self.assertRaisesRegex(TrackError, "label 'kept' is on two clips"):
+            edit.replace_source(json.dumps({"clips": {kept.id: stored, "other": stored}}))
 
     def track(self):
         nodes = [{"kind": "color", "output": "color", "inputs": {
@@ -94,7 +162,7 @@ class ScoreTests(unittest.TestCase):
         held = first.track
         edit, stale = held.edit(), held.edit()
         graph = color()
-        edit.add_clip(graph, name="Wash", id="clip", at=("1", "1.2"))
+        edit.add_clip(graph, name="Wash", at=("1", "1.2"))
         second = reconcile_facades(load("score-a", "manifest-2"), first)
         self.assertIs(second.track, held)
         edit.apply()
@@ -166,17 +234,17 @@ class ScoreTests(unittest.TestCase):
             with self.assertRaises(TrackError):
                 grid.parse(text)
         edit = track.edit()
-        clip = edit.add_clip(color(), name="Wash", id="a", at=("1.2", "2"))
+        clip = edit.add_clip(color(), name="Wash", label="a", at=("1.2", "2"))
         self.assertEqual(clip.at, ("1.2.1", "2.1.1"))
         # bars= and at= agree, and clip.at places a clip on the same range.
-        self.assertEqual(edit.add_clip(color(), name="Wash", id="b", bars=(2, 3)).at, ("2.1.1", "3.1.1"))
-        self.assertEqual(edit.add_clip(color(), name="Wash", id="c", at=clip.at, z=5).at, clip.at)
+        self.assertEqual(edit.add_clip(color(), name="Wash", label="b", bars=(2, 3)).at, ("2.1.1", "3.1.1"))
+        self.assertEqual(edit.add_clip(color(), name="Wash", label="c", at=clip.at, z=5).at, clip.at)
         with self.assertRaises(TrackError):
             edit.add_clip(color(), name="Wash", at=("2", "2"))
         window = edit.window(at=("1", "3"))
         self.assertEqual((window.at, window.bars), (("1.1.1", "3.1.1"), (1, 3)))
-        self.assertEqual({clip.id for clip in window.clips}, {"a", "b", "c"})
-        self.assertEqual({clip.id for clip in edit.window(bars=(2, 3)).clips}, {"b"})
+        self.assertEqual({clip.label for clip in window.clips}, {"a", "b", "c"})
+        self.assertEqual({clip.label for clip in edit.window(bars=(2, 3)).clips}, {"b"})
 
     def test_bars_start_at_the_detected_downbeats_as_on_the_ruler(self):
         # Bar 2 is three beats long: the downbeats say so, not the meter.
@@ -198,14 +266,14 @@ class ScoreTests(unittest.TestCase):
     def test_diff_is_a_short_plan_with_one_line_per_clip(self):
         track = self.track()
         setup = track.edit()
-        setup.add_clip(color(), name="Wash", id="wash", at=("1", "5"), z=0, selection="front")
-        setup.add_clip(color(), name="Gone", id="gone", at=("5", "6"), z=0)
-        setup.add_clip(color(), name="Moved", id="moved", at=("6", "7"), z=0)
+        setup.add_clip(color(), name="Wash", label="wash", at=("1", "5"), z=0, selection="front")
+        setup.add_clip(color(), name="Gone", label="gone", at=("5", "6"), z=0)
+        setup.add_clip(color(), name="Moved", label="moved", at=("6", "7"), z=0)
         setup.apply()
         edit = track.edit()
         self.assertEqual(edit.diff(), "0 added, 0 removed, 0 changed")
         with redirect_stdout(io.StringIO()):
-            edit.add_clip(color(), name="Hit", id="hit", at=("2", "3"), z=0)
+            edit.add_clip(color(), name="Hit", label="hit", at=("2", "3"), z=0)
         edit.remove_clip("gone")
         edit.update_clip("moved", at=("7", "8"), z=1)
         plan = edit.diff()
@@ -218,13 +286,13 @@ class ScoreTests(unittest.TestCase):
             "~ Moved 7.1.1-8.1.1 z 1 all: at 6.1.1-7.1.1 → 7.1.1-8.1.1; z 0 → 1"])
         full = edit.diff(full=True)
         self.assertEqual(set(full), {"added", "removed", "changed"})
-        self.assertIn("hit", full["added"])
-        self.assertEqual(full["removed"]["gone"]["name"], "Gone")
+        self.assertIn("hit", by_label(full["added"]))
+        self.assertEqual(by_label(full["removed"])["gone"]["name"], "Gone")
 
     def test_diff_names_the_graph_input_that_changed(self):
         track = self.track()
         setup = track.edit()
-        setup.add_clip(color(color=(1, 0, 0)), name="Wash", id="wash", at=("1", "2"))
+        setup.add_clip(color(color=(1, 0, 0)), name="Wash", label="wash", at=("1", "2"))
         setup.apply()
         edit = track.edit()
         edit.update_clip("wash", graph=color(color=(0, 0, 1)))
@@ -235,12 +303,12 @@ class ScoreTests(unittest.TestCase):
         track = self.track()
         edit, stale = track.edit(), track.edit()
         graph = color()
-        edit.add_clip(graph, name="Wash", id="clip", at=("1", "2"))
+        clip = edit.add_clip(graph, name="Wash", at=("1", "2"))
         window = edit.window(at=("1", "2"))
         self.assertEqual(len(track.clips), 0)
         edit.apply()
         self.assertEqual(len(track.clips), 1)
-        self.assertEqual(track.document["clips"]["clip"]["graph"]["nodes"]["color1"]["kind"], "color")
+        self.assertEqual(track.document["clips"][clip.id]["graph"]["nodes"]["color1"]["kind"], "color")
         with self.assertRaises(TypeError):
             track.document["clips"]["extra"] = {}
         with self.assertRaises(AttributeError):
@@ -260,9 +328,9 @@ class ScoreTests(unittest.TestCase):
         track = self.track()
         edit = track.edit()
         graph = color()
-        clip = edit.add_clip(graph, name="Wash", id="clip", at=("1", "2"))
+        clip = edit.add_clip(graph, name="Wash", at=("1", "2"))
         edit.update_clip(clip, selection="bars")
-        value = edit.candidate["clips"]["clip"]
+        value = edit.candidate["clips"][clip.id]
         self.assertEqual(value["selection"], {"expression": "bars"})
         self.assertEqual(value["name"], "Wash")
         candidate = edit.candidate
@@ -294,17 +362,17 @@ class ScoreTests(unittest.TestCase):
         track = self.track()
         edit = track.edit()
         graph = color()
-        first = edit.add_clip(graph, name="Wash", id="first", at=("1.2", "2"), selection="front")
-        edit.add_clip(graph, name="Wash", id="second", at=("1.3", "2.2"), selection="rear", blend="add", z=1)
+        first = edit.add_clip(graph, name="Wash", label="first", at=("1.2", "2"), selection="front")
+        edit.add_clip(graph, name="Wash", label="second", at=("1.3", "2.2"), selection="rear", blend="add", z=1)
         original = edit.candidate
         preview = edit._preview(first)
         self.assertEqual(set(preview), {"clips"})
-        self.assertEqual(preview["clips"], {"first": original["clips"]["first"]})
+        self.assertEqual(preview["clips"], {first.id: original["clips"][first.id]})
         preview["clips"].clear()
         self.assertEqual(edit.candidate, original)
         self.assertEqual(len(track.clips), 0)
         self.assertEqual(edit._preview(), original)
-        with self.assertRaisesRegex(TrackError, "unknown preview clip"):
+        with self.assertRaisesRegex(TrackError, "unknown clip 'missing'"):
             edit._preview("missing")
 
     def test_a_reference_score_groups_its_clips_into_looks_and_roles(self):

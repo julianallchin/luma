@@ -1,9 +1,9 @@
 //! A score is rows: one `clips` row per clip, and the `scores` row itself.
 //!
-//! A clip key is unique inside its score, not across the library — two
-//! scores may each have a `flash` — so the stored id is `score_id:key` and
-//! the key is read back off it. A score id is a uuid and
-//! carries no colon, so the split is unambiguous however the key is spelled.
+//! A clip's id is a random UUID its writer generated, and a document's clip
+//! map is keyed by it. It names no score: a clip belongs to one through
+//! `score_id`. Saving a document that holds an id the rows no longer have
+//! inserts that row again, which is how an undone delete comes back.
 //!
 //! [`save_score`] makes the rows match a whole document, writing only what
 //! differs. A writer's stale copy would revert every clip someone else wrote
@@ -38,6 +38,7 @@ impl Changed {
 /// reads them, and a new row writes them empty.
 struct ClipRow {
     name: String,
+    label: Option<String>,
     graph_json: String,
     start: f64,
     duration: f64,
@@ -51,6 +52,7 @@ impl ClipRow {
     fn of(clip: &Clip) -> Result<Self, String> {
         Ok(Self {
             name: clip.name.clone(),
+            label: clip.label.clone(),
             graph_json: json(&clip.graph)?,
             start: clip.start,
             duration: clip.duration,
@@ -64,6 +66,7 @@ impl ClipRow {
     fn into_clip(self) -> Result<Clip, String> {
         Ok(Clip {
             name: self.name,
+            label: self.label,
             graph: from_json(&self.graph_json)?,
             start: self.start,
             duration: self.duration,
@@ -92,6 +95,9 @@ impl ClipRow {
         );
         text("blend_mode", &self.blend_mode, &stored.blend_mode);
         text("seed", &self.seed, &stored.seed);
+        if self.label != stored.label {
+            changes.push(("label", Field::Label(self.label.as_deref())));
+        }
         if self.start != stored.start {
             changes.push(("start", Field::Real(self.start)));
         }
@@ -107,21 +113,9 @@ impl ClipRow {
 
 enum Field<'a> {
     Text(&'a str),
+    Label(Option<&'a str>),
     Real(f64),
     Integer(i64),
-}
-
-/// The globally unique id of a row whose key is unique only inside its score.
-#[must_use]
-pub fn row_id(score_id: &str, key: &str) -> String {
-    format!("{score_id}:{key}")
-}
-
-fn key_of(score_id: &str, id: &str) -> Result<String, String> {
-    id.strip_prefix(score_id)
-        .and_then(|rest| rest.strip_prefix(':'))
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("row {id} does not belong to score {score_id}"))
 }
 
 /// Read one score's clips back into a document.
@@ -131,7 +125,7 @@ pub async fn load_score(
 ) -> Result<Score, String> {
     let mut score = Score::default();
     let rows = sqlx::query(
-        "SELECT id, name, graph_json, start, duration, seed, selection_json, z_index,
+        "SELECT id, name, label, graph_json, start, duration, seed, selection_json, z_index,
                 blend_mode
          FROM clips WHERE score_id = ? ORDER BY id",
     )
@@ -141,9 +135,7 @@ pub async fn load_score(
     .map_err(|error| format!("failed to read the score's clips: {error}"))?;
     for row in rows {
         let id: String = row.try_get("id").map_err(|error| error.to_string())?;
-        score
-            .clips
-            .insert(key_of(score_id, &id)?, read_clip(&row)?.into_clip()?);
+        score.clips.insert(id, read_clip(&row)?.into_clip()?);
     }
     Ok(score)
 }
@@ -158,36 +150,46 @@ pub async fn save_score(
     score_id: &str,
     candidate: &Score,
 ) -> Result<Changed, String> {
+    // The table does not hold labels unique, as a download may pass through
+    // a state where one is on two rows. A save is where a duplicate is caught.
+    candidate
+        .unique_labels()
+        .map_err(|error| error.to_string())?;
     let mut changed = Changed::default();
-    let stored = load_score(&mut *connection, score_id).await?;
+    let mut stored = load_score(&mut *connection, score_id).await?;
 
-    for (id, clip) in &candidate.clips {
-        let row = ClipRow::of(clip)?;
-        match stored.clips.get(id) {
-            None => {
-                insert_clip(&mut *connection, score_id, &row_id(score_id, id), &row).await?;
-                changed.inserted += 1;
-            }
-            Some(current) => {
-                let updates = row.changes(&ClipRow::of(current)?);
-                if !updates.is_empty() {
-                    update_clip(&mut *connection, &row_id(score_id, id), &updates).await?;
-                    changed.updated += 1;
-                }
-            }
-        }
-    }
+    // Statements upload in the order they run, and the server holds a label
+    // unique at each one. So deletes go first, and a label is taken off the
+    // clip that had it before another clip gets it.
     for id in stored
         .clips
         .keys()
         .filter(|id| !candidate.clips.contains_key(*id))
     {
         sqlx::query("DELETE FROM clips WHERE id = ?")
-            .bind(row_id(score_id, id))
+            .bind(id)
             .execute(&mut *connection)
             .await
             .map_err(|error| format!("failed to delete clip {id}: {error}"))?;
         changed.deleted += 1;
+    }
+    release_labels(&mut *connection, &mut stored, candidate).await?;
+
+    for (id, clip) in &candidate.clips {
+        let row = ClipRow::of(clip)?;
+        match stored.clips.get(id) {
+            None => {
+                insert_clip(&mut *connection, score_id, id, &row).await?;
+                changed.inserted += 1;
+            }
+            Some(current) => {
+                let updates = row.changes(&ClipRow::of(current)?);
+                if !updates.is_empty() {
+                    update_clip(&mut *connection, id, &updates).await?;
+                    changed.updated += 1;
+                }
+            }
+        }
     }
 
     // `authored_at` is what "last worked on" reads. Only touched when
@@ -204,6 +206,41 @@ pub async fn save_score(
     Ok(changed)
 }
 
+/// Clear each stored label the candidate gives to a different clip, in the
+/// rows and in `stored`, so that no upload gives a clip a label another
+/// still holds on the server.
+async fn release_labels(
+    connection: &mut SqliteConnection,
+    stored: &mut Score,
+    candidate: &Score,
+) -> Result<(), String> {
+    let taken: Vec<String> = stored
+        .clips
+        .iter()
+        .filter(|(id, clip)| {
+            clip.label.as_ref().is_some_and(|label| {
+                candidate.clips.contains_key(*id)
+                    && candidate
+                        .clips
+                        .iter()
+                        .any(|(other, wanted)| other != *id && wanted.label.as_ref() == Some(label))
+            })
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in taken {
+        sqlx::query("UPDATE clips SET label = NULL WHERE id = ?")
+            .bind(&id)
+            .execute(&mut *connection)
+            .await
+            .map_err(|error| format!("failed to update clip {id}: {error}"))?;
+        if let Some(clip) = stored.clips.get_mut(&id) {
+            clip.label = None;
+        }
+    }
+    Ok(())
+}
+
 fn read_clip(row: &sqlx::sqlite::SqliteRow) -> Result<ClipRow, String> {
     fn get<'r, T: sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>>(
         row: &'r sqlx::sqlite::SqliteRow,
@@ -213,6 +250,7 @@ fn read_clip(row: &sqlx::sqlite::SqliteRow) -> Result<ClipRow, String> {
     }
     Ok(ClipRow {
         name: get(row, "name")?,
+        label: get(row, "label")?,
         graph_json: get(row, "graph_json")?,
         start: get(row, "start")?,
         duration: get(row, "duration")?,
@@ -233,8 +271,8 @@ async fn insert_clip(
     // unread. It goes when the form columns are dropped.
     sqlx::query(
         "INSERT INTO clips (id, uid, score_id, name, graph_json, graph, start, duration, seed,
-                            selection_json, z_index, blend_mode)
-         VALUES (?1, (SELECT uid FROM scores WHERE id = ?2), ?2, ?3, ?4, '', ?5, ?6, ?7, ?8, ?9, ?10)",
+                            selection_json, z_index, blend_mode, label)
+         VALUES (?1, (SELECT uid FROM scores WHERE id = ?2), ?2, ?3, ?4, '', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )
     .bind(id)
     .bind(score_id)
@@ -246,6 +284,7 @@ async fn insert_clip(
     .bind(&row.selection_json)
     .bind(row.z_index)
     .bind(&row.blend_mode)
+    .bind(&row.label)
     .execute(&mut *connection)
     .await
     .map_err(|error| format!("failed to insert clip {id}: {error}"))?;
@@ -268,6 +307,7 @@ async fn update_clip(
     for (_, value) in updates {
         statement = match value {
             Field::Text(text) => statement.bind(*text),
+            Field::Label(label) => statement.bind(*label),
             Field::Real(number) => statement.bind(*number),
             Field::Integer(number) => statement.bind(*number),
         };
@@ -313,6 +353,13 @@ mod tests {
 
     fn clip(seed: u64, start: f64) -> Clip {
         clip_with(seed, start, "Strobe", 0.9)
+    }
+
+    fn labelled(seed: u64, start: f64, label: &str) -> Clip {
+        Clip {
+            label: Some(label.into()),
+            ..clip(seed, start)
+        }
     }
 
     /// A strobe clip whose graph holds one value, so a test can change the
@@ -457,7 +504,7 @@ mod tests {
         score.clips.insert("chase".into(), chase);
         save_score(&mut connection, "s", &score).await.unwrap();
         let (name, graph): (String, String) =
-            sqlx::query_as("SELECT name, graph_json FROM clips WHERE id = 's:chase'")
+            sqlx::query_as("SELECT name, graph_json FROM clips WHERE id = 'chase'")
                 .fetch_one(&mut *connection)
                 .await
                 .unwrap();
@@ -467,6 +514,113 @@ mod tests {
             serde_json::to_value(&score.clips["chase"].graph).unwrap()
         );
         assert_eq!(load_score(&mut connection, "s").await.unwrap(), score);
+    }
+
+    /// Undo in the editor re-saves the document it had before a delete. The
+    /// clip comes back as the row it was, under the id it had, which is what
+    /// revives it on the server.
+    #[tokio::test]
+    async fn a_deleted_clip_saved_again_is_the_same_row() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut before = Score::default();
+        before.clips.insert(id.clone(), labelled(1, 0.0, "drop"));
+        before
+            .clips
+            .insert(uuid::Uuid::new_v4().to_string(), clip(2, 8.0));
+        save_score(&mut connection, "s", &before).await.unwrap();
+
+        let mut deleted = before.clone();
+        deleted.clips.remove(&id);
+        save_score(&mut connection, "s", &deleted).await.unwrap();
+        assert_eq!(load_score(&mut connection, "s").await.unwrap(), deleted);
+
+        assert_eq!(
+            save_score(&mut connection, "s", &before).await.unwrap(),
+            Changed {
+                inserted: 1,
+                updated: 0,
+                deleted: 0
+            }
+        );
+        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM clips WHERE label = 'drop'")
+            .fetch_all(&mut *connection)
+            .await
+            .unwrap();
+        assert_eq!(ids, [id]);
+        assert_eq!(load_score(&mut connection, "s").await.unwrap(), before);
+    }
+
+    /// A clip's id names no score, so the row is found by the id alone and
+    /// the document's key is the stored id, unchanged.
+    #[tokio::test]
+    async fn the_document_key_is_the_row_id() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut score = Score::default();
+        score.clips.insert(id.clone(), clip(1, 0.0));
+        save_score(&mut connection, "s", &score).await.unwrap();
+        let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, score_id FROM clips")
+            .fetch_all(&mut *connection)
+            .await
+            .unwrap();
+        assert_eq!(stored, [(id, "s".to_string())]);
+    }
+
+    /// A label is stored, changed and cleared like any other column, and one
+    /// save can hand it from one clip to another, or to a new clip in place
+    /// of a deleted one.
+    #[tokio::test]
+    async fn a_label_round_trips_and_moves_between_clips() {
+        let (_directory, pool) = seeded().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut score = Score::default();
+        score.clips.insert("a".into(), labelled(1, 0.0, "intro"));
+        score.clips.insert("b".into(), labelled(2, 8.0, "drop"));
+        score.clips.insert("c".into(), clip(3, 16.0));
+        save_score(&mut connection, "s", &score).await.unwrap();
+        assert_eq!(load_score(&mut connection, "s").await.unwrap(), score);
+
+        // a and b swap labels; c goes and a new clip takes nothing of it.
+        score.clips.get_mut("a").unwrap().label = Some("drop".into());
+        score.clips.get_mut("b").unwrap().label = Some("intro".into());
+        save_score(&mut connection, "s", &score).await.unwrap();
+        assert_eq!(load_score(&mut connection, "s").await.unwrap(), score);
+
+        score.clips.remove("a");
+        score.clips.insert("d".into(), labelled(4, 24.0, "drop"));
+        score.clips.get_mut("b").unwrap().label = None;
+        save_score(&mut connection, "s", &score).await.unwrap();
+        assert_eq!(load_score(&mut connection, "s").await.unwrap(), score);
+    }
+
+    /// A save refuses a second clip with a label its score already uses, and
+    /// writes nothing; another score may use the same one.
+    #[tokio::test]
+    async fn a_label_is_unique_in_its_score_only() {
+        let (_directory, pool) = seeded().await;
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id) VALUES ('s2', 'alice', 't', 'v')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut connection = pool.acquire().await.unwrap();
+        let mut score = Score::default();
+        score.clips.insert("a".into(), labelled(1, 0.0, "drop"));
+        save_score(&mut connection, "s", &score).await.unwrap();
+        let mut other = Score::default();
+        other.clips.insert("b".into(), labelled(1, 0.0, "drop"));
+        save_score(&mut connection, "s2", &other).await.unwrap();
+
+        let saved = score.clone();
+        score.clips.insert("c".into(), labelled(2, 8.0, "drop"));
+        score.clips.get_mut("a").unwrap().start = 2.0;
+        let error = save_score(&mut connection, "s", &score).await.unwrap_err();
+        assert!(error.contains("`drop`"), "{error}");
+        assert_eq!(load_score(&mut connection, "s").await.unwrap(), saved);
     }
 
     /// `graph_json` is written when the graph changed, and only then: a

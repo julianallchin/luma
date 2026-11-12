@@ -542,6 +542,7 @@ pub fn stand_in_strip(
 fn stand_in_clip(graph: &luma_patterns::ClipGraph, beats: f64) -> luma_patterns::Clip {
     luma_patterns::Clip {
         name: String::new(),
+        label: None,
         start: 0.,
         duration: beats,
         seed: 0,
