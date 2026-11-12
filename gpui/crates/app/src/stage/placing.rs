@@ -383,7 +383,7 @@ impl Luma {
         let Some(run) = build.hand.extending() else {
             return;
         };
-        if run.refused().is_some() {
+        if build.run_refused().is_some() {
             return;
         }
         let venue = build.venue_id.clone();

@@ -506,11 +506,6 @@ pub(crate) struct Room {
     boxes: HashMap<String, luma_scene::aabb::DAabb>,
 }
 
-/// Contact is not collision: both boxes shrink by this before the overlap
-/// test, so a piece mated flush on a face stays legal and a piece *through*
-/// another does not.
-const COLLISION_CLEARANCE_M: f64 = 0.02;
-
 impl Room {
     /// The nearest placed piece under a ray, by its collision box.
     ///
@@ -553,7 +548,7 @@ impl Room {
             let Some(world) = poses.get(&node.id).copied() else {
                 continue;
             };
-            if let Some(bounds) = piece_bounds(sockets, node) {
+            if let Some(bounds) = sockets.bounds(node) {
                 boxes.insert(node.id.clone(), bounds);
             }
             let mut resolved = if node.id == root {
@@ -603,8 +598,7 @@ impl Room {
                 return None;
             }
             let pose = self.poses.get(id)?;
-            luma_scene::aabb::obb_intersects(body, &world, *other, pose, COLLISION_CLEARANCE_M)
-                .then_some(id.as_str())
+            luma_scene::aabb::collides(body, &world, *other, pose).then_some(id.as_str())
         })
     }
 
@@ -917,7 +911,7 @@ impl Room {
     /// The collision arm of every landing: `Some(reason)` when the body at
     /// `world` passes through a placed piece that is neither its host nor
     /// itself.
-    fn refusal(
+    pub(crate) fn refusal(
         &self,
         body: Option<luma_scene::aabb::DAabb>,
         world: DMat4,
@@ -965,26 +959,6 @@ impl Room {
                     .dot(luma_scene::snap::WORLD_UP)
                     .total_cmp(&b.normal.dot(luma_scene::snap::WORLD_UP))
             })
-    }
-}
-
-/// One node's local bounds: the catalog's measurement for a mesh piece, the
-/// generator's arithmetic for a procedural one at this node's own parameters.
-/// A node with neither (a fixture, the root) has no box and no collisions.
-fn piece_bounds(
-    sockets: &VenueSockets,
-    node: &luma_scene::venue::Node,
-) -> Option<luma_scene::aabb::DAabb> {
-    let reference = node.catalog_ref.as_deref()?;
-    match luma_scene::catalog::piece(reference)?.geometry {
-        luma_scene::catalog::Geometry::Mesh { .. } | luma_scene::catalog::Geometry::Assembly(_) => {
-            sockets.catalog().bounds(reference)
-        }
-        luma_scene::catalog::Geometry::Procedural(family) => {
-            Some(luma_scene::catalog::procedural_bounds(
-                luma_scene::catalog::node_params(family, &node.params),
-            ))
-        }
     }
 }
 

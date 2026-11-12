@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DMat4, DVec3};
 
-use crate::aabb::{obb_intersects, DAabb};
+use crate::aabb::{collides, DAabb};
 use crate::catalog::{Family, Geometry};
 use crate::coords;
 use crate::sockets::{Polarity, ResolvedSocket, SocketType};
@@ -59,10 +59,6 @@ pub const HINGE_LIMIT_DEG: f64 = 90.0;
 /// this module cannot hit misses by tens of degrees — the tolerance only has to
 /// separate "exact" from "not the same joint at all".
 const DIRECTION_TOLERANCE: f64 = 1e-3;
-
-/// Clearance both boxes are shrunk by before the collision test, metres.
-/// Contact is not collision: a mated piece touches its host by construction.
-const COLLISION_CLEARANCE_M: f64 = 0.02;
 
 /// How close two faces' normals must be before they count as pointing the same
 /// way, as a difference of cosines. Wide, because the tie this resolves is
@@ -607,16 +603,16 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
         }
     }
 
-    /// The first placed node whose box the candidate overlaps, ignoring
-    /// `parent` (a mate touches its host by construction).
-    fn blocker(
+    /// The first placed node a body at `world` would pass through, ignoring
+    /// `skip`: the host it mates, and itself when it is already placed.
+    pub fn blocker(
         &self,
         world: &DMat4,
         bounds: DAabb,
-        parent: &str,
+        skip: &[&str],
     ) -> Option<(String, Option<String>)> {
         for pose in self.solved.poses() {
-            if pose.node == parent || pose.kind == NodeKind::Venue {
+            if skip.contains(&pose.node.as_str()) || pose.kind == NodeKind::Venue {
                 continue;
             }
             let Some(row) = self.graph.node(&pose.node) else {
@@ -625,7 +621,7 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
             let Some(other) = self.sockets.bounds(row) else {
                 continue;
             };
-            if obb_intersects(bounds, world, other, &pose.world, COLLISION_CLEARANCE_M) {
+            if collides(bounds, world, other, &pose.world) {
                 return Some((pose.node.clone(), pose.label.clone()));
             }
         }
@@ -1044,7 +1040,7 @@ pub fn compile<S: NodeSockets + ?Sized>(
         .sockets
         .bounds(&probe)
         .unwrap_or_else(|| DAabb::new(DVec3::ZERO, DVec3::ZERO));
-    if let Some((node, label)) = scene.blocker(&plan.world, bounds, &plan.edge.parent) {
+    if let Some((node, label)) = scene.blocker(&plan.world, bounds, &[&plan.edge.parent]) {
         return Err(Refusal::Collision { node, label });
     }
     plan.at = Footprint::of(&plan.world, bounds);

@@ -847,6 +847,28 @@ mod tests {
         assert_eq!(position(resolved(&services, &venue).await), before);
     }
 
+    /// A piece put down through the page's own verb is refused where it
+    /// would pass through another, by name, and nothing is written: the same
+    /// answer the agent's `place` gets for the same spot.
+    #[tokio::test]
+    async fn a_piece_placed_inside_another_is_refused() {
+        let (_dir, services, venue) = room().await;
+        place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
+            .await
+            .unwrap();
+        let count = |venue: Value| venue["nodes"].as_array().unwrap().len();
+        let before = count(resolved(&services, &venue).await);
+        let through = place(&services, &venue, "stage", DECK, "bottom", 0.3, 0.2).await;
+        assert!(
+            matches!(&through, Err(CommandError::Invalid(why)) if why.contains("lands inside")),
+            "{through:?}"
+        );
+        assert_eq!(count(resolved(&services, &venue).await), before);
+        place(&services, &venue, "stage", DECK, "bottom", 4.0, 0.0)
+            .await
+            .expect("clear floor takes a deck");
+    }
+
     /// A light is its node and its patch row. `attach` and `place_free` write
     /// only a node, so they refuse a light rather than make one with no DMX
     /// address.

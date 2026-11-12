@@ -1328,21 +1328,37 @@ impl<'a> Stage<'a> {
         Ok((fixture.id, run))
     }
 
-    /// Check the joint `edge` makes for `node` as it will be — its sockets
-    /// depend on its params — by `luma_scene`'s own check: acyclic, both
-    /// sockets present, polarities compatible.
+    /// Check that `node` may exist where `edge` hangs it, as it will be —
+    /// its sockets and its size depend on its params. The joint is
+    /// `luma_scene`'s own check: acyclic, both sockets present, polarities
+    /// compatible. Then the body: it may touch what it hangs on and pass
+    /// through nothing, which is what a plan and a preview were refused for,
+    /// asked again here so no caller can write past it.
     async fn admit(
         &self,
         access: &mut VenueAccess<'_, Write>,
         node: Node,
         edge: &Edge,
     ) -> Result<()> {
+        let supply = venue_graph::sockets(self.fixtures_root)?;
         let mut graph = venue_graph::graph(access).await?;
         let id = node.id.clone();
+        let bounds = supply.bounds(&node);
         graph.insert(node);
         graph
-            .attach(&id, edge.clone(), venue_graph::sockets(self.fixtures_root)?)
-            .map_err(|e| StageError::Refused(e.to_string()))
+            .attach(&id, edge.clone(), supply)
+            .map_err(|e| StageError::Refused(e.to_string()))?;
+        let solved = luma_scene::venue::resolve(&graph, supply);
+        let (Some(bounds), Some(pose)) = (bounds, solved.pose(&id)) else {
+            return Ok(());
+        };
+        let scene = build::Scene::new(&graph, &solved, supply);
+        match scene.blocker(&pose.world, bounds, &[&id, &edge.parent]) {
+            Some((node, label)) => Err(StageError::Refused(
+                build::Refusal::Collision { node, label }.to_string(),
+            )),
+            None => Ok(()),
+        }
     }
 
     /// Solve, commit, and report — the tail of every verb.

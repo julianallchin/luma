@@ -12,7 +12,7 @@ use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use crate::Luma;
 
 use super::build::{Build, Freedom};
-use super::hand::{self, Extending, Hand, Holding};
+use super::hand::{self, Hand, Holding};
 
 /// Air between a floating control and the corner of the room it sits in.
 ///
@@ -446,7 +446,7 @@ pub(crate) fn build_layer(
                     {
                         let app = app.clone();
                         let node = selected.node.clone();
-                        let turned = selected.param + direction * selected.roll_step;
+                        let turned = selected.turn + direction * selected.roll_step;
                         pair = pair.child(
                             float::key_cap_pressable(float::key_cap())
                                 .child(gpui_component::Icon::new(icon).size(px(14.)))
@@ -512,11 +512,7 @@ pub(crate) fn build_layer(
         // it, and pushed left exactly as far as it must be.
         let reachable = size.0 - INSET;
         let left = px(f32::from(at.x).min(reachable - RUN_CARD_W).max(INSET));
-        let refused = build
-            .hand
-            .extending()
-            .and_then(Extending::refused)
-            .is_some();
+        let refused = build.run_refused().is_some();
         let length = build.hand.extending().map_or(0.0, |run| run.length_m);
         let (set, commit) = (app.clone(), app.clone());
         layer = layer.child(

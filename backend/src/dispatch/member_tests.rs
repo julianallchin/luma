@@ -173,7 +173,7 @@ async fn a_member_edits_the_room_its_rig_and_its_set() {
         &services,
         "duplicate",
         json!({
-            "venueId": venue, "nodeId": piece, "parentId": stage,
+            "venueId": venue, "nodeId": piece, "parentId": piece,
             "theirSocket": "top", "flip": null,
         }),
     )
