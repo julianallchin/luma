@@ -117,6 +117,14 @@ pub const VENUE_FLOOR: Material = Material {
     ..PLAIN
 };
 
+/// A room's walls and ceiling: matt black, as a venue paints them so that
+/// the only thing a beam shows is the beam.
+pub const VENUE_WALL: Material = Material {
+    base_color: Vec3::splat(0.03),
+    roughness: 0.9,
+    ..PLAIN
+};
+
 /// Open ground outdoors. The base colour is set by the caller from the sky's
 /// ground albedo, so the near floor and the ground the sky bounces light off
 /// are one surface.

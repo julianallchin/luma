@@ -804,6 +804,12 @@ impl VenueHost {
         })
     }
 
+    /// Give the room a size, or take it away.
+    async fn room(&self, request: RoomRequest) -> Result<Value, HostCallError> {
+        self.stage().set_room(request.size).await?;
+        Ok(json!({ "describe": self.stage().summary().await? }))
+    }
+
     /// Move one light, keeping its id.
     async fn move_light(&self, request: MoveRequest) -> Result<Value, HostCallError> {
         let socket = match (&request.host_node_id, request.face, request.stay) {
@@ -1298,6 +1304,7 @@ impl HostCallHandler for VenueHost {
                     "venue.params" => self.params(decode(payload)?).await,
                     "venue.distribute" => self.distribute(decode(payload)?).await,
                     "venue.move" => self.move_light(decode(payload)?).await,
+                    "venue.room" => self.room(decode(payload)?).await,
                     "venue.chain" => self.chain(decode(payload)?).await,
                     "venue.query" => self.query(decode(payload)?).await,
                     "venue.extent" => self.extent(decode(payload)?).await,
@@ -1624,6 +1631,13 @@ struct TilesRequest {
 #[serde(rename_all = "camelCase")]
 struct RemoveRequest {
     node_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RoomRequest {
+    /// `[width, depth, height]` in metres; `None` is open floor.
+    size: Option<[f64; 3]>,
 }
 
 #[derive(Deserialize)]

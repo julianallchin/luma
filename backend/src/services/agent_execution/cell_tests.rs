@@ -910,6 +910,50 @@ grouped = [g.split() for g in str(v.groups()).splitlines() if g.strip().startswi
     );
 }
 
+/// A room given a size has walls. A light put on one by the way it should
+/// look sits on that wall, above the floor point it was asked over, and the
+/// size cannot be taken away from under it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_python_program_sizes_the_room_and_hangs_lights_on_its_walls() {
+    let Some(f) = Fixture::new("venue room").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+v = luma.venue
+def where(light):
+    node = v.nodes(ids=[light.fixtures[0].id])[0]
+    return (round(node.at[0], 1), round(node.at[1], 1), round(node.z, 1))
+
+said = v.room(width=10, depth=8, height=6)
+back = where(v.place(MOVER, at=(2.0, 1.0), face=(0, 1, 0), mode=MODE))
+side = where(v.place(MOVER, at=(-1.0, -2.0), face=(1, 0, 0), mode=MODE))
+try:
+    v.room()
+    cleared = True
+except luma.VenueRefused:
+    cleared = False
+(said, back[0], back[1] < -3.5, back[2] > 3.5,
+ side[0] < -4.5, side[1], side[2] < 1.5, cleared)
+"#
+            .replace("MOVER", &format!("{MOVER:?}"))
+            .replace("MODE", &format!("{MOVER_MODE:?}"))
+            .as_str(),
+        )
+        .await;
+    expect_ok(&out, "size the room");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "('the room is 10 x 8 x 6 m', 2.0, True, True, True, -1.0, True, False)",
+        "{}",
+        out.stdout
+    );
+}
+
 /// A light goes where it was asked to: a point of the floor, a point of a deck
 /// top in the room's directions however the deck is turned, and a height in
 /// the air. A point that is not on the face is refused, not moved onto it.

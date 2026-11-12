@@ -341,6 +341,19 @@ impl Library {
         })
     }
 
+    /// Give the venue's room a size, `[width, depth, height]` in metres, or
+    /// take it away with `None`.
+    pub fn set_room(
+        &self,
+        venue_id: &str,
+        size: Option<[f64; 3]>,
+    ) -> impl Future<Output = Result<ResolvedVenue, LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("set_room", move |services| async move {
+            handlers::stage::set_room(&services, venue_id, size).await
+        })
+    }
+
     /// One command, one transaction: place, name, group and patch a row of
     /// fixtures along a host feature.
     #[allow(clippy::too_many_arguments)]

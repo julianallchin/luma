@@ -271,13 +271,27 @@ pub fn fill(env: VenueEnvironment) -> Fill {
 /// Outdoors there is no house rig, so there are no lamps.
 #[must_use]
 pub fn lamps(env: VenueEnvironment, room: Aabb) -> Vec<Lamp> {
+    lamps_under(env, room, None)
+}
+
+/// How far under a ceiling the house rig hangs, in metres.
+pub const CEILING_DROP_M: f32 = 0.5;
+
+/// [`lamps`], in a room with a `ceiling` this many metres up: the rig hangs
+/// just under it, however low it is, because a lamp above a ceiling lights
+/// the top of the ceiling.
+#[must_use]
+pub fn lamps_under(env: VenueEnvironment, room: Aabb, ceiling: Option<f32>) -> Vec<Lamp> {
     let level = env.house_level();
     if !matches!(env, VenueEnvironment::Indoor { .. }) || level <= 0.0 {
         return Vec::new();
     }
 
     let (centre, size) = footprint(room);
-    let height = (room.max.z + CLEARANCE_M).clamp(MIN_HEIGHT_M, MAX_HEIGHT_M);
+    let height = match ceiling {
+        Some(ceiling) => (ceiling - CEILING_DROP_M).max(CEILING_DROP_M),
+        None => (room.max.z + CLEARANCE_M).clamp(MIN_HEIGHT_M, MAX_HEIGHT_M),
+    };
     let (nx, ny) = counts(size);
 
     // A grid that had to spread out to fit the room or the lamp cap hangs a
@@ -312,11 +326,11 @@ pub fn lamps(env: VenueEnvironment, room: Aabb) -> Vec<Lamp> {
 /// Where the house's lamps hang, lit or dark: their bodies stay up at
 /// blackout. In the order [`lamps`] gives them.
 #[must_use]
-pub(crate) fn rig(env: VenueEnvironment, room: Aabb) -> Vec<Vec3> {
+pub(crate) fn rig(env: VenueEnvironment, room: Aabb, ceiling: Option<f32>) -> Vec<Vec3> {
     if !matches!(env, VenueEnvironment::Indoor { .. }) {
         return Vec::new();
     }
-    lamps(VenueEnvironment::indoor(1.0), room)
+    lamps_under(VenueEnvironment::indoor(1.0), room, ceiling)
         .into_iter()
         .map(|lamp| lamp.position)
         .collect()
@@ -627,6 +641,27 @@ mod tests {
         );
         for lamp in &lamps {
             assert!(lamp.position.z >= 9.0 + CLEARANCE_M);
+        }
+    }
+
+    /// Under a ceiling the rig hangs below it, in a low room and a tall one
+    /// alike: the minimum and maximum heights are for rooms with no lid.
+    #[test]
+    fn a_ceiling_holds_the_house_under_it() {
+        for ceiling in [3.0, 8.0, 20.0] {
+            let lamps = lamps_under(
+                VenueEnvironment::default(),
+                room(Vec3::new(-5.0, -5.0, 0.0), Vec3::new(5.0, 5.0, ceiling)),
+                Some(ceiling),
+            );
+            assert!(!lamps.is_empty());
+            for lamp in &lamps {
+                assert!(
+                    lamp.position.z > 0.0 && lamp.position.z < ceiling,
+                    "{ceiling} m ceiling, lamp at {}",
+                    lamp.position.z
+                );
+            }
         }
     }
 

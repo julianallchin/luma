@@ -35,7 +35,7 @@ use crate::coords;
 use crate::sockets::{Polarity, ResolvedSocket, SocketType};
 use crate::venue::{
     place_on, Edge, Node, NodeKind, NodeSockets, ResolvedVenue, SurfacePlacement, VenueGraph,
-    FLOOR_SOCKET, RIG_SOCKET,
+    FLOOR_SOCKET,
 };
 
 // ---------------------------------------------------------------------------
@@ -357,26 +357,14 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
         let (Some(row), Some(world)) = (self.graph.node(node), self.world(node)) else {
             return Vec::new();
         };
-        let mut out: Vec<(ResolvedSocket, DVec3, DVec3)> = self
-            .sockets
-            .sockets(row)
+        crate::venue::sockets_of(self.sockets, row)
             .into_iter()
             .map(|socket| {
                 let at = world.transform_point3(socket.position);
                 let normal = world.transform_vector3(socket.normal).normalize_or_zero();
                 (socket, at, normal)
             })
-            .collect();
-        if row.kind == NodeKind::Venue {
-            for name in [FLOOR_SOCKET, RIG_SOCKET] {
-                if let Some(socket) = crate::venue::root_socket(name) {
-                    let at = world.transform_point3(socket.position);
-                    let normal = world.transform_vector3(socket.normal).normalize_or_zero();
-                    out.push((socket, at, normal));
-                }
-            }
-        }
-        out
+            .collect()
     }
 
     /// Which of `node`'s sockets some relation already accounts for.
@@ -531,10 +519,15 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
     /// own directions whichever way the host is turned, so `(1, 0)` on a deck
     /// is a metre toward stage right on every deck.
     ///
+    /// On one of the room's walls the pair is `(along, up)`: `along` runs the
+    /// way the floor's own axis under that wall runs, so a light on the back
+    /// wall at `2` is above the floor's `u = 2`, and `up` is metres above the
+    /// wall's middle.
+    ///
     /// # Errors
     /// [`Refusal::UnknownNode`] for a node or face that is not there, and
-    /// [`Refusal::NotLevel`] for a face that is not a floor or a ceiling: a
-    /// point in plan names nothing on a wall.
+    /// [`Refusal::NotLevel`] for any other face that is not level: a point in
+    /// plan names nothing on the side of a truss.
     pub fn surface_point(
         &self,
         node: &str,
@@ -548,12 +541,24 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
             .into_iter()
             .find(|(socket, _, _)| socket.name == face)
             .ok_or_else(unknown)?;
-        if normal.dot(crate::snap::WORLD_UP).abs() < 0.9 {
-            return Err(Refusal::NotLevel {
-                name: self.name_of(node),
-            });
-        }
         let frame = world * crate::venue::socket_frame(&socket);
+        if normal.dot(crate::snap::WORLD_UP).abs() < 0.9 {
+            let room = self.graph.node(node).map(|row| row.kind) == Some(NodeKind::Venue);
+            if !room {
+                return Err(Refusal::NotLevel {
+                    name: self.name_of(node),
+                });
+            }
+            // The wall's level axis, as the floor names it: whichever way
+            // that points along the wall is the way `along` counts.
+            let level = facade_from_three(frame.x_axis.truncate());
+            let sign = if level.x.abs() > level.y.abs() {
+                level.x.signum()
+            } else {
+                level.y.signum()
+            };
+            return Ok((offset[0] * sign, offset[1]));
+        }
         let wanted = three_from_facade(DVec3::new(offset[0], offset[1], 0.0));
         Ok((
             wanted.dot(frame.x_axis.truncate().normalize_or_zero()),
@@ -1221,7 +1226,9 @@ fn run_axis<S: NodeSockets + ?Sized>(scene: &Scene<'_, S>, probe: &Node) -> Opti
 pub fn resting_footprint<S: NodeSockets + ?Sized>(sockets: &S, node: &Node) -> Option<Footprint> {
     let piece = crate::catalog::find(node.catalog_ref.as_deref()?)?;
     let bounds = sockets.bounds(node)?;
-    let floor = crate::venue::root_socket(FLOOR_SOCKET)?;
+    let floor = crate::venue::root_sockets(&crate::venue::Params::default())
+        .into_iter()
+        .find(|socket| socket.name == FLOOR_SOCKET)?;
     let held = sockets
         .sockets(node)
         .into_iter()

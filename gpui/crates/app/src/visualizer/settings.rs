@@ -256,6 +256,9 @@ pub(crate) fn environment_panel(
             rows.child(float::divider())
                 .child(section("Clouds", clouds))
         })
+        .when_some(room_rows(state, environment, app), |rows, room| {
+            rows.child(float::divider()).child(section("Room", room))
+        })
         .child(float::divider())
         .child(section("Floor", floor_rows(environment, app)))
         .child(float::divider())
@@ -968,6 +971,59 @@ fn section(title: &'static str, rows: impl IntoElement) -> Div {
         .gap(px(8.))
         .child(float::label(title))
         .child(rows)
+}
+
+/// The size a room starts at when it is first given walls, in metres.
+const NEW_ROOM_M: [f64; 3] = [20.0, 14.0, 7.0];
+
+/// An indoor venue's walls and ceiling: whether it has them, and how wide,
+/// deep and high the room is. `None` outdoors, and before the builder has
+/// the venue's graph.
+///
+/// The size is the venue's own, kept with what is built in it, so each row
+/// writes it the way a placed piece's length is written and undoes with it.
+fn room_rows(state: &Visualizer, environment: VenueEnvironment, app: &Entity<Luma>) -> Option<Div> {
+    if !matches!(environment, VenueEnvironment::Indoor { .. }) {
+        return None;
+    }
+    let (root, size) = state.build.as_ref()?.room();
+    let toggle = app.clone();
+    let (label, to) = match size {
+        Some(_) => ("Remove walls", None),
+        None => ("Add walls and ceiling", Some(NEW_ROOM_M)),
+    };
+    let mut rows = div().flex().flex_col().gap(px(8.));
+    for (i, (title, key)) in [
+        ("Width (m)", "width"),
+        ("Depth (m)", "depth"),
+        ("Height (m)", "height"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Some(size) = size else { break };
+        let (app, root) = (app.clone(), root.to_string());
+        rows = rows.child(super::scrub_row(
+            title,
+            size[i] as f32,
+            2.0..=100.0,
+            0.5,
+            1.0,
+            move |metres, cx| {
+                app.update(cx, |this, cx| {
+                    this.stage_set_param(&root, key, f64::from(metres), cx);
+                });
+            },
+        ));
+    }
+    Some(
+        rows.child(
+            float::btn(label, "room-walls")
+                .id("room-walls")
+                .on_click(move |_, _, cx| toggle.update(cx, |this, cx| this.stage_set_room(to, cx)))
+                .agent_node(Role::Button, label),
+        ),
+    )
 }
 
 /// Where an open-air venue's sun is, as two rows in degrees. `None` indoors,

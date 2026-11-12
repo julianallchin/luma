@@ -347,6 +347,10 @@ impl Visualizer {
             self.render_controls.haze = rig.haze;
         }
         self.render_controls.set_environment(self.environment());
+        self.render_controls.room = rig.rows.to_graph().and_then(|graph| {
+            let root = graph.node(graph.root())?;
+            luma_scene::venue::room_size(&root.params).map(|size| size.map(|m| m as f32))
+        });
         let scene = scene(
             &rig,
             &definitions,

@@ -5,7 +5,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` fails when it is stale and
 rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 
-**140 commands** across **27 domains**
+**141 commands** across **27 domains**
 
 ## Domains
 
@@ -32,13 +32,13 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `scores` | 10 | `backend/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `backend/src/dispatch/handlers/settings.rs` |
-| `stage` | 11 | `backend/src/dispatch/handlers/stage.rs` |
+| `stage` | 12 | `backend/src/dispatch/handlers/stage.rs` |
 | `sync` | 2 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 11 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **140** | |
+| **total** | **141** | |
 
 ## Commands
 
@@ -262,6 +262,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `get_venue_graph` | `venueId: String` | `VenueGraphRows` |
+| `set_room` | `venueId: String`<br>`size: Option<[f64; 3]>` | `ResolvedVenue` |
 | `restore_graph` | `venueId: String`<br>`rows: VenueGraphRows`<br>`patch: Vec<PatchedFixture>` | `ResolvedVenue` |
 | `get_resolved_venue` | `venueId: String` | `ResolvedVenue` |
 | `attach` | `venueId: String`<br>`kind: String`<br>`catalogRef: Option<String>`<br>`label: Option<String>`<br>`parentId: String`<br>`mySocket: Option<String>`<br>`theirSocket: String`<br>`yaw: Option<f64>`<br>`params: Option<BTreeMap<String, f64>>` | `PlacementReport` |

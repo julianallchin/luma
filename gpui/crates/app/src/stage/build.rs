@@ -281,6 +281,17 @@ impl Build {
         }
     }
 
+    /// The room itself, and its size when it has one: `[width, depth,
+    /// height]` in metres.
+    pub(crate) fn room(&self) -> (&str, Option<[f64; 3]>) {
+        let root = self.graph.root();
+        let size = self
+            .graph
+            .node(root)
+            .and_then(|node| luma_scene::venue::room_size(&node.params));
+        (root, size)
+    }
+
     /// The run being measured out of a socket, as the stick it would be: its
     /// generator's parameters and where it would stand.
     pub(super) fn run_ghost(&self) -> Option<(luma_scene::truss::Procedural, glam::DMat4)> {

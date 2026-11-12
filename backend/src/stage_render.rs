@@ -174,7 +174,13 @@ impl VenueGeometry {
         scene_desc::Scene,
         BTreeMap<String, luma_scene::definition::Definition>,
     ) {
-        let render = offscreen_render(self.environment, self.haze);
+        let mut render = offscreen_render(self.environment, self.haze);
+        render.room = self
+            .venue
+            .poses()
+            .find(|pose| pose.kind == luma_scene::venue::NodeKind::Venue)
+            .and_then(|root| luma_scene::venue::room_size(&root.params))
+            .map(|size| size.map(|metres| metres as f32));
         let definitions: BTreeMap<String, luma_scene::definition::Definition> = self
             .definitions
             .iter()
@@ -952,6 +958,7 @@ fn one_frame(
         camera,
         footage::shake(&scene.scene.render.look.footage, &moment),
     );
+    frame.open_room_to_camera();
     match continuity {
         Continuity::Next => renderer.render_next(&frame, width, height, subframes),
         Continuity::Cut => renderer.render(&frame, width, height, subframes),

@@ -268,6 +268,7 @@ commands! {
         layout: DistributeLayout,
     ) -> PlacementReport;
     stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
+    stage::set_room(venue_id: String, size: Option<[f64; 3]>) -> ResolvedVenue;
     stage::restore_graph(
         venue_id: String,
         rows: VenueGraphRows,

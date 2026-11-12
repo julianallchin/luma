@@ -205,6 +205,20 @@ pub async fn set_params(
         .await?)
 }
 
+/// Give the venue's room a size, `[width, depth, height]` in metres, so it
+/// has walls to build on and a ceiling over it. `None` takes them away.
+///
+/// # Errors
+/// Refuses a side that is not a real length, and taking the size away while
+/// something hangs on a wall.
+pub async fn set_room(
+    services: &AppServices,
+    venue_id: String,
+    size: Option<[f64; 3]>,
+) -> Result<ResolvedVenue, CommandError> {
+    Ok(stage(services, &venue_id).set_room(size).await?)
+}
+
 /// Run a stick out of an open socket, along its outward normal.
 ///
 /// `length_m` of `None` means "to whatever the ray found". A length equal to

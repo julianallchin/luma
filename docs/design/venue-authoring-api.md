@@ -99,6 +99,14 @@ rules as a new row of one (`services::distribute::seats`): the two cannot
 disagree about what fits. On a new face the light's turn and aim return to
 rest.
 
+`room(width=, depth=, height=)` gives the room a size, stored as the root
+node's own parameters. A sized room has four walls (`luma_scene::venue::root_sockets`),
+each facing in around a floor centred on the origin, and they are faces like
+any other: picked by a vector, with `at=(along, up)` from the wall's middle,
+`along` counting the way the floor's axis under that wall counts. The ceiling
+is not a second face: it is the grid at the room's height, so there is one
+way to hang from above. A room with no size is open floor, as before.
+
 A person clicking the floor and an agent naming a coordinate send the same
 thing, `DistributeLayout::Point`, and one function (`Scene::surface_point`)
 puts it on the face. What a row is has one definition too:

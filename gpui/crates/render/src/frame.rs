@@ -51,6 +51,29 @@ fn luminaire_face(built: &luma_fixture::Built, worlds: &[Mat4]) -> Option<(Vec3,
     Some((at, along.normalize_or_zero()))
 }
 
+/// The mesh-key prefix of a room's own walls and ceiling.
+const ROOM_PANEL: &str = "::room-panel:";
+
+impl Frame {
+    /// Take away the walls and the ceiling that stand between the camera and
+    /// the room, so a camera outside a room sees into it. A panel faces in:
+    /// the camera sees it from the side it faces, or not at all.
+    ///
+    /// Run again whenever the camera is replaced after the frame was built.
+    pub fn open_room_to_camera(&mut self) {
+        let eye = self.camera.eye;
+        let hidden = |draw: &Draw, meshes: &[MeshData]| {
+            meshes[draw.mesh].key.starts_with(ROOM_PANEL)
+                && (eye - draw.model.transform_point3(Vec3::ZERO))
+                    .dot(draw.model.transform_vector3(Vec3::Z))
+                    <= 0.0
+        };
+        let meshes = std::mem::take(&mut self.meshes);
+        self.draws.retain(|draw| !hidden(draw, &meshes));
+        self.meshes = meshes;
+    }
+}
+
 /// Whether `mesh_key` names the ground plane, indoors or out. The ground only
 /// receives: everything it could shade stands on it.
 pub(crate) fn is_ground(mesh_key: &str) -> bool {
@@ -786,6 +809,39 @@ pub(crate) fn ground_mesh(extent: f32) -> MeshData {
     }
 }
 
+/// An XY panel centred on the origin, normal +Z, cut into cells of a metre
+/// or less: a wall is lit per point like the floor, and one triangle the
+/// size of a wall would be lit from a handful of them.
+pub(crate) fn panel_mesh(width: f32, height: f32) -> MeshData {
+    let (nx, ny) = (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
+    let vertices: Vec<Vertex> = (0..=ny)
+        .flat_map(|j| {
+            (0..=nx).map(move |i| {
+                let (u, v) = (i as f32 / nx as f32, j as f32 / ny as f32);
+                Vertex {
+                    position: [(u - 0.5) * width, (v - 0.5) * height, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [u, v],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                }
+            })
+        })
+        .collect();
+    let mut indices = Vec::new();
+    for j in 0..ny {
+        for i in 0..nx {
+            let a = j * (nx + 1) + i;
+            let (b, c, d) = (a + 1, a + nx + 2, a + nx + 1);
+            indices.extend([a, b, c, a, c, d]);
+        }
+    }
+    MeshData {
+        key: String::new(),
+        vertices: vertices.into(),
+        indices: indices.into(),
+    }
+}
+
 /// XY quad centred on the origin, normal +Z — a three `PlaneGeometry` before
 /// any rotation.
 pub(crate) fn plane_mesh(width: f32, height: f32) -> MeshData {
@@ -908,6 +964,58 @@ pub fn build_at(
     let mut fixture_cones = Vec::new();
     let mut panels = Vec::new();
     let mut fixture_shadow_capacity_hint: usize = 0;
+
+    // --- walls and ceiling -------------------------------------------------
+    // A room with a size is a box around a floor centred on the origin. Each
+    // panel faces in, and the pipeline culls back faces, so a camera outside
+    // the room looks in through the wall nearest it.
+    if let Some([width, depth, height]) = scene.render.walls() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let panels = [
+            (
+                width,
+                height,
+                Vec3::new(0.0, height / 2.0, depth / 2.0),
+                Mat4::from_rotation_y(PI),
+            ),
+            (
+                width,
+                height,
+                Vec3::new(0.0, height / 2.0, -depth / 2.0),
+                Mat4::IDENTITY,
+            ),
+            (
+                depth,
+                height,
+                Vec3::new(-width / 2.0, height / 2.0, 0.0),
+                Mat4::from_rotation_y(FRAC_PI_2),
+            ),
+            (
+                depth,
+                height,
+                Vec3::new(width / 2.0, height / 2.0, 0.0),
+                Mat4::from_rotation_y(-FRAC_PI_2),
+            ),
+            (
+                width,
+                depth,
+                Vec3::new(0.0, height, 0.0),
+                Mat4::from_rotation_x(FRAC_PI_2),
+            ),
+        ];
+        for (along, across, at, turn) in panels {
+            let mesh = bank.insert(format!("{ROOM_PANEL}{along}x{across}"), || {
+                panel_mesh(along, across)
+            });
+            draws.push(Draw {
+                mesh,
+                textures: MaterialTextures::default(),
+                model: Mat4::from_mat3(r) * Mat4::from_translation(at) * turn,
+                material: crate::materials::VENUE_WALL,
+                editor_object: None,
+            });
+        }
+    }
 
     // --- sky ---------------------------------------------------------------
     // An atmosphere answers three questions a scene would otherwise answer
@@ -1328,19 +1436,21 @@ pub fn build_at(
     // beam that vanished would be a lie about the score.
     let lit_room = scene.render.house.and_then(|environment| {
         let bounds = scene.room_bounds();
+        let ceiling = scene.render.walls().map(|[_, _, height]| height);
         if matches!(
             environment,
             luma_scene::environment::VenueEnvironment::Indoor { .. }
         ) {
-            let potential = crate::house::lamps(
+            let potential = crate::house::lamps_under(
                 luma_scene::environment::VenueEnvironment::indoor(1.0),
                 bounds,
+                ceiling,
             );
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(potential.len())
                 .min(MAX_FIXTURE_CONES);
         }
-        let lamps = crate::house::lamps(environment, bounds);
+        let lamps = crate::house::lamps_under(environment, bounds, ceiling);
         for lamp in &lamps {
             if fixture_cones.len() >= MAX_FIXTURE_CONES {
                 break;
@@ -1356,7 +1466,7 @@ pub fn build_at(
                 let beam = crate::house::Lamp::beam(hung.transform_vector3(along).normalize());
                 let reach = crate::library_housing::reach(&pendant, &worlds, along);
                 let mouth = face + along * (reach - face.dot(along));
-                for (i, at) in crate::house::rig(environment, bounds)
+                for (i, at) in crate::house::rig(environment, bounds, ceiling)
                     .into_iter()
                     .enumerate()
                 {
@@ -1487,7 +1597,7 @@ pub fn build_at(
         })
         .transpose()?;
 
-    Ok(Frame {
+    let mut frame = Frame {
         meshes: bank.meshes,
         images: bank.images,
         draws,
@@ -1560,7 +1670,9 @@ pub fn build_at(
         camera,
         overlays,
         floor: floor_surface,
-    })
+    };
+    frame.open_room_to_camera();
+    Ok(frame)
 }
 
 /// The authored directional light, when a frame has no sky.
@@ -1677,6 +1789,57 @@ mod tests {
             gobo: 0,
             gobo_rotation: 0.0,
         }
+    }
+
+    /// A room with a size is a box of five panels. A camera inside sees all
+    /// of them; one outside sees in, through the side it stands on, and one
+    /// overhead looks down through where the ceiling is.
+    #[test]
+    fn a_camera_outside_a_room_sees_into_it() {
+        let mut scene = scene(Vec::new());
+        scene.render = RenderSettings::room(
+            VenueEnvironment::indoor(1.0),
+            VenueHaze::default(),
+            50.0,
+            1.0,
+        );
+        let panels = |frame: &Frame| {
+            frame
+                .draws
+                .iter()
+                .filter(|draw| frame.meshes[draw.mesh].key.starts_with(ROOM_PANEL))
+                .count()
+        };
+        let mut library = library();
+        let open = build(&scene, &Definitions::new(), 0.0, &mut library).unwrap();
+        assert_eq!(panels(&open), 0, "a room with no size has no walls");
+
+        scene.render.room = Some([10.0, 8.0, 5.0]);
+        // Built from inside, two metres up in the middle (three space).
+        scene.camera.position = [0.0, 2.0, 0.0];
+        let mut seen_from = |eye: Vec3| {
+            let mut frame = build(&scene, &Definitions::new(), 0.0, &mut library).unwrap();
+            let inside = panels(&frame);
+            frame.camera.eye = eye;
+            frame.open_room_to_camera();
+            (inside, panels(&frame))
+        };
+        let (inside, beside) = seen_from(Vec3::new(30.0, 1.0, 2.0));
+        assert_eq!(inside, 5);
+        assert_eq!(beside, inside - 1, "the wall on the camera's side is open");
+        let (_, above) = seen_from(Vec3::new(1.0, 1.0, 40.0));
+        assert_eq!(above, inside - 1, "the ceiling is open from above");
+
+        // Open air has no walls, whatever size the venue kept.
+        scene.render = RenderSettings::room(
+            VenueEnvironment::outdoor(30.0),
+            VenueHaze::default(),
+            50.0,
+            1.0,
+        );
+        scene.render.room = Some([10.0, 8.0, 5.0]);
+        let outdoors = build(&scene, &Definitions::new(), 0.0, &mut library).unwrap();
+        assert_eq!(panels(&outdoors), 0);
     }
 
     #[test]

@@ -240,6 +240,12 @@ pub struct RenderSettings {
     /// the room is. `None` means the subject is not a room — a palette
     /// thumbnail, or a tracked contract capture — and no house is hung.
     pub house: Option<VenueEnvironment>,
+    /// The room's size, `[width, depth, height]` in metres, when it has one:
+    /// four walls and a ceiling are drawn around a floor centred on the
+    /// origin, and the house rig hangs under that ceiling. `None` is open
+    /// floor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<[f32; 3]>,
     /// The physically based sky, when the room is open air.
     ///
     /// `None` — the default everywhere, including every tracked contract
@@ -829,6 +835,7 @@ impl RenderSettings {
             show_cables: true,
             show_gizmos: true,
             house: None,
+            room: None,
             sky: None,
             debug_view: DebugView::Pbr,
             look: Look::NEUTRAL,
@@ -866,6 +873,7 @@ impl RenderSettings {
             show_cables: true,
             show_gizmos: true,
             house: None,
+            room: None,
             sky: None,
             debug_view: DebugView::Pbr,
             look: Look::NEUTRAL,
@@ -919,6 +927,7 @@ impl RenderSettings {
             show_cables: true,
             show_gizmos: true,
             house: Some(environment),
+            room: None,
             sky: fill.sky,
             debug_view: DebugView::Pbr,
             look: Look::NEUTRAL,
@@ -955,6 +964,8 @@ struct RenderSettingsWire {
     #[serde(default)]
     house: Option<VenueEnvironment>,
     #[serde(default)]
+    room: Option<[f32; 3]>,
+    #[serde(default)]
     sky: Option<SkyParams>,
     #[serde(default)]
     debug_view: DebugView,
@@ -983,6 +994,17 @@ struct RenderSettingsWire {
     haze_density: Option<f32>,
 }
 
+impl RenderSettings {
+    /// The room's size when it has walls to draw: an indoor room with a
+    /// size. Open air has no walls, whatever size the venue was given while
+    /// it was indoors.
+    #[must_use]
+    pub fn walls(&self) -> Option<[f32; 3]> {
+        self.room
+            .filter(|_| matches!(self.house, Some(VenueEnvironment::Indoor { .. })))
+    }
+}
+
 impl<'de> Deserialize<'de> for RenderSettings {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1009,6 +1031,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 // environments and are about materials and beams; a house hung
                 // over them would rewrite all nineteen.
                 house: wire.house,
+                room: wire.room,
                 // Absent means no atmosphere, which is what every tracked
                 // contract image was captured under.
                 sky: wire.sky,
@@ -1354,8 +1377,14 @@ impl Scene {
     /// [`crate::house::lamps`] turns that into a minimum room rather than
     /// refusing, since an empty venue is exactly the one an operator is about
     /// to start building in.
+    ///
+    /// A room with a size is that size, whatever is in it.
     #[must_use]
     pub fn room_bounds(&self) -> luma_scene::Aabb {
+        if let Some([width, depth, height]) = self.render.walls() {
+            let half = glam::Vec3::new(width / 2.0, depth / 2.0, 0.0);
+            return luma_scene::Aabb::from_points([-half, half + glam::Vec3::Z * height]);
+        }
         let mut bounds = luma_scene::Aabb::from_points(
             self.fixtures
                 .iter()

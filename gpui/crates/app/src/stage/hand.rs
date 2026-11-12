@@ -42,8 +42,7 @@ use luma_scene::snap::{
 };
 use luma_scene::sockets::{Polarity, ResolvedSocket, SocketKind, SocketType};
 use luma_scene::venue::{
-    invert_placement, place_on, root_socket, NodeKind, NodeSockets, SurfacePlacement, VenueGraph,
-    FLOOR_SOCKET,
+    invert_placement, place_on, NodeKind, NodeSockets, SurfacePlacement, VenueGraph, FLOOR_SOCKET,
 };
 
 /// How big a socket mark's box is, in pixels: the anchor a right-press finds
@@ -533,7 +532,7 @@ impl Room {
     ///
     /// The root's two synthesized surfaces (`floor` and `rig`) are added by
     /// hand because they are not catalog sockets — they are the venue frame,
-    /// and [`luma_scene::venue::root_socket`] is the one place they are
+    /// and [`luma_scene::venue::root_sockets`] is the one place they are
     /// spelled.
     pub(crate) fn new(
         graph: &VenueGraph,
@@ -551,18 +550,7 @@ impl Room {
             if let Some(bounds) = sockets.bounds(node) {
                 boxes.insert(node.id.clone(), bounds);
             }
-            let mut resolved = if node.id == root {
-                Vec::new()
-            } else {
-                sockets.sockets(node)
-            };
-            if node.id == root {
-                resolved.extend(
-                    [FLOOR_SOCKET, luma_scene::venue::RIG_SOCKET]
-                        .into_iter()
-                        .filter_map(root_socket),
-                );
-            }
+            let resolved = luma_scene::venue::sockets_of(sockets, node);
             pieces.push(ScenePiece {
                 id: node.id.clone(),
                 mesh_path: node.id.clone(),
@@ -1047,7 +1035,10 @@ mod tests {
 
     #[test]
     fn minimum_height_uses_the_surface_below_and_its_rotated_footprint() {
-        let floor = root_socket(FLOOR_SOCKET).unwrap();
+        let floor = luma_scene::venue::root_sockets(&luma_scene::venue::Params::default())
+            .into_iter()
+            .find(|socket| socket.name == FLOOR_SOCKET)
+            .unwrap();
         let mut top = floor.clone();
         top.position.y = 1.0;
         let room = Room {

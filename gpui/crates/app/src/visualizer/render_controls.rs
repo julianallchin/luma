@@ -18,6 +18,9 @@ pub(super) struct RenderControls {
     /// of which the frame builder resolves for itself against the room's
     /// bounds, so it is carried whole rather than flattened into dials.
     house: VenueEnvironment,
+    /// The room's size, when it has one: `[width, depth, height]` in metres.
+    /// Venue truth like the house, read off the venue's graph.
+    pub(super) room: Option<[f32; 3]>,
     sun_enabled: bool,
     sun_azimuth_deg: f32,
     sun_elevation_deg: f32,
@@ -118,6 +121,7 @@ impl RenderControls {
         // the bounds, and the atmosphere an open-air venue
         // takes its background, ambient and sun from.
         render.house = Some(self.house);
+        render.room = self.room;
         render.sky = house::fill(self.house).sky;
         // `room` already carried the venue's own haze in. These two are the
         // local cost knobs it deliberately does not hold.
@@ -138,6 +142,7 @@ impl RenderControls {
         let (azimuth_deg, elevation_deg) = editor_sun_angles();
         let mut controls = Self {
             house: environment,
+            room: None,
             sun_enabled: true,
             // The editor key light in polar form. Read off
             // `DirectionalLight::EDITOR` rather than typed again, so the

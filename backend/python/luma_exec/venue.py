@@ -2360,6 +2360,42 @@ class Venue:
         self._verb("venue.remove", {"nodeIds": ids})
         return f"removed {len(ids)} node{'' if len(ids) == 1 else 's'} and what hung on them"
 
+    def room(
+        self,
+        width: float | None = None,
+        depth: float | None = None,
+        height: float | None = None,
+    ) -> str:
+        """Give the room a size in metres, so it has walls and a ceiling.
+
+            v.room(width=20, depth=14, height=7)
+
+        The floor stays centred on the origin: the walls stand at `u = ±width/2`
+        and `v = ±depth/2`, and the ceiling is at `height`. A wall is a face
+        of the room, picked like any face, by the way it looks:
+
+            v.place("par", at=(2, 1), face=(0, 1, 0))    # back wall, facing the crowd
+            v.place("par", at=(-3, 0), face=(1, 0, 0))   # the wall at -u, facing +u
+
+        On a wall `at=(along, up)`: `along` is the floor's own `u` or `v`
+        under that wall, and `up` is metres above the wall's middle, half the
+        room's height. To hang from the ceiling, hang as from any height:
+        `face=(0, 0, -1), trim=height`.
+
+        With no arguments the room is open floor again, which is refused
+        while anything is still on a wall.
+        """
+        size = (width, depth, height)
+        given = [side is not None for side in size]
+        if any(given) and not all(given):
+            raise LumaHostCallError(
+                "invalid_argument", "a room has a width, a depth and a height: give all three"
+            )
+        payload = {"size": [_finite(name, side) for name, side in
+                            zip(("width", "depth", "height"), size)] if all(given) else None}
+        self._verb("venue.room", payload)
+        return ("the room is %g x %g x %g m" % size) if all(given) else "the room is open floor"
+
     def move(
         self,
         light: Any,

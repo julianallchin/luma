@@ -94,6 +94,38 @@ impl Luma {
         .detach();
     }
 
+    /// Give the room walls and a ceiling at `size`, or take them away.
+    pub(crate) fn stage_set_room(&mut self, size: Option<[f64; 3]>, cx: &mut Context<Self>) {
+        let Some(build) = self.build_mut() else {
+            return;
+        };
+        if build.committing {
+            return;
+        }
+        build.committing = true;
+        let snapshot = build.snapshot();
+        let venue = build.venue_id.clone();
+        let pending = self.library.set_room(&venue, size);
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                if let Some(build) = this.build_mut() {
+                    build.committing = false;
+                    if result.is_ok() {
+                        build.remember(snapshot);
+                    }
+                }
+                if let Err(error) = result {
+                    this.report_failure("The room was not changed", error, cx);
+                }
+                this.reload_stage(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Re-lay the selected fixture's row at a new count or layout.
     ///
     /// The verb derives the row from the member server-side and answers with

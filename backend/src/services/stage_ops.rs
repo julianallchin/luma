@@ -34,7 +34,7 @@ use luma_scene::build;
 use luma_scene::catalog::VenueSockets;
 use luma_scene::sockets::{ResolvedSocket, SocketType};
 use luma_scene::venue::{
-    root_socket, Constraint, Edge, Node, NodeKind, NodeSockets as _, Params,
+    sockets_of, Constraint, Edge, Node, NodeKind, NodeSockets as _, Params,
     ResolvedVenue as Solved, VenueGraph, FLOOR_SOCKET,
 };
 use sqlx::SqlitePool;
@@ -480,6 +480,52 @@ impl<'a> Stage<'a> {
             venue_graph_db::set_label(&mut access, node_id, label).await?;
         }
         self.report(access, node_id).await
+    }
+
+    /// Give the room a size, `[width, depth, height]` in metres, or take it
+    /// away. A room with a size has four walls to build on, around a floor
+    /// centred on the venue's origin, and a ceiling at its height.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] for a side that is not a real length, and for
+    /// taking the size away while something still hangs on a wall.
+    pub async fn set_room(&self, size: Option<[f64; 3]>) -> Result<ResolvedVenue> {
+        use luma_scene::venue::{ROOM_PARAMS, WALL_SOCKETS};
+        let mut access = self.write().await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let root = graph.root().to_string();
+        if let Some(size) = size {
+            if let Some(side) = size
+                .iter()
+                .find(|m| !m.is_finite() || !(1.0..=500.0).contains(*m))
+            {
+                return Err(StageError::Refused(format!(
+                    "a room's width, depth and height are each 1 to 500 metres, not {side}"
+                )));
+            }
+        } else {
+            let held = graph
+                .relations()
+                .filter(|(_, edge)| {
+                    edge.parent == root && WALL_SOCKETS.contains(&edge.their_socket.as_str())
+                })
+                .count();
+            if held > 0 {
+                return Err(StageError::Refused(format!(
+                    "{held} thing(s) hang on the walls: move or remove them first"
+                )));
+            }
+        }
+        let params = ROOM_PARAMS
+            .into_iter()
+            .enumerate()
+            .map(|(i, key)| (key.to_string(), size.map(|size| size[i])))
+            .collect();
+        venue_graph_db::set_params(&mut access, &root, &params).await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let out = ResolvedVenue::from(&solved);
+        venue_graph::commit_graph(access).await?;
+        Ok(out)
     }
 
     /// Delete a node and everything hanging off it.
@@ -1190,17 +1236,12 @@ impl<'a> Stage<'a> {
         params: &BTreeMap<String, f64>,
     ) -> Result<String> {
         let supply = venue_graph::sockets(self.fixtures_root)?;
-        let host = if parent_id == graph.root() {
-            root_socket(their_socket)
-        } else {
-            let node = graph.node(parent_id).ok_or_else(|| {
-                StageError::NotFound(format!("`{parent_id}` is not in this venue"))
-            })?;
-            supply
-                .sockets(node)
-                .into_iter()
-                .find(|s| s.name == their_socket)
-        };
+        let node = graph
+            .node(parent_id)
+            .ok_or_else(|| StageError::NotFound(format!("`{parent_id}` is not in this venue")))?;
+        let host = sockets_of(supply, node)
+            .into_iter()
+            .find(|s| s.name == their_socket);
         let host = host.ok_or_else(|| {
             StageError::Refused(format!("`{parent_id}` has no socket `{their_socket}`"))
         })?;
