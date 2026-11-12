@@ -51,5 +51,6 @@ works and the decisions behind it.
 ## Data, sync and analysis
 
 - [design/sync.md](design/sync.md) — PowerSync row sync, uploads, media transfer
+- [design/data-layer.md](design/data-layer.md) — source and derived tables, soft deletes, ids, the history log
 - [design/genre-model.md](design/genre-model.md) — the genre model: how its weights arrive
 - [backend/src/preprocessing/README.md](../backend/src/preprocessing/README.md) — the track analysis DAG

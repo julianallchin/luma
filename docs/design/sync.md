@@ -16,17 +16,19 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   `agent_thread_messages.updated_at` and
   `agent_thread_transcript_heads.created_at` are nullable with no default, so
   every writer has to set them. `backend/src/sync/schema.rs` is the list.
-- Twelve tables keep their natural key as the local primary key and carry `id`
-  as a `GENERATED ALWAYS … VIRTUAL` column with a unique index. Four
-  concatenate two columns — `venue_node_params` (`node_id || ':' || key`),
-  `venue_constraints` (`node_id || ':' || my_socket`), `track_stems`
-  (`track_id || ':' || stem_name`), `folder_tracks`
-  (`folder_id || ':' || track_id`). The other eight alias a single column:
-  `venue_edges.id = child_id`, each `track_*` analysis table `= track_id`,
-  `agent_thread_transcript_heads.id = thread_id`. Generation is local only — in
-  Postgres `id` is a plain `text primary key` the client supplies, and the
-  triggers spell the concatenation themselves because a generated column is not
-  reliably readable from a trigger.
+- A source table's `id` is a random UUID its writer generates, stored as an
+  ordinary column ([data-layer.md](data-layer.md)). The five derived tables
+  keep their natural key as the local primary key and carry `id` as a
+  `GENERATED ALWAYS … VIRTUAL` column with a unique index: `track_stems`
+  (`track_id || ':' || stem_name`), and `track_roots`, `track_drum_onsets`,
+  `track_bar_classifications` and `track_genres` (`= track_id`). Generation is
+  local only — in Postgres `id` is a plain `text primary key` the client
+  supplies, and the triggers spell the concatenation themselves because a
+  generated column is not reliably readable from a trigger.
+- A row that is "the one for this parent and key" (a node's parameter, a
+  thread's transcript head) is unique on those columns locally, and a
+  download that finds the slot held under another id takes it over
+  (`SyncedTable::slot`).
 - Postgres row-level security decides who may read and write a row. Owner or
   venue member for venue content, the venue row included; owner for private
   content and for the venue's door (its owner, its share code, deleting it,
@@ -34,7 +36,8 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   validates before it writes. The server does not re-run domain rules.
 - Concurrent edits to one row merge per column, last write wins. PowerSync
   uploads only the columns a local write changed (`PATCH`).
-- Deletes are hard deletes on both sides. PowerSync replicates them.
+- A device deletes for real and holds no flagged rows. What a delete means to
+  the server is in [data-layer.md](data-layer.md).
 - Local-only tables never appear in the PowerSync schema or the sync rules.
 - A synced table's foreign keys are `DEFERRABLE INITIALLY DEFERRED`. A
   download is one transaction holding a consistent snapshot of the server in
@@ -104,10 +107,12 @@ table (venues and their content, `scores`, `clips`) appends to `public.history` 
 An update whose only difference is `updated_at` is skipped. `uid` is who made
 the change, and only they can read it. `actor` is `user:<uid>` for a person, or
 a model id or MCP client label for an agent. An agent's write runs in a
-transaction attributed with `sync::triggers::attribute`; the upload triggers
-put the actor in each `powersync_crud` entry's metadata, and the connector
-sends it as the `x-luma-actor` header. Upserts from different actors are never
-batched into one request. See
+transaction attributed with `sync::triggers::attribute`, which takes an
+`Attribution`: the actor, the thread, the message and the change group. The
+upload triggers put it in each `powersync_crud` entry's metadata as one JSON
+object, and the connector sends its parts as the `x-luma-actor`,
+`x-luma-thread`, `x-luma-message` and `x-luma-group` headers. Upserts
+attributed differently are never batched into one request. See
 `supabase/migrations/20260924000000_server_history.sql`.
 
 Session undo in the editors stays in memory. A score's "last edited" time is
@@ -146,7 +151,7 @@ agent_thread_transcript_heads, drafts.
 Local only: settings, control_bindings_unsynced (the bindings a machine kept
 before they synced, until its venue's inputs move them), dmx_routes, preprocessing_failures,
 track_waveforms, track_mert, agent_thread_runs,
-agent_thread_usage, sync_rejections, auth_write_admission, the
+agent_thread_usage, agent_thread_score_marks, sync_rejections, auth_write_admission, the
 auth session, and the columns `tracks.file_path`, `tracks.album_art_path`,
 `track_roots.logits_path`, `track_stems.file_path`.
 
@@ -157,6 +162,41 @@ client can no longer read what an older one downloaded, bump
 library at another version clears its synced tables without queueing anything
 for upload, and PowerSync downloads them again. A change still waiting to
 upload postpones that to a later launch.
+
+## Required updates
+
+A client keeps running after a newer release ships, and a build from before a
+format change would misread the new rows and write old ones over them. So the
+data has a format number, and a build behind it is turned away.
+
+- The server's number is `public.data_format()`. The client's is
+  `PROJECTION_VERSION`: the two are one number, bumped together by the
+  migration and the commit that change what synced rows mean.
+- **Writes.** Every PostgREST request carries the client's number in
+  `x-luma-format`. A statement trigger on every synced table refuses a write
+  from a build behind the server with HTTP 426, whether it comes as a row or
+  through a function. No header means a build from before the header, which
+  reads format 1. The refusal is recorded like any other.
+- **Reads.** Before it opens the sync stream, and once a minute while
+  connected, the client asks `data_format()`. Behind it, the client
+  disconnects and does not reconnect, so it applies nothing it would misread.
+  A server that will not answer (offline, or not migrated) is not a reason to
+  stay disconnected: the write check is the server's own.
+- **The app.** `SyncStatus.update_required` goes up. The window shows "Update
+  Luma to continue" in place of the app and fetches the update whatever the
+  auto-update setting says. "Not Now" brings the app back for the run, on the
+  local copy as it was; the status bar keeps saying `Update required`.
+
+What it does not cover: a connected build keeps applying downloads for up to
+a minute after the server moves, and an offline one cannot know until it
+reconnects. The updated build re-downloads either way, because the number
+that changed is `PROJECTION_VERSION`. A release older than 0.7.1 has no read
+check at all; the server still refuses its writes.
+
+To require an update, in one change: replace `public.data_format()` with the
+next number in the Supabase migration that changes the rows, bump
+`PROJECTION_VERSION`, and give a new synced table the `_client_format`
+trigger (`supabase/migrations/20261111120000_client_format.sql`).
 
 `venues.environment` and `venues.haze` are **not** on that list: what kind of
 room a venue is and what atmosphere it has are venue truth, so they follow the

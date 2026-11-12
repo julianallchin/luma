@@ -10,6 +10,7 @@ pub(crate) mod audio;
 pub mod connector;
 pub mod error;
 pub mod files;
+mod legacy_audio;
 pub mod media;
 pub mod progress;
 pub mod schema;

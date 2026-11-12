@@ -26,7 +26,7 @@ pub(super) fn import_progress(
     let Some(activity) = activity else {
         return empty_body("No import running");
     };
-    if activity.items.is_empty() {
+    if activity.items.is_empty() && activity.rejected.is_empty() {
         if activity.active {
             return loading_body(
                 "add-tracks-import-skeleton",
@@ -43,17 +43,25 @@ pub(super) fn import_progress(
             .child(float::list().child(div().p(px(8.0)).child(luma_ui::notice::line(message))))
             .into_any_element();
     }
-    let rows: Vec<(String, String, Option<String>, ItemStatus)> = activity
-        .items
-        .iter()
-        .map(|item| {
+    // The rejected come first: they are what needs a look, and a long list
+    // of good rows would otherwise bury them.
+    let rejected = activity.rejected.iter().enumerate().map(|(index, song)| {
+        (
+            format!("rejected-{index}"),
+            song.name.clone(),
+            None,
+            ItemStatus::Failed(song.reason.clone()),
+        )
+    });
+    let rows: Vec<(String, String, Option<String>, ItemStatus)> = rejected
+        .chain(activity.items.iter().map(|item| {
             (
                 item.track_id.clone(),
                 item.title.clone(),
                 item.art.clone(),
                 item.analysis.status(),
             )
-        })
+        }))
         .collect();
     let rows: Rc<[_]> = rows.into();
     float::viewport()

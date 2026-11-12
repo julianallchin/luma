@@ -177,8 +177,8 @@ async fn every_put_statement_upserts_against_the_real_schema() {
     }
 }
 
-/// Every put statement binds one parameter per column and never reassigns the
-/// key it upserted on.
+/// Every put statement binds one parameter per column, and no upsert
+/// reassigns the columns it matched on.
 #[test]
 fn put_statements_bind_one_parameter_per_column() {
     for synced in SYNCED_TABLES {
@@ -194,14 +194,70 @@ fn put_statements_bind_one_parameter_per_column() {
             "{} parameter count",
             synced.name
         );
-        for key in synced.key() {
-            assert!(
-                !put.contains(&format!("\"{key}\" = excluded")),
-                "{} must not reassign its own key",
-                synced.name
-            );
+        for upsert in put.split("ON CONFLICT(").skip(1) {
+            let (target, assignments) = upsert.split_once(')').expect("a conflict target");
+            for key in target.split(", ") {
+                assert!(
+                    !assignments.contains(&format!("{key} = excluded")),
+                    "{} must not reassign the key it matched on: {upsert}",
+                    synced.name
+                );
+            }
         }
     }
+}
+
+/// A row that arrives for a slot another id holds becomes that slot's row.
+///
+/// A thread's empty transcript head is written here by the schema, under an
+/// id of this device's making, before the server's copy of it arrives; and a
+/// replaced parameter's removal may come after its replacement. Refusing
+/// either would refuse the whole checkpoint, on every retry.
+#[tokio::test]
+async fn a_download_takes_over_the_slot_another_id_holds() {
+    let (_directory, pool) = database("slot.db").await;
+    let mut connection = pool.acquire().await.expect("acquire");
+    sqlx::query(
+        "INSERT INTO agent_threads (id, uid, agent_kind, subject_kind, subject_id)
+         VALUES ('thread-1', 'user-1', 'score', 'score', 'score-1')",
+    )
+    .execute(&mut *connection)
+    .await
+    .expect("thread");
+    let local: String = sqlx::query_scalar(
+        "SELECT id FROM agent_thread_transcript_heads WHERE thread_id = 'thread-1'",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .expect("the head the schema wrote");
+
+    let heads = table("agent_thread_transcript_heads").expect("heads are synced");
+    let (put, delete) = statements(heads);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(put));
+    for column in heads.columns {
+        query = query.bind(match *column {
+            "id" => Some("head-from-server"),
+            "thread_id" => Some("thread-1"),
+            "head_message_id" => None,
+            "message_count" => Some("0"),
+            _ => Some("x"),
+        });
+    }
+    query.execute(&mut *connection).await.expect("put");
+    // The removal of the id it replaced, arriving late.
+    sqlx::query(sqlx::AssertSqlSafe(delete))
+        .bind(&local)
+        .execute(&mut *connection)
+        .await
+        .expect("delete");
+
+    let held: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM agent_thread_transcript_heads WHERE thread_id = 'thread-1'",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .expect("heads");
+    assert_eq!(held, ["head-from-server"]);
 }
 
 /// The boolean columns cannot be cast; a cast would turn `true` into 0.

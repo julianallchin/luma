@@ -604,6 +604,38 @@ impl VenueHost {
         Ok(json!({ "universe": universe, "address": address, "pinned": true }))
     }
 
+    /// Delete a collection by name. A selection that named it keeps it listed
+    /// and selects nothing there, so the answer says what selected it.
+    async fn remove_group(&self, request: RemoveGroupRequest) -> Result<Value, HostCallError> {
+        let invalid = |error: String| HostCallError::new("invalid_group", error);
+        let mut access = self.write_access().await.map_err(invalid)?;
+        let name = crate::models::groups::normalize_group_name(&request.name);
+        let group = crate::database::local::groups::list_groups(&mut access)
+            .await
+            .map_err(invalid)?
+            .into_iter()
+            .find(|group| group.name.as_deref() == Some(name.as_str()))
+            .ok_or_else(|| invalid(format!("no group named `{name}` in this venue")))?;
+        let usage = crate::dispatch::handlers::group_references::usage(&mut access)
+            .await
+            .map_err(invalid)?
+            .into_iter()
+            .find(|usage| usage.group_id == group.id);
+        crate::database::local::groups::delete_group(&mut access, &group.id)
+            .await
+            .map_err(invalid)?;
+        access.commit().await.map_err(invalid)?;
+        crate::database::local::venue_graph::rig_changed();
+        Ok(json!({
+            "name": name,
+            "clips": usage.as_ref().map_or(0, |usage| usage.clips),
+            "scores": usage.as_ref().map_or(0, |usage| usage.scores.len()),
+            "perform": usage
+                .as_ref()
+                .map_or(0, |usage| usage.perform_patterns.len() + usage.perform_cells),
+        }))
+    }
+
     async fn generate_groups(&self) -> Result<Value, HostCallError> {
         let mut access = self
             .write_access()
@@ -1194,6 +1226,7 @@ impl HostCallHandler for VenueHost {
                     "venue.group" => self.group(decode(payload)?).await,
                     "venue.fixtures" => self.fixtures().await,
                     "venue.patch" => self.patch(decode(payload)?).await,
+                    "venue.remove_group" => self.remove_group(decode(payload)?).await,
                     "venue.generate_groups" => self.generate_groups().await,
                     "venue.laser_zones" => self.laser_zones().await,
                     "venue.laser_zone" => self.laser_zone(decode(payload)?).await,
@@ -1409,6 +1442,12 @@ struct GroupRequest {
     fixtures: Vec<String>,
     #[serde(default)]
     replace: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoveGroupRequest {
+    name: String,
 }
 
 /// The room's own light. Every field absent is a read; any field present is a write.

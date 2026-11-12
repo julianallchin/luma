@@ -19,6 +19,8 @@ pub(crate) struct TrackImportActivity {
     /// What went wrong with the import as a whole, in plain words. The
     /// causes are in the log.
     pub(super) error: Option<String>,
+    /// The songs that never reached the library, and why each did not.
+    pub(super) rejected: Vec<RejectedSong>,
     /// The venue the dialog was adding to when the import started. Every
     /// imported song joins it, which is what the person asked for by
     /// importing from there.
@@ -29,6 +31,11 @@ pub(crate) struct TrackImportActivity {
     /// Whether the progress page has been looked at since the import ended,
     /// so the status bar keeps a failed import on screen until it has been.
     pub(super) seen: bool,
+}
+
+pub(crate) struct RejectedSong {
+    pub(super) name: String,
+    pub(super) reason: String,
 }
 
 pub(crate) struct ImportItem {
@@ -155,11 +162,15 @@ impl TrackImportActivity {
         }
     }
 
+    /// Songs that ended badly: turned away at the door, or analysed and
+    /// failed.
     pub(super) fn failed(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|item| matches!(item.analysis.status(), ItemStatus::Failed(_)))
-            .count()
+        self.rejected.len()
+            + self
+                .items
+                .iter()
+                .filter(|item| matches!(item.analysis.status(), ItemStatus::Failed(_)))
+                .count()
     }
 
     /// The one line that says where the import is — the status bar item and the
@@ -169,13 +180,14 @@ impl TrackImportActivity {
     /// and the list cannot disagree: it reads as finished exactly when every
     /// row does.
     pub(super) fn summary(&self) -> String {
-        if !self.items.is_empty() {
-            let total = self.items.len();
-            let finished = self
-                .items
-                .iter()
-                .filter(|item| item.analysis.status().finished())
-                .count();
+        let total = self.items.len() + self.rejected.len();
+        if total > 0 {
+            let finished = self.rejected.len()
+                + self
+                    .items
+                    .iter()
+                    .filter(|item| item.analysis.status().finished())
+                    .count();
             if finished < total {
                 return if total == 1 {
                     "Analyzing 1 song…".to_string()
@@ -274,6 +286,7 @@ impl Luma {
             progress: None,
             active: true,
             error: None,
+            rejected: Vec::new(),
             venue_id,
             items: Vec::new(),
             seen: false,
@@ -306,15 +319,20 @@ impl Luma {
                 if let Some(activity) = &mut this.track_import {
                     if activity.generation == generation {
                         activity.import_id = Some(import_id.clone());
-                        for failure in &result.failures {
-                            log::warn!("A song was not imported: {}", failure.message);
-                        }
-                        activity.error = (!result.failures.is_empty()).then(|| {
-                            format!(
-                                "{} could not be imported",
-                                plural(result.failures.len(), "song")
-                            )
-                        });
+                        activity.rejected = result
+                            .failures
+                            .iter()
+                            .map(|failure| {
+                                log::warn!("A song was not imported: {}", failure.message);
+                                RejectedSong {
+                                    name: failure
+                                        .name
+                                        .clone()
+                                        .unwrap_or_else(|| failure.source_id.clone()),
+                                    reason: failure.reason.sentence(),
+                                }
+                            })
+                            .collect();
                         activity.items = result
                             .tracks
                             .iter()
@@ -357,10 +375,12 @@ impl Luma {
                             activity.apply(&event);
                             activity.progress = Some(event.clone());
                             activity.active = !complete;
-                            if let Some(error) = &event.error {
+                            // An error on a copy event is one song's, and
+                            // that song is already among the rejected.
+                            if let Some(error) = event.error.as_ref().filter(|_| complete) {
                                 log::warn!("The import reported: {error}");
                                 activity.error =
-                                    Some("Some songs could not be imported".to_string());
+                                    Some("Some songs could not be analyzed".to_string());
                             }
                         }
                     }
@@ -480,7 +500,7 @@ fn audio_files_in(paths: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImportItem, ItemAnalysis, ItemStatus, StageOutcome, TrackAnalysisEvent,
+        ImportItem, ItemAnalysis, ItemStatus, RejectedSong, StageOutcome, TrackAnalysisEvent,
         TrackImportActivity, TrackImportPhase, TrackImportProgress,
     };
 
@@ -549,6 +569,7 @@ mod tests {
             progress: None,
             active: true,
             error: None,
+            rejected: Vec::new(),
             venue_id: None,
             items: vec![item("a"), item("b")],
             seen: false,
@@ -571,6 +592,23 @@ mod tests {
         activity.apply(&started("a", "beat_grid"));
         assert!(matches!(status(&activity, 0), ItemStatus::Analyzing { .. }));
         assert_eq!(activity.summary(), "Analyzing 2 songs · 0 of 2 done");
+    }
+
+    /// A song turned away before it reached the library is still a song the
+    /// person asked for: it counts, and it counts as failed.
+    #[test]
+    fn a_rejected_song_counts_as_failed() {
+        let mut activity = activity();
+        activity.items.clear();
+        activity.active = false;
+        let nothing = activity.summary();
+        activity.rejected.push(RejectedSong {
+            name: "song.mp3".into(),
+            reason: "Not an audio file Luma can read".into(),
+        });
+        assert_eq!(activity.failed(), 1);
+        assert_ne!(activity.summary(), nothing);
+        assert!(activity.summary().contains("failed"));
     }
 
     /// "Ready" exactly when every queued stage has settled, whatever order

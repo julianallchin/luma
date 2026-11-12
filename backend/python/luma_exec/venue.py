@@ -1804,6 +1804,20 @@ class Venue:
             "name": str(name), "fixtures": ids, "replace": bool(replace),
         })["group"])
 
+    def remove_group(self, group: Any) -> str:
+        """Delete a collection, by name or Group; its fixtures stay.
+
+        A clip or Perform pattern that selected it keeps it listed and lights
+        nothing there, so the answer says how many did. Delete a group you
+        made as a workaround once nothing needs it; ask before deleting one
+        the user made.
+        """
+        answer = self._verb("venue.remove_group", {"name": str(getattr(group, "name", group))})
+        used = [f"{answer[key]} {label}" for key, label in
+                (("clips", "clips"), ("perform", "Perform patterns or cells")) if answer.get(key)]
+        note = f"; {' and '.join(used)} selected it and now light nothing there" if used else ""
+        return f"removed group {answer['name']}{note}"
+
     def generate_groups(self) -> GroupTree:
         """Add suggested collections from the current rig and return all groups.
 

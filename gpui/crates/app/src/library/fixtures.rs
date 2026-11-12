@@ -295,6 +295,12 @@ impl Library {
         self.sign_in_fixture = Some(fixture);
     }
 
+    /// Answer for the server about the terms: the principals in `pending`
+    /// have yet to accept them, and everyone else has.
+    pub fn set_terms_fixture(&mut self, pending: std::collections::HashSet<String>) {
+        self.terms_fixture = Some(Arc::new(Mutex::new(pending)));
+    }
+
     /// Supply live sync snapshots to the harness without enabling networking.
     pub fn set_sync_status_fixture(
         &mut self,

@@ -115,6 +115,16 @@ class MusicUnitTests(unittest.TestCase):
         self.assertEqual(music.label(1), "1.1.1.5")
         self.assertEqual(music.label(8 + 3), "1.2.2.5")
 
+    def test_a_track_without_analysis_says_what_is_missing(self):
+        music = synthetic()
+        self.assertNotIn("drum onsets", repr(music))
+        self.assertIn("MERT", repr(music))
+        bare = Music(beats=music._beats, downbeats=music._beats[::4], beats_per_bar=4, bpm=120.0,
+                     onsets={}, rest=music._rest, sample_rate=music._rate)
+        self.assertEqual(len(bare.missing), 2)
+        self.assertIn("drum onsets", repr(bare))
+        self.assertEqual(with_repeated_sound()[0].missing, ())
+
     def test_arrays_are_read_only_frames_with_one_line_reprs(self):
         music = synthetic()
         self.assertEqual(repr(music.onsets["kick"]).count("\n"), 0)

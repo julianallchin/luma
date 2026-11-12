@@ -204,6 +204,12 @@ pub struct Fixture {
     /// signed in as [`session::PRINCIPAL`] either way; a second account's
     /// rows are `sql`, under its own principal.
     accounts: HashMap<String, String>,
+    /// The addresses in `accounts` that have yet to accept the terms: signing
+    /// in as one lands on the terms page. Every other account has accepted.
+    terms_pending: Vec<String>,
+    /// Open with the terms page still owed to the signed-in account, as it
+    /// is to one that quit on the page: the launch lands back on it.
+    terms_owed: bool,
     /// Files written into the library directory after the rows, by path
     /// relative to it: a fixture definition with a second mode over the rig's
     /// (`fixtures/Luma/Mover.qxf`), say.
@@ -386,6 +392,8 @@ impl Default for Fixture {
             outside_clips: Vec::new(),
             sql: Vec::new(),
             accounts: HashMap::new(),
+            terms_pending: Vec::new(),
+            terms_owed: false,
             files: HashMap::new(),
             assets: HashMap::new(),
             library: None,
@@ -469,6 +477,12 @@ impl Fixture {
         let source_import_fixture_delay = self.source_import_fixture_delay;
         let venues_delay = self.venues_delay;
         let accounts = self.accounts.clone();
+        let terms_pending: std::collections::HashSet<String> = self
+            .terms_pending
+            .iter()
+            .filter_map(|address| self.accounts.get(address).cloned())
+            .collect();
+        let terms_owed = self.terms_owed;
         let model = self.model.clone();
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
@@ -507,6 +521,10 @@ impl Fixture {
                 }
                 if !accounts.is_empty() {
                     library.set_sign_in_fixture(session::accounts(accounts.clone()));
+                }
+                // Whoever can reach the terms page needs somewhere to accept.
+                if !accounts.is_empty() || terms_owed {
+                    library.set_terms_fixture(terms_pending.clone());
                 }
                 if let Some(steps) = &model {
                     library.set_agent_model(Arc::new(agent::model(steps, model_cadence)));
@@ -651,6 +669,9 @@ impl Fixture {
         if !self.camera_tour {
             session::toured(config_dir, &owner).await;
         }
+        if self.terms_owed {
+            session::owes_terms(config_dir, &owner).await;
+        }
     }
 
     async fn write(&self, config_dir: &Path) {
@@ -790,6 +811,9 @@ impl Fixture {
         session::signed_in(config_dir).await;
         if !self.camera_tour {
             session::toured(config_dir, session::PRINCIPAL).await;
+        }
+        if self.terms_owed {
+            session::owes_terms(config_dir, session::PRINCIPAL).await;
         }
         let services = luma_lib::boot::open(luma_lib::boot::Boot {
             storage: luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf()),

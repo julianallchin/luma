@@ -67,6 +67,19 @@ pub async fn import_tracks(
         .await?)
 }
 
+/// Analyse a track again; see [`track_service::reprocess_track`]. It returns
+/// once the work is queued, and `background_work` shows it running.
+pub async fn reprocess_track(services: &AppServices, track_id: String) -> Result<(), CommandError> {
+    services.require_session().await?;
+    Ok(track_service::reprocess_track(
+        &services.db.0,
+        &services.storage,
+        &services.workers,
+        &services.analysis_tasks,
+        track_id,
+    )?)
+}
+
 /// The import driver over this host's catalog, storage and analysis tasks.
 pub(crate) fn importer(services: &AppServices) -> track_service::Importer<'_> {
     track_service::Importer {
@@ -115,26 +128,6 @@ mod import_tests {
         }
     }
 
-    fn write_wav(path: &Path) {
-        let frames = 8_000_u32;
-        let data_len = frames * 2;
-        let mut bytes = Vec::with_capacity((44 + data_len) as usize);
-        bytes.extend_from_slice(b"RIFF");
-        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
-        bytes.extend_from_slice(b"WAVEfmt ");
-        bytes.extend_from_slice(&16_u32.to_le_bytes());
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&8_000_u32.to_le_bytes());
-        bytes.extend_from_slice(&16_000_u32.to_le_bytes());
-        bytes.extend_from_slice(&2_u16.to_le_bytes());
-        bytes.extend_from_slice(&16_u16.to_le_bytes());
-        bytes.extend_from_slice(b"data");
-        bytes.extend_from_slice(&data_len.to_le_bytes());
-        bytes.resize((44 + data_len) as usize, 0);
-        std::fs::write(path, bytes).unwrap();
-    }
-
     /// The principal the import writes as. A track is a synced row and a
     /// synced row has an owner; `import_tracks` asks `require_session` for it.
     /// Signed in for real rather than pinned with `with_fixture_principal`,
@@ -152,7 +145,7 @@ mod import_tests {
     async fn identity_epoch_cancellation_rolls_back_catalog_and_managed_audio() {
         let directory = tempfile::tempdir().unwrap();
         let audio = directory.path().join("source.wav");
-        write_wav(&audio);
+        crate::test_support::write_wav(&audio, 1);
         let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
         let inserted = Arc::new(Barrier::new(2));
         let services = services(
