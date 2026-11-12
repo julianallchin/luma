@@ -8,9 +8,11 @@ use std::path::Path;
 /// The format of the synced tables' local copy.
 ///
 /// Bump it when a client can no longer read rows an older one downloaded. A
-/// library whose `user_version` differs clears its synced tables at startup,
-/// keeping its upload queue, and PowerSync downloads them again — so no code
-/// ever converts a local row. Migrations set the version their schema reads.
+/// library whose `user_version` differs clears its synced tables at startup
+/// and PowerSync downloads them again — so no code ever converts a local row.
+/// Edits still waiting to upload were written in the old format and cannot be
+/// sent, so they are listed as not saved first: see
+/// [`reset_stale_projection`].
 pub const PROJECTION_VERSION: i64 = 2;
 
 /// `SqlitePool` is itself a shared handle, so cloning `Db` hands out another
@@ -196,9 +198,33 @@ pub async fn open_app_db_at(app_dir: &Path) -> Result<(Db, Connections), String>
         )
     })?;
     migrate_pool.close().await;
+    create_sync_tables(connections.sql()).await?;
     reset_stale_projection(connections.sql()).await?;
 
     Ok((Db(connections.sql().clone()), connections))
+}
+
+/// Create PowerSync's own tables in a library it has not opened yet.
+///
+/// The SDK does this when it starts, which is after the first write here: the
+/// projection reset below deletes from the synced tables, and a statement
+/// that can fire an upload trigger opens the upload queue whether or not a
+/// row is deleted. Without the queue's tables the extension reports the
+/// failure in memory SQLite did not allocate, and the process aborts. A
+/// library that has them is left as it is.
+async fn create_sync_tables(pool: &SqlitePool) -> Result<(), String> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| format!("Failed to begin creating the sync tables: {error}"))?;
+    sqlx::query("SELECT powersync_init()")
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to create the sync tables: {error}"))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to commit the sync tables: {error}"))
 }
 
 /// Empty every synced table and PowerSync's download state, so the library
@@ -206,28 +232,12 @@ pub async fn open_app_db_at(app_dir: &Path) -> Result<(Db, Connections), String>
 /// removes reaches the server; the caller turns upload capture back on
 /// ([`crate::sync::triggers::uploading`]) before it commits.
 ///
-/// Answers `false`, having changed nothing, while a change still waits to
-/// upload: clearing PowerSync's state drops its queue, and a local edit is
-/// not this function's to discard.
+/// Clearing PowerSync's state drops its upload queue with it. What happens
+/// to a change still waiting there is the caller's to decide first.
 async fn clear_synced_tables(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-) -> Result<bool, String> {
-    // PowerSync creates its tables the first time it opens a library.
-    let synced_before: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ps_buckets')",
-    )
-    .fetch_one(&mut **transaction)
-    .await
-    .map_err(|error| format!("Failed to inspect the sync state: {error}"))?;
-    if synced_before {
-        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ps_crud")
-            .fetch_one(&mut **transaction)
-            .await
-            .map_err(|error| format!("Failed to count changes waiting to sync: {error}"))?;
-        if pending > 0 {
-            return Ok(false);
-        }
-    }
+) -> Result<(), String> {
+    let synced_before = synced_before(transaction).await?;
     crate::sync::triggers::local_only(transaction).await?;
     // Every synced table goes, so a reference between two of them is gone by
     // the commit whichever order they are cleared in. Admission guards a write
@@ -262,7 +272,73 @@ async fn clear_synced_tables(
             .await
             .map_err(|error| format!("Failed to reset the sync state: {error}"))?;
     }
-    Ok(true)
+    Ok(())
+}
+
+/// Whether this library has PowerSync's tables. One opened by a host that
+/// does not sync ([`init_app_db_at`]) has none.
+async fn synced_before(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<bool, String> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ps_buckets')",
+    )
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("Failed to inspect the sync state: {error}"))
+}
+
+/// The changes waiting to upload, oldest first: each one's table, row id,
+/// operation and the columns it carries, as the queue holds them.
+async fn waiting_to_upload(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<Vec<(String, String, String, Option<String>)>, String> {
+    if !synced_before(transaction).await? {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as(
+        "SELECT json_extract(data, '$.type'), json_extract(data, '$.id'),
+                json_extract(data, '$.op'), json_extract(data, '$.data')
+         FROM ps_crud ORDER BY id",
+    )
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|error| format!("Failed to read the changes waiting to sync: {error}"))
+}
+
+/// What a change that was never sent records as its status: no server
+/// answered it.
+const NEVER_SENT: i64 = 0;
+
+/// What a change set aside at a format change records as its body.
+const PREDATES_UPDATE: &str =
+    "this change was made before an update changed how Luma stores data, and was not sent";
+
+/// List every change waiting to upload as not saved, the way the upload
+/// connector lists one the server refused. They were written in the format
+/// the library is leaving and the server no longer takes it, so the queue
+/// they sit in is about to be dropped with the rest of the old copy.
+async fn set_aside_waiting_uploads(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<usize, String> {
+    let waiting = waiting_to_upload(transaction).await?;
+    for (table, row_id, op, data) in &waiting {
+        sqlx::query(
+            "INSERT INTO sync_rejections(id, table_name, row_id, op, data_json, status, body, at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(table)
+        .bind(row_id)
+        .bind(op)
+        .bind(data)
+        .bind(NEVER_SENT)
+        .bind(PREDATES_UPDATE)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|error| format!("Failed to record a change that was not sent: {error}"))?;
+    }
+    Ok(waiting.len())
 }
 
 /// Clear the library when it is another account's, so `principal` downloads
@@ -325,12 +401,15 @@ pub(crate) async fn evict_other_account(
         );
         return Ok(false);
     }
-    if !clear_synced_tables(&mut transaction).await? {
+    // Clearing drops the upload queue, and a local edit is not an eviction's
+    // to discard.
+    if !waiting_to_upload(&mut transaction).await?.is_empty() {
         log::warn!(
             "[sync] the library is another account's, but changes wait to upload; it is left as it is"
         );
         return Ok(false);
     }
+    clear_synced_tables(&mut transaction).await?;
     crate::sync::triggers::uploading(&mut transaction).await?;
     transaction
         .commit()
@@ -344,9 +423,13 @@ pub(crate) async fn evict_other_account(
 /// downloads them again in the current format.
 ///
 /// Runs before sync starts. The clear is marked local, so nothing it removes
-/// reaches the server. A change still waiting to upload postpones the reset to
-/// a later launch: clearing PowerSync's download state drops its queue, and
-/// a local edit is not this function's to discard.
+/// reaches the server.
+///
+/// A change still waiting to upload was written in the old format, which the
+/// server refuses and this build cannot translate, so it is never sent. It is
+/// moved to the not-saved list (`sync_rejections`) in the same transaction as
+/// the clear, so the copy is always cleared at a version change and the
+/// person is told what did not make it.
 ///
 /// # Errors
 ///
@@ -363,12 +446,13 @@ pub(crate) async fn reset_stale_projection(pool: &SqlitePool) -> Result<(), Stri
     if version == PROJECTION_VERSION {
         return Ok(());
     }
-    if !clear_synced_tables(&mut transaction).await? {
+    let unsent = set_aside_waiting_uploads(&mut transaction).await?;
+    if unsent > 0 {
         log::warn!(
-            "[sync] projection {version} is not {PROJECTION_VERSION}; changes wait to upload, so the re-download waits for a later launch"
+            "[sync] {unsent} changes made at projection {version} were waiting to upload; they are listed as not saved"
         );
-        return Ok(());
     }
+    clear_synced_tables(&mut transaction).await?;
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "PRAGMA user_version = {PROJECTION_VERSION}"
     )))
@@ -387,6 +471,110 @@ pub(crate) async fn reset_stale_projection(pool: &SqlitePool) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A build at a new projection cannot send what an older one queued, and
+    /// must not keep the old copy waiting for it: at the version change every
+    /// queued change is listed as not saved, the copy and the queue are
+    /// cleared, and the library syncs again from nothing.
+    #[tokio::test]
+    async fn a_format_change_lists_queued_edits_as_not_saved_and_clears() {
+        let directory = tempfile::tempdir().unwrap();
+        let open = || async {
+            let (_db, connections) = open_app_db_at(directory.path()).await.unwrap();
+            crate::database::local::auth::arm_write_admission(connections.sql(), Some("user-1"))
+                .await
+                .unwrap();
+            connections
+                .start(
+                    crate::sync::schema::schema(),
+                    luma_sync::powersync::HttpClient::new(),
+                )
+                .await
+                .unwrap()
+        };
+        let count = |pool: &SqlitePool, sql: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(sql)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // A new library is itself behind the format until its first open,
+        // before PowerSync has made its tables: that reset finds nothing.
+        // Then an insert, an edit and a delete, queued and never uploaded.
+        let library = open().await;
+        assert_eq!(
+            count(&library.sql, "SELECT COUNT(*) FROM sync_rejections").await,
+            0
+        );
+        sqlx::raw_sql(
+            "INSERT INTO venues (id, uid, name) VALUES ('venue-1', 'user-1', 'Room');
+             INSERT INTO venues (id, uid, name) VALUES ('venue-2', 'user-1', 'Hall');
+             UPDATE venues SET name = 'Club' WHERE id = 'venue-1';
+             DELETE FROM venues WHERE id = 'venue-2';",
+        )
+        .execute(&library.sql)
+        .await
+        .unwrap();
+        assert_eq!(count(&library.sql, "SELECT COUNT(*) FROM ps_crud").await, 4);
+        // The library as an older build left it.
+        sqlx::raw_sql("PRAGMA user_version = 0")
+            .execute(&library.sql)
+            .await
+            .unwrap();
+        library.close().await;
+
+        let library = open().await;
+        assert_eq!(count(&library.sql, "SELECT COUNT(*) FROM venues").await, 0);
+        assert_eq!(count(&library.sql, "SELECT COUNT(*) FROM ps_crud").await, 0);
+        assert_eq!(
+            count(&library.sql, "PRAGMA user_version").await,
+            PROJECTION_VERSION
+        );
+        let unsent: Vec<(String, String, String, Option<String>, String)> = sqlx::query_as(
+            "SELECT table_name, row_id, op, data_json, body FROM sync_rejections ORDER BY rowid",
+        )
+        .fetch_all(&library.sql)
+        .await
+        .unwrap();
+        assert_eq!(
+            unsent
+                .iter()
+                .map(|(table, row, op, ..)| (table.as_str(), row.as_str(), op.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("venues", "venue-1", "PUT"),
+                ("venues", "venue-2", "PUT"),
+                ("venues", "venue-1", "PATCH"),
+                ("venues", "venue-2", "DELETE"),
+            ],
+            "every queued change is listed, in the order it was made"
+        );
+        let edit: serde_json::Value =
+            serde_json::from_str(unsent[2].3.as_deref().expect("the edit's columns")).unwrap();
+        assert_eq!(edit["name"], "Club", "what the change was is kept");
+        assert!(unsent[3].3.is_none(), "a delete carries no columns");
+        assert!(unsent.iter().all(|(.., body)| body == PREDATES_UPDATE));
+
+        // The cleared library is an ordinary one: a write queues, and opening
+        // it again at the same version changes nothing.
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue-3', 'user-1', 'Loft')")
+            .execute(&library.sql)
+            .await
+            .unwrap();
+        library.close().await;
+        let library = open().await;
+        assert_eq!(count(&library.sql, "SELECT COUNT(*) FROM venues").await, 1);
+        assert_eq!(count(&library.sql, "SELECT COUNT(*) FROM ps_crud").await, 1);
+        assert_eq!(
+            count(&library.sql, "SELECT COUNT(*) FROM sync_rejections").await,
+            4
+        );
+        library.close().await;
+    }
 
     /// A library as the squashed migrations left it: their schema, a row of
     /// data, and a history of the given versions.

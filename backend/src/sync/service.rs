@@ -427,15 +427,19 @@ async fn refusals(pool: &SqlitePool) -> Result<Vec<SyncRefusal>, String> {
         .collect())
 }
 
+/// What [`refused`] answers when the local schema takes every waiting row.
+pub(super) const DOWNLOAD_APPLIES: &str = "the waiting download applies; the refusal is elsewhere";
+
 /// Which downloaded row the local schema refuses, named.
 ///
 /// A checkpoint is one transaction: one row the local schema will not take
 /// rolls the whole thing back, so nothing arrives — and the SDK reports only
 /// `CONSTRAINT`, without saying which of thirty tables. This replays the
 /// waiting oplog through the same generated statements, in one transaction it
-/// then throws away, and stops at the first refusal. Only ever run after a
-/// failure, because it is the failure that needs a name.
-async fn refused(pool: &SqlitePool) -> String {
+/// then throws away, and stops at the first refusal. Run after a failure,
+/// because it is the failure that needs a name; a test also runs it to say
+/// that what a device was sent holds together.
+pub(super) async fn refused(pool: &SqlitePool) -> String {
     let rows: Vec<(String, String)> =
         match sqlx::query_as("SELECT row_type, data FROM ps_oplog WHERE data IS NOT NULL")
             .fetch_all(pool)
@@ -455,7 +459,7 @@ async fn refused(pool: &SqlitePool) -> String {
     {
         return format!("could not open a transaction to replay the download in: {error}");
     }
-    let mut verdict = "the waiting download applies; the refusal is elsewhere".to_owned();
+    let mut verdict = DOWNLOAD_APPLIES.to_owned();
     for (name, data) in rows {
         let Some(table) = schema::table(&name) else {
             continue;

@@ -142,6 +142,16 @@ after it. A new migration adds its line here.
 - `20261111235859_profiles_private.sql` — any time; until it runs, anyone
   holding the app's public key can list every account id and display name.
   Server only; there is no local migration
+- `20261112120000_data_layer.sql` — the cutover to data format 2
+  ([data-layer.md](../docs/design/data-layer.md)). After
+  `20261111120000_client_format.sql`, which is what turns older builds away
+  once this raises `public.data_format()`: from then on a 0.7.0 or older
+  install neither uploads nor downloads until it updates. Its contract marker
+  names 0.7.0, so it runs in the first release after it, and that release is
+  the first build that reads format 2: the two ship together and neither
+  works without the other. Then redeploy `powersync/sync-config.yaml`, whose
+  rules name the `deleted_at` this file adds; until they are deployed a
+  deleted row stays on the devices that hold it
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an
