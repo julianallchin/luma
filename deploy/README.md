@@ -161,6 +161,10 @@ after it. A new migration adds its line here.
   works without the other. Then redeploy `powersync/sync-config.yaml`, whose
   rules name the `deleted_at` this file adds; until they are deployed a
   deleted row stays on the devices that hold it
+- `20261112130000_venue_audio_follows_scores.sql` — any time after the data
+  layer; until it runs, a venue member cannot download the audio of a song
+  another member owns unless that owner scored it in the venue. Server only;
+  there is no local migration
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an
