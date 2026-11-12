@@ -146,7 +146,7 @@ agent_thread_transcript_heads, drafts.
 Local only: settings, control_bindings_unsynced (the bindings a machine kept
 before they synced, until its venue's inputs move them), dmx_routes, preprocessing_failures,
 track_waveforms, track_mert, agent_thread_runs,
-agent_thread_usage, sync_rejections, auth_write_admission, the
+agent_thread_usage, agent_thread_score_marks, sync_rejections, auth_write_admission, the
 auth session, and the columns `tracks.file_path`, `tracks.album_art_path`,
 `track_roots.logits_path`, `track_stems.file_path`.
 
