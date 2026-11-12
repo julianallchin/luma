@@ -293,11 +293,14 @@ mod tests {
 
     /// A copy is a new score of the same song and venue, with the source's
     /// clips and the given name; the source is untouched, and a replay of the
-    /// request returns the same copy.
+    /// request returns the same copy. The copy's clips are rows of their own:
+    /// new ids, with the labels the source's clips have.
     #[tokio::test]
     async fn duplicate_score_copies_the_clips_under_a_new_name() {
         let (_directory, services, id) = library().await;
-        let clips = score(&[("a", &clip("A", 0.)), ("b", &clip("B", 8.))]);
+        let mut labelled = clip("A", 0.);
+        labelled.label = Some("intro".into());
+        let clips = score(&[("a", &labelled), ("b", &clip("B", 8.))]);
         edit(&services, &id, &luma_patterns::Score::default(), &clips).await;
 
         let args = json!({
@@ -311,15 +314,22 @@ mod tests {
         assert_ne!(copy_id, id);
         assert_eq!(copy["name"], "Draft copy");
         assert_eq!(copy["trackId"], "track");
-        assert_eq!(stored(&services, &copy_id).await, clips);
+        let copied = stored(&services, &copy_id).await;
+        assert!(copied.clips.keys().all(|id| !clips.clips.contains_key(id)));
+        let by_start = |score: &luma_patterns::Score| {
+            let mut clips: Vec<_> = score.clips.values().cloned().collect();
+            clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+            clips
+        };
+        assert_eq!(by_start(&copied), by_start(&clips));
         assert_eq!(stored(&services, &id).await, clips);
 
         // An edit to the copy leaves the source alone: the clips are its own.
         edit(
             &services,
             &copy_id,
-            &clips,
-            &score(&[("a", &clip("A", 0.))]),
+            &copied,
+            &luma_patterns::Score::default(),
         )
         .await;
         assert_eq!(stored(&services, &id).await, clips);

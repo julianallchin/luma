@@ -836,6 +836,7 @@ async fn a_merged_draft_arrives_as_clips() {
         "two".into(),
         luma_patterns::Clip {
             name: "Strobe".into(),
+            label: None,
             graph: serde_json::from_value(serde_json::json!(
                 {"version": 3, "nodes": {"strobe1": {"kind": "strobe"}}}
             ))

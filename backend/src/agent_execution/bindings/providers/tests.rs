@@ -435,10 +435,9 @@ impl Fixture {
             "INSERT INTO clips
                 (id, uid, score_id, name, graph_json, graph, start, duration, seed,
                  selection_json, z_index, blend_mode)
-             VALUES (? || ':ann-1', ?, ?, 'Strobe', '{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}', '', 12.5, 7.5, '0',
+             VALUES ('ann-1', ?, ?, 'Strobe', '{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}', '', 12.5, 7.5, '0',
                      '{\"all\":true}', 3, 'add')",
         )
-        .bind(SCORE_ID)
         .bind(TEST_OWNER)
         .bind(SCORE_ID)
         .execute(&self.pool)

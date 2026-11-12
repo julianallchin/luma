@@ -73,8 +73,11 @@ def _seed(value):
 
 @dataclass(frozen=True)
 class Clip:
-    """One clip: id, name, at, selection, seed, z, blend, graph.
+    """One clip: id, name, at, selection, seed, z, blend, graph, label.
 
+    id is generated when the clip is added and never chosen. label is the
+    handle add_clip(label=...) gave it, or None; edit.update_clip("drop", ...)
+    and edit.remove_clip("drop") find a clip by its label or its id.
     at is the clip's range as two positions, such as ("17.1.1", "21.1.1").
     The range includes its start and excludes its end; at=clip.at places
     another clip on the same range. This is a read-only value. Use
@@ -90,6 +93,7 @@ class Clip:
     z: int
     blend: str
     graph: Graph
+    label: str | None = None
 
     @classmethod
     def read(cls, id, value, bars):
@@ -98,7 +102,8 @@ class Clip:
         return cls(id, name, (bars.format(start), bars.format(end)),
                    _freeze(value.get("selection", {"expression": "all"})), value["seed"],
                    value.get("z_index", 0), value.get("blend_mode", "replace"),
-                   Graph.from_json(value.get("graph") or {}, name=name or None))
+                   Graph.from_json(value.get("graph") or {}, name=name or None),
+                   value.get("label"))
 
 
 def _definitions(nodes):
@@ -346,12 +351,56 @@ class Edit:
         return self._track.definition(kind)
 
     def replace_source(self, source):
-        """Stage an exact score source. check/apply run Rust's validator."""
+        """Stage an exact score source. check/apply run Rust's validator.
+
+        A clip under an id from edit.source() is that clip. Any other key
+        adds a clip: its id is generated, and the key becomes its label
+        unless the clip has one. A key that is a clip's label is that clip.
+        """
         self._open()
         candidate = json.loads(source)
-        if not isinstance(candidate, dict) or set(candidate) != {"clips"}:
+        if (not isinstance(candidate, dict) or set(candidate) != {"clips"}
+                or not isinstance(candidate["clips"], dict)):
             raise TrackError("expected a score document with only clips")
-        self._candidate = candidate
+        current = self._candidate["clips"]
+        known = self._base["clips"].keys() | current.keys()
+        labelled = {value["label"]: id for id, value in current.items() if value.get("label")}
+        clips = {}
+        for key, value in candidate["clips"].items():
+            if key not in known and isinstance(value, dict):
+                if not _is_uuid(key):
+                    value.setdefault("label", key)
+                key = labelled.get(key) or str(uuid.uuid4())
+            if key in clips:
+                raise TrackError(f"clip {key!r} is in the source twice, by its id and by its label")
+            clips[key] = value
+        _unique_labels(clips)
+        self._candidate = {"clips": clips}
+
+    def _resolve(self, clip):
+        """The id of a Clip, a clip id or a clip's label in the candidate."""
+        clips = self._candidate["clips"]
+        key = clip.id if isinstance(clip, Clip) else str(clip)
+        if key in clips:
+            return key
+        named = [] if isinstance(clip, Clip) else [
+            id for id, value in clips.items() if value.get("label") == key]
+        if len(named) == 1:
+            return named[0]
+        if named:
+            raise TrackError(f"label {key!r} is on {len(named)} clips ({', '.join(named)}); "
+                             "a label names one clip, so use the clip's id")
+        raise TrackError(f"unknown clip {key!r}: no clip in this edit has that id or label")
+
+    def _label(self, label, id=None):
+        """A label for clip id, checked: text that no other clip carries."""
+        if not isinstance(label, str) or not label.strip():
+            raise TrackError('label needs text, such as label="drop"')
+        for other_id, other in self._candidate["clips"].items():
+            if other_id != id and other.get("label") == label:
+                raise TrackError(f"label {label!r} is already on clip {other.get('name') or other_id} "
+                                 f"({other_id}); a label names one clip in its score")
+        return label
 
     def source(self):
         """The complete candidate as JSON text, including unchanged saved clips."""
@@ -373,8 +422,13 @@ class Edit:
             raise ClipError("\n".join(_prefixed(label, id, message) for message in result.errors))
 
     def add_clip(self, graph, *, name=None, at=None, bars=None, seconds=None,
-                 selection="all", z=None, blend=None, seed=None, id=None):
+                 selection="all", z=None, blend=None, seed=None, label=None):
         """Stage a clip and return it. The checker runs on it at once.
+
+        The clip's id is generated; clip.id on the returned value has it.
+        label="drop" gives the clip a handle of yours, one clip per label in
+        a score, and edit.update_clip("drop", ...) finds it again in any
+        later cell or conversation.
 
         graph is a Graph from color(), aim(), strobe() or laser(), preset("Chase"),
         or a preset name. name is required unless the graph is a preset;
@@ -401,9 +455,7 @@ class Edit:
         if not name:
             raise ClipError('clip: expected a name; got none. Example: name="Kick chase"')
         start, end = self._track._range(at=at, bars=bars, seconds=seconds)
-        id = id or str(uuid.uuid4())
-        if id in self._candidate["clips"]:
-            raise TrackError(f"clip {id!r} already exists")
+        id = str(uuid.uuid4())
         if z is None:
             z = max((clip.get("z_index", 0) for clip in self._candidate["clips"].values()
                      if clip["start"] < end and start < clip["start"] + clip["duration"]),
@@ -411,6 +463,8 @@ class Edit:
         value = {"name": str(name), "start": start, "duration": end - start, "seed": _seed(seed),
                  "selection": _selection(selection), "z_index": _z(z), "blend_mode": _blend(blend or graph.blend or "replace"),
                  "graph": graph.json()}
+        if label is not None:
+            value["label"] = self._label(label)
         self._check_clip(id, value)
         self._report(self._cut(id, value))
         self._candidate["clips"][id] = value
@@ -427,7 +481,8 @@ class Edit:
 
         A z is one track and its clips never overlap. A clip the range covers
         whole is removed; one it covers in part is trimmed, or split in two
-        with the far piece as a new clip. Returns one line per clip it changed.
+        with the far piece as a new clip; the near piece keeps the label.
+        Returns one line per clip it changed.
         """
         z, start = value.get("z_index", 0), value["start"]
         end = start + value["duration"]
@@ -445,7 +500,11 @@ class Edit:
                 clips[other_id] = dict(other, duration=head)
             if tail > _TOUCH:
                 piece = dict(copy.deepcopy(other), start=end, duration=tail)
-                clips[str(uuid.uuid4()) if head > _TOUCH else other_id] = piece
+                if head > _TOUCH:
+                    piece.pop("label", None)
+                    clips[str(uuid.uuid4())] = piece
+                else:
+                    clips[other_id] = piece
             label = f"clip {other.get('name') or other_id} ({other_id}) at z {z}"
             kept = [self._track.bars.format_range(a, a + d) for a, d in
                     ((other_start, head), (end, tail)) if d > _TOUCH]
@@ -454,17 +513,17 @@ class Edit:
         return cuts
 
     def update_clip(self, clip, *, graph=None, name=None, at=None, bars=None, seconds=None,
-                    selection=None, z=None, blend=None, seed=None):
-        """Update a Clip or clip ID and return its new value; other fields stay.
+                    selection=None, z=None, blend=None, seed=None, label=None):
+        """Update a Clip, a clip's label or its id, and return its new value;
+        other fields stay.
 
         graph, name, range, selection, z, blend and seed use add_clip's
-        conventions, so the clip cuts what it covers at its z. The checker
-        runs on the updated clip at once.
+        conventions, so the clip cuts what it covers at its z. label="drop"
+        sets the clip's label and label="" removes it. The checker runs on
+        the updated clip at once.
         """
         self._open()
-        id = clip.id if isinstance(clip, Clip) else str(clip)
-        if id not in self._candidate["clips"]:
-            raise TrackError(f"unknown clip {id!r}")
+        id = self._resolve(clip)
         value = copy.deepcopy(self._candidate["clips"][id])
         if graph is not None:
             graph = _graph(graph)
@@ -486,18 +545,20 @@ class Edit:
             value["blend_mode"] = _blend(blend)
         if seed is not None:
             value["seed"] = _seed(seed)
+        if label == "":
+            value.pop("label", None)
+        elif label is not None:
+            value["label"] = self._label(label, id)
         self._check_clip(id, value)
         self._report(self._cut(id, value))
         self._candidate["clips"][id] = value
         return self._read(id, value)
 
     def remove_clip(self, clip):
-        """Remove a Clip or clip ID from the candidate; nothing is saved yet."""
+        """Remove a Clip, or the clip with this label or id, from the candidate;
+        nothing is saved yet."""
         self._open()
-        id = clip.id if isinstance(clip, Clip) else str(clip)
-        if id not in self._candidate["clips"]:
-            raise TrackError(f"unknown clip {id!r}")
-        del self._candidate["clips"][id]
+        del self._candidate["clips"][self._resolve(clip)]
 
     def check(self):
         """Run the native score validator; return CheckResult without saving.
@@ -561,10 +622,7 @@ class Edit:
         candidate = self.candidate
         if only is not None:
             clips = [only] if isinstance(only, (Clip, str)) else list(only)
-            ids = [clip.id if isinstance(clip, Clip) else str(clip) for clip in clips]
-            missing = [id for id in ids if id not in candidate["clips"]]
-            if missing:
-                raise TrackError(f"unknown preview clip(s): {', '.join(missing)}")
+            ids = [self._resolve(clip) for clip in clips]
             candidate["clips"] = {id: candidate["clips"][id] for id in ids}
         return candidate
 
@@ -572,6 +630,27 @@ class Edit:
 # Discovery and validation use the same mode vocabulary.
 Edit.add_clip.__doc__ += ("\nAvailable blend modes: " + ", ".join(sorted(BLEND_MODES)) + "."
                           " An aim clip takes replace or offset; offset is for aim only.")
+
+
+def _is_uuid(text):
+    try:
+        uuid.UUID(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _unique_labels(clips):
+    """Raise for a label two clips carry; a save of it is refused."""
+    seen = {}
+    for id, value in clips.items():
+        label = value.get("label") if isinstance(value, dict) else None
+        if label is None:
+            continue
+        if label in seen:
+            raise TrackError(f"label {label!r} is on two clips ({seen[label]} and {id}); "
+                             "a label names one clip in its score")
+        seen[label] = id
 
 
 def _prefixed(label, id, message):
@@ -694,9 +773,11 @@ class _Plan:
 
 
 def _same_but_range(a, b):
-    """Two clips that differ at most in start and duration."""
-    return {k: v for k, v in a.items() if k not in ("start", "duration")} == \
-        {k: v for k, v in b.items() if k not in ("start", "duration")}
+    """Two clips that differ at most in start and duration. The far piece of
+    a split has no label, so the label does not count either."""
+    apart = ("start", "duration", "label")
+    return {k: v for k, v in a.items() if k not in apart} == \
+        {k: v for k, v in b.items() if k not in apart}
 
 
 def _graph_changes(old, new):

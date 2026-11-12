@@ -207,6 +207,7 @@ mod tests {
         }
         let clip = |start: f64| Clip {
             name: "Wash".into(),
+            label: None,
             start,
             duration: 4.0,
             seed: 7,

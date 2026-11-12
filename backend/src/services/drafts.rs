@@ -141,6 +141,7 @@ mod tests {
     fn clip(start: f64) -> Clip {
         Clip {
             name: "Strobe".into(),
+            label: None,
             graph: serde_json::from_value(serde_json::json!(
                 {"version": 3, "nodes": {"strobe1": {"kind": "strobe"}}}
             ))

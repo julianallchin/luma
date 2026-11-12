@@ -56,6 +56,8 @@ impl TrackHost {
     /// or check, render and apply all look fine while the clip goes dark.
     async fn validate_candidate(&self, candidate: &Score) -> Result<(), HostCallError> {
         let stored = self.score_document().await?;
+        generated_ids(candidate, &stored)
+            .map_err(|error| HostCallError::new("invalid_score", error))?;
         candidate
             .validate_changes(&luma_patterns::standard_library(), &stored)
             .map_err(|error| HostCallError::new("invalid_score", error.to_string()))
@@ -235,6 +237,26 @@ fn clip_check(mut request: ClipCheck) -> Value {
     }
 }
 
+/// Refuse a clip the candidate adds under an id that is not a UUID.
+///
+/// A clip id is one row in the whole library and names nothing, so an agent
+/// never chooses one: `add_clip` generates it, and a handle of the agent's
+/// own is the clip's label. A clip already in `stored` keeps the id it has.
+fn generated_ids(candidate: &Score, stored: &Score) -> Result<(), String> {
+    match candidate
+        .clips
+        .keys()
+        .find(|id| !stored.clips.contains_key(*id) && uuid::Uuid::parse_str(id).is_err())
+    {
+        Some(id) => Err(format!(
+            "clip `{id}` is new and its id is not one Luma generated. Add a clip with \
+             edit.add_clip(...), which gives it an id; pass label=\"{id}\" to find it again \
+             by that name"
+        )),
+        None => Ok(()),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Candidate {
@@ -305,6 +327,22 @@ mod tests {
         assert!(error.contains("Pulse"), "{error}");
         assert!(error.contains("color1.brightness: expected"), "{error}");
         assert!(error.contains("Example: "), "{error}");
+    }
+
+    /// A new clip's id is generated; one the agent made up is refused with
+    /// what to do instead. A stored clip keeps whatever id it has.
+    #[test]
+    fn a_new_clip_needs_a_generated_id() {
+        let document = |id: &str| -> Score {
+            serde_json::from_value(json!({"clips": {id: clip(json!({"version": 3, "nodes": {}}))}}))
+                .unwrap()
+        };
+        let stored = document("intro");
+        assert!(generated_ids(&stored, &stored).is_ok());
+        let error = generated_ids(&stored, &Score::default()).unwrap_err();
+        assert!(error.contains("label=\"intro\""), "{error}");
+        let generated = document(&uuid::Uuid::new_v4().to_string());
+        assert!(generated_ids(&generated, &Score::default()).is_ok());
     }
 
     #[test]

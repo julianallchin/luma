@@ -185,6 +185,7 @@ impl PerformPattern {
     pub fn as_clip(&self, start: f64, duration: f64) -> luma_patterns::Clip {
         luma_patterns::Clip {
             name: self.name.clone(),
+            label: None,
             start,
             duration,
             seed: self.seed,

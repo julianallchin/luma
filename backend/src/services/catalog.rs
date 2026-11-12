@@ -136,7 +136,19 @@ pub async fn duplicate_score(
     .execute(access.connection())
     .await
     .map_err(|error| format!("insert the copy: {error}"))?;
-    let clips = rows::load_score(access.connection(), score_id).await?;
+    // A clip id names one row in the library, so the copy's clips are new
+    // rows with new ids. Their labels are per score and come along.
+    // Where two clips overlap in one z_index the greater id paints on top;
+    // that order is written into z_index first, as new ids would lose it.
+    let mut source_clips = rows::load_score(access.connection(), score_id).await?;
+    source_clips.separate_tracks();
+    let clips = luma_patterns::Score {
+        clips: source_clips
+            .clips
+            .into_values()
+            .map(|clip| (Uuid::new_v4().to_string(), clip))
+            .collect(),
+    };
     rows::save_score(access.connection(), &copy_id, &clips).await?;
     let copy = get_score(&mut access, &copy_id).await?;
     access.commit().await?;
