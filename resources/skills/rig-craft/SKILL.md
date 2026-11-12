@@ -31,7 +31,12 @@ states. Concrete shapes:
   malfunction.
 - **Fixtures with heads** (multi-head bars, pixel fixtures): sub-fixture
   detail exists — use it for texture (shimmer, scan) while whole fixtures
-  carry the structure.
+  carry the structure. A whole group held at one flat color looks unfinished
+  on these; give the cells a shape, a gradient or a share that is dark.
+- **A ring around the room** (bars on the walls): rotation is the native
+  motion. Check whether a shape travels across cells or only across
+  fixtures: cells that sit at nearly the same place along the path light as
+  one block.
 
 Use `u`/`v` (rig-intrinsic axes) rather than world x/y/z when authoring —
 patterns written on `u` survive any venue's rotation and layout.

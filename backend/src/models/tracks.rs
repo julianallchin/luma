@@ -38,7 +38,41 @@ pub struct TrackImportResult {
 #[serde(rename_all = "camelCase")]
 pub struct TrackImportFailure {
     pub source_id: String,
+    /// What the song is called, when the import got far enough to know.
+    pub name: Option<String>,
+    pub reason: ImportRejection,
+    /// The cause, for the log. People read [`ImportRejection::sentence`].
     pub message: String,
+}
+
+/// Maximum track duration allowed for import (10 minutes).
+pub const MAX_TRACK_DURATION_SECS: f64 = 600.0;
+
+/// Why a song was turned away from the library.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportRejection {
+    /// The file, or the library row naming it, is not there.
+    Missing,
+    TooLong,
+    /// Not audio in a format the import reads.
+    Unreadable,
+    Other,
+}
+
+impl ImportRejection {
+    /// The reason in plain words, as the import dialog shows it.
+    pub fn sentence(self) -> String {
+        match self {
+            Self::Missing => "The file is no longer there".to_string(),
+            Self::TooLong => format!(
+                "Longer than {} minutes",
+                (MAX_TRACK_DURATION_SECS / 60.0) as u32
+            ),
+            Self::Unreadable => "Not an audio file Luma can read".to_string(),
+            Self::Other => "Could not be added to the library".to_string(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -112,6 +146,7 @@ pub enum StageOutcome {
 #[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackBeats {
+    pub id: String,
     #[sqlx(rename = "track_id")]
     pub track_id: String,
     pub uid: Option<String>,
@@ -124,6 +159,9 @@ pub struct TrackBeats {
     pub downbeat_offset: Option<f64>,
     #[sqlx(rename = "beats_per_bar")]
     pub beats_per_bar: Option<i64>,
+    /// The version of the detector that found this grid.
+    #[sqlx(rename = "processor_version")]
+    pub processor_version: i64,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
     #[sqlx(rename = "updated_at")]

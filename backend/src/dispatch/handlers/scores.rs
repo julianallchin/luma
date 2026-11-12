@@ -1,4 +1,5 @@
 use crate::database::local::scores::{self as db, rows};
+use crate::database::local::tracks::Grid;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
 };
@@ -6,6 +7,7 @@ use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::models::scores::{Score, ScoreSummary};
 use crate::services::catalog;
+use crate::sync::triggers::Attribution;
 
 /// The score's document, assembled from its rows. `None` only when the id
 /// names no score.
@@ -63,7 +65,7 @@ pub async fn preview_score_clips(
         &mut access,
         &services.fixtures_root,
         &services.storage,
-        &metadata.track_id,
+        Grid::of_score(&metadata.track_id, &score_id),
         &candidate,
         &clip_ids,
     )
@@ -86,7 +88,7 @@ pub async fn prepare_score_clip_preview(
         &services.fixtures_root,
         &services.storage,
         &services.controls,
-        &metadata.track_id,
+        Grid::of_score(&metadata.track_id, &score_id),
         &score,
         &clip_id,
     )
@@ -117,40 +119,37 @@ pub async fn list_scores_across_venues(
     Ok(db::list_accessible_scores_for_track(&services.db.0, &track_id).await?)
 }
 
-/// Idempotent on `request_id`: the score id is derived from it, so a replay
-/// returns the existing score instead of creating a second one.
+/// A new score on the track/venue pair, beside any the pair already has.
 pub async fn create_score(
     services: &AppServices,
-    request_id: String,
     track_id: String,
     venue_id: String,
     name: Option<String>,
 ) -> Result<Score, CommandError> {
     Ok(catalog::create_score(
         &services.db.0,
-        &request_id,
         &track_id,
         &venue_id,
         name.as_deref(),
+        Attribution::PERSON,
     )
     .await?)
 }
 
-/// Idempotent venue-membership operation. Unlike [`create_score`], a fresh
-/// request id still returns an existing score for the track/venue pair.
+/// Idempotent venue-membership operation. Unlike [`create_score`], this
+/// returns an existing score for the track/venue pair.
 pub async fn ensure_venue_score(
     services: &AppServices,
-    request_id: String,
     track_id: String,
     venue_id: String,
     name: Option<String>,
 ) -> Result<Score, CommandError> {
     Ok(catalog::ensure_venue_score(
         &services.db.0,
-        &request_id,
         &track_id,
         &venue_id,
         name.as_deref(),
+        Attribution::PERSON,
     )
     .await?)
 }
@@ -174,10 +173,9 @@ pub async fn rename_score(
 }
 
 /// Copy a score and its clips into a new score of the same song in the same
-/// venue, named `name`. Idempotent on `request_id`.
+/// venue, named `name`.
 pub async fn duplicate_score(
     services: &AppServices,
-    request_id: String,
     score_id: String,
     name: String,
 ) -> Result<Score, CommandError> {
@@ -185,7 +183,7 @@ pub async fn duplicate_score(
     if name.is_empty() {
         return Err(CommandError::Invalid("A score name cannot be empty".into()));
     }
-    Ok(catalog::duplicate_score(&services.db.0, &request_id, &score_id, name).await?)
+    Ok(catalog::duplicate_score(&services.db.0, &score_id, name).await?)
 }
 
 /// A delete is a delete: the score's clips, definitions and drafts go with it.
@@ -233,7 +231,6 @@ mod tests {
             &services,
             "create_score",
             &json!({
-                "requestId": uuid::Uuid::new_v4().to_string(),
                 "trackId": "track",
                 "venueId": venue,
                 "name": "Draft",
@@ -291,39 +288,44 @@ mod tests {
     }
 
     /// A copy is a new score of the same song and venue, with the source's
-    /// clips and the given name; the source is untouched, and a replay of the
-    /// request returns the same copy.
+    /// clips and the given name; the source is untouched. The copy's clips are rows of their own:
+    /// new ids, with the labels the source's clips have.
     #[tokio::test]
     async fn duplicate_score_copies_the_clips_under_a_new_name() {
         let (_directory, services, id) = library().await;
-        let clips = score(&[("a", &clip("A", 0.)), ("b", &clip("B", 8.))]);
+        let mut labelled = clip("A", 0.);
+        labelled.label = Some("intro".into());
+        let clips = score(&[("a", &labelled), ("b", &clip("B", 8.))]);
         edit(&services, &id, &luma_patterns::Score::default(), &clips).await;
 
         let args = json!({
-            "requestId": uuid::Uuid::new_v4().to_string(),
             "scoreId": id,
             "name": "Draft copy",
         });
-        let duplicate = || dispatch(&services, "duplicate_score", &args);
-        let copy = duplicate().await.unwrap();
+        let copy = dispatch(&services, "duplicate_score", &args).await.unwrap();
         let copy_id = copy["id"].as_str().unwrap().to_owned();
         assert_ne!(copy_id, id);
         assert_eq!(copy["name"], "Draft copy");
         assert_eq!(copy["trackId"], "track");
-        assert_eq!(stored(&services, &copy_id).await, clips);
+        let copied = stored(&services, &copy_id).await;
+        assert!(copied.clips.keys().all(|id| !clips.clips.contains_key(id)));
+        let by_start = |score: &luma_patterns::Score| {
+            let mut clips: Vec<_> = score.clips.values().cloned().collect();
+            clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+            clips
+        };
+        assert_eq!(by_start(&copied), by_start(&clips));
         assert_eq!(stored(&services, &id).await, clips);
 
         // An edit to the copy leaves the source alone: the clips are its own.
         edit(
             &services,
             &copy_id,
-            &clips,
-            &score(&[("a", &clip("A", 0.))]),
+            &copied,
+            &luma_patterns::Score::default(),
         )
         .await;
         assert_eq!(stored(&services, &id).await, clips);
-
-        assert_eq!(duplicate().await.unwrap()["id"], copy_id.as_str());
     }
 
     fn clip(name: &str, start: f64) -> luma_patterns::Clip {
@@ -375,8 +377,8 @@ mod tests {
     async fn previews_come_back_per_clip_and_one_failure_stays_its_own() {
         let (_directory, services, id) = library().await;
         sqlx::query(
-            "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
-             VALUES ('track', '[0.0,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5,8.0,8.5,9.0,9.5,10.0]', '[0.0,2.0,4.0,6.0,8.0,10.0]', 120.0, 4)",
+            "INSERT INTO track_beats (id, track_id, beats_json, downbeats_json, bpm, beats_per_bar)
+             VALUES ('grid', 'track', '[0.0,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5,8.0,8.5,9.0,9.5,10.0]', '[0.0,2.0,4.0,6.0,8.0,10.0]', 120.0, 4)",
         )
         .execute(&services.db.0)
         .await

@@ -81,6 +81,10 @@ before the Python environment was last installed, and those other versions of
 each preprocessor recorded, so a repaired environment or a bumped `version`
 retries every track the old one failed on, with a fresh backoff.
 
+A person can ask for one track again (`scheduler::rerun_track`, the song
+menu's Reprocess): every step reruns, complete or in backoff, and each
+artifact stays as it was until its step rewrites it.
+
 ## Scheduler
 
 See [`scheduler.rs`](scheduler.rs). Two-tier parallelism:
@@ -146,14 +150,16 @@ reproduction of Yeung et al., Sony AI 2025). Five steps:
    ```
 
 2. **Add the migration.** Add a new file in `migrations/`. A new artifact table
-   follows the row model. Use `track_drum_onsets` as the model:
+   follows the row model, as a derived table: a cache that is deleted for
+   real and rebuilt from the audio
+   ([`docs/design/data-layer.md`](../../../docs/design/data-layer.md)). Use `track_drum_onsets` as the model:
    `track_id TEXT PRIMARY KEY`, `uid`, the JSON column (`onsets_json`),
    `processor_version`, `created_at`, `updated_at`, the `updated_at` trigger,
    and a generated `id` column (`GENERATED ALWAYS AS (track_id) VIRTUAL`) with a
    unique index. Do not add `synced_at`, `origin`, `version` or sync triggers.
    The upload triggers are TEMP triggers that
    `backend/src/sync/triggers.rs` generates from `backend/src/sync/schema.rs`.
-   If the table syncs, add it to `schema.rs`. Also add a Supabase migration
+   If the table syncs, add it to `schema.rs` as `Derived`. Also add a Supabase migration
    with the table, its row-level security policies and the `powersync`
    publication. A local-only table needs neither.
 
@@ -214,6 +220,10 @@ bars from `workers::track_bar_boundaries` — consecutive downbeat pairs plus a
 synthetic final bar. That shared definition is what lets the agent index
 `features.bars` and `features.genres` with the same integer, so keep new
 bar-indexed nodes on it rather than re-deriving boundaries.
+
+A track keeps every beat grid it has had. A `track_beats` row is written once:
+each analysis inserts a new one, and the track's current grid is its newest
+row.
 
 Both also declare `first_bar`: where their row records bar 0 of the grid it
 was computed against. A row whose bar 0 is no longer the current

@@ -11,7 +11,7 @@ members = [
 
 [package]
 name = "luma"
-version = "0.7.0"
+version = "0.8.0"
 description = "Node-based lighting control software for live performance"
 authors = ["Julian Allchin <julian@allchin.com>"]
 license = "PolyForm-Shield-1.0.0"
@@ -62,7 +62,6 @@ uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 realfft = "3.5"
 rayon = "1.10"
-symphonia = { version = "0.5", features = ["mp3", "flac", "wav", "aac", "ogg", "vorbis"] }
 cpal = "0.15"
 tokio = { version = "1", features = ["macros", "sync", "time", "rt", "signal", "process", "io-util", "net"] }
 async-trait = "0.1"

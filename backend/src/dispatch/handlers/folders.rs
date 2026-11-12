@@ -126,7 +126,6 @@ mod tests {
                 services,
                 "create_score",
                 json!({
-                    "requestId": uuid::Uuid::new_v4().to_string(),
                     "trackId": track,
                     "venueId": venue,
                     "name": null,
@@ -161,6 +160,55 @@ mod tests {
             .fetch_one(&services.db.0)
             .await
             .unwrap()
+    }
+
+    /// A link is found by its folder and its song, never by an id spelled
+    /// from them: linking again keeps the row, and a link taken out and put
+    /// back is a new row.
+    #[tokio::test]
+    async fn a_link_is_found_by_its_folder_and_song() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = services(directory.path()).await;
+        let venue = venue_with_songs(&services).await;
+        let folder = call(
+            &services,
+            "create_folder",
+            json!({ "venueId": venue, "name": "Peak" }),
+        )
+        .await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let link = |linked: bool| {
+            let (services, folder) = (&services, folder.clone());
+            async move {
+                call(
+                    services,
+                    "set_folder_track",
+                    json!({ "folderId": folder, "trackId": "song-a", "linked": linked }),
+                )
+                .await;
+                sqlx::query_scalar::<_, String>(
+                    "SELECT id FROM folder_tracks WHERE folder_id = ? AND track_id = 'song-a'",
+                )
+                .bind(&folder)
+                .fetch_all(&services.db.0)
+                .await
+                .unwrap()
+            }
+        };
+
+        let first = link(true).await;
+        assert_eq!(first.len(), 1);
+        assert!(
+            !first[0].contains(&folder) && !first[0].contains("song-a"),
+            "the link's id names neither end"
+        );
+        assert_eq!(link(true).await, first, "linking twice is one link");
+        assert!(link(false).await.is_empty());
+        let again = link(true).await;
+        assert_eq!(again.len(), 1);
+        assert_ne!(again, first, "an id is never used twice");
     }
 
     #[tokio::test]

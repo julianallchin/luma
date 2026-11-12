@@ -93,7 +93,7 @@ pub async fn delete(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64
 pub async fn layout(access: &mut impl AuthorizedVenue) -> Result<Option<PerformLayout>, String> {
     let venue_id = access.venue_id().to_owned();
     let stored: Option<String> =
-        sqlx::query_scalar("SELECT layout_json FROM perform_layouts WHERE id = ?")
+        sqlx::query_scalar("SELECT layout_json FROM perform_layouts WHERE venue_id = ?")
             .bind(&venue_id)
             .fetch_optional(&mut *access.connection())
             .await
@@ -101,7 +101,8 @@ pub async fn layout(access: &mut impl AuthorizedVenue) -> Result<Option<PerformL
     stored.as_deref().map(from_json).transpose()
 }
 
-/// Replace the venue's layout.
+/// Replace the venue's layout. A venue has one, found by its venue: the first
+/// save makes the row, under its own id, and every later one changes it.
 pub async fn save_layout(
     access: &mut VenueAccess<'_, Write>,
     layout: &PerformLayout,
@@ -109,11 +110,12 @@ pub async fn save_layout(
     let venue_id = access.venue_id().to_owned();
     let uid = access.principal().to_owned();
     sqlx::query(
-        "INSERT INTO perform_layouts (id, uid, venue_id, layout_json) VALUES (?1, ?2, ?1, ?3)
-         ON CONFLICT (id) DO UPDATE SET layout_json = excluded.layout_json",
+        "INSERT INTO perform_layouts (id, uid, venue_id, layout_json) VALUES (?, ?, ?, ?)
+         ON CONFLICT (venue_id) DO UPDATE SET layout_json = excluded.layout_json",
     )
-    .bind(&venue_id)
+    .bind(uuid::Uuid::new_v4().to_string())
     .bind(uid)
+    .bind(&venue_id)
     .bind(json(layout)?)
     .execute(&mut *access.connection())
     .await

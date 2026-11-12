@@ -25,6 +25,10 @@ pub struct SyncStatus {
     pub caught_up: bool,
     /// Rows waiting in the upload queue.
     pub pending_uploads: usize,
+    /// The server's data is in a format newer than this build reads. Sync
+    /// has stopped, and changes made now are refused, until the app updates.
+    #[serde(default)]
+    pub update_required: bool,
     /// Local changes the server refused that nobody has dismissed yet,
     /// newest first. The server's version of each row has replaced them.
     pub refused: Vec<SyncRefusal>,
@@ -43,7 +47,9 @@ pub struct SyncRefusal {
     /// `PUT`, `PATCH` or `DELETE`.
     pub op: String,
     /// The HTTP status. A 2xx is a write the server's policies filtered to no
-    /// row at all: PostgREST answers success and changes nothing.
+    /// row at all: PostgREST answers success and changes nothing. Zero is a
+    /// change that was never sent: it was still waiting to upload when an
+    /// update changed the data format.
     pub status: u16,
     /// When it was refused, RFC 3339.
     pub at: String,
@@ -64,9 +70,9 @@ impl SyncRefusal {
     }
 }
 
-/// What the status bar says about sync. Four states, in this order of
-/// precedence: a refused change outranks being offline, which outranks work
-/// in flight.
+/// What the status bar says about sync. Five states, in this order of
+/// precedence: a build too old to sync outranks a refused change, which
+/// outranks being offline, which outranks work in flight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyncSummary {
     UpToDate,
@@ -80,6 +86,9 @@ pub enum SyncSummary {
     NotSaved {
         count: usize,
     },
+    /// This build is behind the server's data and cannot sync until it
+    /// updates. The changes it makes meanwhile are refused.
+    UpdateRequired,
 }
 
 impl SyncStatus {
@@ -103,7 +112,9 @@ impl SyncStatus {
 
     #[must_use]
     pub fn summary(&self) -> SyncSummary {
-        if !self.refused.is_empty() {
+        if self.update_required {
+            SyncSummary::UpdateRequired
+        } else if !self.refused.is_empty() {
             SyncSummary::NotSaved {
                 count: self.refused.len(),
             }
@@ -131,6 +142,7 @@ impl std::fmt::Display for SyncSummary {
             Self::Offline { pending: 0 } => f.write_str("Offline"),
             Self::Offline { pending } => write!(f, "Offline · {pending} pending"),
             Self::NotSaved { count } => write!(f, "{count} not saved"),
+            Self::UpdateRequired => f.write_str("Update required"),
         }
     }
 }
@@ -177,6 +189,10 @@ mod tests {
             ..SyncStatus::default()
         };
         assert_eq!(status.summary().to_string(), "2 not saved");
+        // A build too old to sync is why they were refused.
+        status.update_required = true;
+        assert_eq!(status.summary(), SyncSummary::UpdateRequired);
+        status.update_required = false;
         status.refused.clear();
         assert_eq!(status.summary().to_string(), "Offline · 3 pending");
         status.connected = true;

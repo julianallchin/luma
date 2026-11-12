@@ -110,9 +110,9 @@ mod tests {
         ];
         let settled = settle(&clips, &["placed".into()], &[]).unwrap();
         let mut spans = spans(&settled);
-        // The far piece of the split clip is a copy with a new id.
+        // The far piece of the split clip is a copy with an id of its own.
         let tail = spans.iter().position(|s| s.1 == 6.).unwrap();
-        assert!(spans[tail].0.starts_with("new:"));
+        assert!(clips.iter().all(|clip| clip.id != spans[tail].0));
         spans.remove(tail);
         assert_eq!(
             spans,

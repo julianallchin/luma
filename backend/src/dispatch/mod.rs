@@ -223,7 +223,7 @@ commands! {
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
 
     tracks::list_tracks_enriched(venue_id: Option<String>) -> Vec<TrackBrowserRow>;
-    tracks::get_track_beats(track_id: String) -> Option<BeatGrid>;
+    tracks::get_track_beats(track_id: String, score_id: Option<String>) -> Option<BeatGrid>;
     tracks::get_track_beat_validation(track_id: String) -> Option<BeatValidation>;
     tracks::set_track_beat_validation(track_id: String, grid: BeatGrid, verdict: BeatValidationVerdict, reason: Option<BeatValidationReason>) -> ();
 
@@ -235,21 +235,11 @@ commands! {
 
     scores::list_scores_for_track(track_id: String, venue_id: String) -> Vec<ScoreSummary>;
     scores::list_scores_across_venues(track_id: String) -> Vec<ScoreSummary>;
-    scores::create_score(
-        request_id: String,
-        track_id: String,
-        venue_id: String,
-        name: Option<String>,
-    ) -> Score;
-    scores::ensure_venue_score(
-        request_id: String,
-        track_id: String,
-        venue_id: String,
-        name: Option<String>,
-    ) -> Score;
+    scores::create_score(track_id: String, venue_id: String, name: Option<String>) -> Score;
+    scores::ensure_venue_score(track_id: String, venue_id: String, name: Option<String>) -> Score;
     scores::delete_score(id: String) -> ();
     scores::rename_score(score_id: String, name: String) -> ();
-    scores::duplicate_score(request_id: String, score_id: String, name: String) -> Score;
+    scores::duplicate_score(score_id: String, name: String) -> Score;
     scores::get_score_document(score_id: String) -> Option<luma_patterns::Score>;
     scores::edit_score_document(score_id: String, edit: luma_patterns::ScoreEdit) -> ();
     scores::preview_score_clips(score_id: String, clip_ids: Vec<String>, score: Option<luma_patterns::Score>) -> Vec<crate::services::graph_scores::ClipStrip>;
@@ -424,10 +414,13 @@ commands! {
     ) -> TrackImportResult;
 
     tracks::import_tracks(file_paths: Vec<String>) -> TrackImportResult;
+    tracks::reprocess_track(track_id: String) -> ();
 
     auth::current_account() -> Option<crate::database::local::auth::AuthAccount>;
     auth::send_login_code(email: String) -> ();
     auth::verify_login_code(email: String, code: String) -> String;
+    auth::terms_accepted() -> bool;
+    auth::accept_terms(version: i32) -> ();
     auth::get_session_item(key: String) -> Option<String>;
     auth::set_session_item(key: String, value: String) -> ();
     auth::remove_session_item(key: String) -> ();

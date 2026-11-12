@@ -12,6 +12,11 @@ pub struct Score {
     #[sqlx(rename = "venue_id")]
     pub venue_id: String,
     pub name: Option<String>,
+    /// The beat grid (`track_beats.id`) the score was written against: its
+    /// clips are in that grid's beats. `None` for a score made before its
+    /// track was analysed, which reads the track's current grid.
+    #[sqlx(rename = "grid_id")]
+    pub grid_id: Option<String>,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
     #[sqlx(rename = "updated_at")]

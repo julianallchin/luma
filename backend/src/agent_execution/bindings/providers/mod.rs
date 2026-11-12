@@ -100,6 +100,13 @@ impl ProviderCtx<'_> {
     pub fn track_id(&self) -> Option<&str> {
         self.scope.track_id.as_deref()
     }
+
+    /// The beat grid every binding reads for `track_id`: the one the scope's
+    /// score was written against, so the agent counts the bars its clips sit
+    /// on, or with no score the track's current grid.
+    pub fn grid<'a>(&'a self, track_id: &'a str) -> crate::database::local::tracks::Grid<'a> {
+        crate::database::local::tracks::Grid::in_scope(track_id, self.scope.score_id.as_deref())
+    }
 }
 
 /// Assemble every branch of the `luma` namespace for one scope.

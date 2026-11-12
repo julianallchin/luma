@@ -34,6 +34,7 @@ use sqlx::SqlitePool;
 use tokio::sync::{oneshot, watch};
 
 use crate::models::perform::{LayoutPage, PerformPattern};
+use crate::sync::triggers::Attribution;
 
 /// Where OSC is heard: every interface, so devices on the network reach it.
 pub const OSC_ADDRESS: &str = "0.0.0.0:8000";
@@ -482,7 +483,7 @@ impl InputHub {
         control: &str,
         mode: Mode,
         controller: Option<&str>,
-        actor: Option<&str>,
+        attribution: Attribution<'_>,
     ) -> Result<Binding, String> {
         let venue_id = self.venue()?;
         let controller = match controller {
@@ -510,7 +511,7 @@ impl InputHub {
         let binding = store::learned(
             &self.pool,
             &venue_id,
-            actor,
+            attribution,
             controller.as_ref(),
             event.port.as_deref(),
             control,
@@ -533,9 +534,9 @@ impl InputHub {
         id: &str,
         mode: Mode,
         invert: bool,
-        actor: Option<&str>,
+        attribution: Attribution<'_>,
     ) -> Result<(), String> {
-        store::update_binding(&self.pool, venue_id, actor, id, mode, invert).await?;
+        store::update_binding(&self.pool, venue_id, attribution, id, mode, invert).await?;
         self.reload(venue_id).await
     }
 
@@ -543,9 +544,9 @@ impl InputHub {
         &self,
         venue_id: &str,
         id: &str,
-        actor: Option<&str>,
+        attribution: Attribution<'_>,
     ) -> Result<(), String> {
-        store::unbind(&self.pool, venue_id, actor, id).await?;
+        store::unbind(&self.pool, venue_id, attribution, id).await?;
         self.reload(venue_id).await
     }
 
@@ -555,11 +556,11 @@ impl InputHub {
         &self,
         name: &str,
         port: &str,
-        actor: Option<&str>,
+        attribution: Attribution<'_>,
     ) -> Result<Controller, String> {
         let venue_id = self.venue()?;
         let controller =
-            store::add_controller(&self.pool, &venue_id, actor, &named(name)?, port).await?;
+            store::add_controller(&self.pool, &venue_id, attribution, &named(name)?, port).await?;
         self.reload(&venue_id).await?;
         Ok(controller)
     }
@@ -569,7 +570,7 @@ impl InputHub {
     pub(crate) async fn change_controller(
         &self,
         id: &str,
-        actor: Option<&str>,
+        attribution: Attribution<'_>,
         change: impl FnOnce(&mut Controller) -> Result<(), String>,
     ) -> Result<Controller, String> {
         let venue_id = self.venue()?;
@@ -577,7 +578,7 @@ impl InputHub {
         change(&mut controller)?;
         controller.name = named(&controller.name)?;
         controller.profile.check()?;
-        store::save_controller(&self.pool, &venue_id, actor, &controller).await?;
+        store::save_controller(&self.pool, &venue_id, attribution, &controller).await?;
         self.reload(&venue_id).await?;
         Ok(controller)
     }
@@ -586,10 +587,10 @@ impl InputHub {
     pub(crate) async fn remove_controller(
         &self,
         id: &str,
-        actor: Option<&str>,
+        attribution: Attribution<'_>,
     ) -> Result<(), String> {
         let venue_id = self.venue()?;
-        store::remove_controller(&self.pool, &venue_id, actor, id).await?;
+        store::remove_controller(&self.pool, &venue_id, attribution, id).await?;
         self.reload(&venue_id).await
     }
 
@@ -601,7 +602,7 @@ impl InputHub {
         id: &str,
         page: &LayoutPage,
         patterns: &[PerformPattern],
-        actor: Option<&str>,
+        attribution: Attribution<'_>,
     ) -> Result<Vec<Binding>, String> {
         let venue_id = self.venue()?;
         let controller = self.controller(id)?;
@@ -618,7 +619,8 @@ impl InputHub {
             .iter()
             .map(|place| place.address.clone())
             .collect();
-        let bindings = store::remap(&self.pool, &venue_id, actor, id, &addresses, &bound).await?;
+        let bindings =
+            store::remap(&self.pool, &venue_id, attribution, id, &addresses, &bound).await?;
         self.reload(&venue_id).await?;
         Ok(bindings)
     }

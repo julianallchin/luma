@@ -47,18 +47,16 @@ impl Library {
 
     /// Create another score for a track. Multiple scores per track/venue are
     /// intentional; use [`Self::ensure_track_in_venue`] for the Add action.
-    /// `request_id` only makes a retry of this exact creation idempotent.
     pub fn create_score(
         &self,
-        request_id: &str,
         track_id: &str,
         venue_id: &str,
         name: Option<&str>,
     ) -> impl Future<Output = Result<Score, LibraryError>> + use<> {
-        let (request_id, track_id) = (request_id.to_owned(), track_id.to_owned());
-        let (venue_id, name) = (venue_id.to_owned(), name.map(str::to_owned));
+        let (track_id, venue_id) = (track_id.to_owned(), venue_id.to_owned());
+        let name = name.map(str::to_owned);
         self.call("create_score", |services| async move {
-            handlers::scores::create_score(&services, request_id, track_id, venue_id, name).await
+            handlers::scores::create_score(&services, track_id, venue_id, name).await
         })
     }
 
@@ -83,34 +81,30 @@ impl Library {
     }
 
     /// Copy a score and its clips into a new score of the same song in the
-    /// same venue, named `name`. `request_id` makes a retry idempotent.
+    /// same venue, named `name`.
     pub fn duplicate_score(
         &self,
-        request_id: &str,
         score_id: &str,
         name: &str,
     ) -> impl Future<Output = Result<Score, LibraryError>> + use<> {
-        let (request_id, score_id) = (request_id.to_owned(), score_id.to_owned());
-        let name = name.to_owned();
+        let (score_id, name) = (score_id.to_owned(), name.to_owned());
         self.call("duplicate_score", |services| async move {
-            handlers::scores::duplicate_score(&services, request_id, score_id, name).await
+            handlers::scores::duplicate_score(&services, score_id, name).await
         })
     }
 
     /// Atomically add a track to a venue. Repeated Add actions return the
-    /// existing score even when they carry different request ids.
+    /// existing score.
     pub fn ensure_track_in_venue(
         &self,
-        request_id: &str,
         track_id: &str,
         venue_id: &str,
         name: Option<&str>,
     ) -> impl Future<Output = Result<Score, LibraryError>> + use<> {
-        let (request_id, track_id) = (request_id.to_owned(), track_id.to_owned());
-        let (venue_id, name) = (venue_id.to_owned(), name.map(str::to_owned));
+        let (track_id, venue_id) = (track_id.to_owned(), venue_id.to_owned());
+        let name = name.map(str::to_owned);
         self.call("ensure_venue_score", |services| async move {
-            handlers::scores::ensure_venue_score(&services, request_id, track_id, venue_id, name)
-                .await
+            handlers::scores::ensure_venue_score(&services, track_id, venue_id, name).await
         })
     }
 
@@ -127,13 +121,13 @@ impl Library {
             .notify_waiters();
         let (score_id, track_id) = (score_id.to_owned(), track_id.to_owned());
         self.task("get_score_document", |services| async move {
-            let score = handlers::scores::get_score_document(&services, score_id)
+            let score = handlers::scores::get_score_document(&services, score_id.clone())
                 .await
                 .and_then(|score| {
                     score.ok_or_else(|| CommandError::NotFound("score does not exist".into()))
                 })
                 .map_err(refused("get_score_document"))?;
-            let beats = handlers::tracks::get_track_beats(&services, track_id)
+            let beats = handlers::tracks::get_track_beats(&services, track_id, Some(score_id))
                 .await
                 .map_err(refused("get_track_beats"))?;
             Ok(ScoreContents { score, beats })

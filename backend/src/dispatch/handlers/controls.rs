@@ -55,7 +55,6 @@ mod tests {
             &services,
             "create_score",
             &json!({
-                "requestId": uuid::Uuid::new_v4().to_string(),
                 "trackId": "track",
                 "venueId": venue,
                 "name": "Draft",

@@ -21,6 +21,7 @@ use crate::eval::context::resolve_primitive_ids;
 use crate::eval::{Arena, Scope};
 use crate::models::universe::UniverseState;
 use crate::storage::StorageRoot;
+use crate::sync::triggers::TurnAttribution;
 
 /// The score a cell may read, captured by the host from the durable thread.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -43,6 +44,13 @@ pub struct TrackEditScope {
     pub venue_id: String,
 }
 
+impl TrackScope {
+    /// The beat grid this scope's score was written against.
+    pub(crate) fn grid(&self) -> crate::database::local::tracks::Grid<'_> {
+        crate::database::local::tracks::Grid::of_score(&self.track_id, &self.score_id)
+    }
+}
+
 impl From<&TrackEditScope> for TrackScope {
     fn from(scope: &TrackEditScope) -> Self {
         Self {
@@ -54,6 +62,7 @@ impl From<&TrackEditScope> for TrackScope {
 }
 
 mod score;
+mod scores;
 
 const SAMPLES_PER_BEAT: f64 = 16.0;
 const FALLBACK_SAMPLES_PER_SECOND: f64 = 32.0;
@@ -74,8 +83,8 @@ pub struct TrackHost {
     /// The draft this thread writes into, for a subagent. `None` means the
     /// thread edits the live score.
     draft_id: Option<String>,
-    /// Who this thread's writes are attributed to: the thread's `actor`.
-    actor: Option<String>,
+    /// Who this cell's writes are attributed to and the turn they belong to.
+    attribution: TurnAttribution,
 }
 
 impl TrackHost {
@@ -89,7 +98,7 @@ impl TrackHost {
         scope: TrackScope,
         edit_scope: Option<TrackEditScope>,
         draft_id: Option<String>,
-        actor: Option<String>,
+        attribution: TurnAttribution,
     ) -> Self {
         Self {
             runtime,
@@ -101,7 +110,7 @@ impl TrackHost {
             scope,
             edit_scope,
             draft_id,
-            actor,
+            attribution,
         }
     }
 
@@ -122,7 +131,7 @@ impl TrackHost {
         }
 
         let beat_grid =
-            crate::database::local::tracks::get_track_beats(&self.pool, &self.scope.track_id)
+            crate::database::local::tracks::get_track_beats(&self.pool, self.scope.grid())
                 .await
                 .map_err(|e| {
                     HostCallError::new("internal", format!("Failed to load beat grid: {e}"))
@@ -215,6 +224,9 @@ impl HostCallHandler for TrackHost {
                     | "track.clip_check"
             ) {
                 return self.score_call(method, payload, context).await;
+            }
+            if matches!(method, "track.scores_find" | "track.scores_open") {
+                return supervise(self.scores_call(method, payload), context, limit).await;
             }
             let _ = (payload, limit);
             Err(HostCallError::new(

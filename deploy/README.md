@@ -56,6 +56,15 @@ the published stable still uses. So the release also passes the latest
 *published* stable version (`--published`): a contract runs only once the
 release it names is out.
 
+A migration that changes what synced rows mean cannot only add. It is a new
+data format: it raises `public.data_format()`, the commit raises
+`PROJECTION_VERSION` with it, and every older build is refused its writes and
+told to update ([docs/design/sync.md](../docs/design/sync.md), "Required
+updates"). It converts every row itself, since no client will, and it still
+carries the contract marker for what it removes.
+[docs/design/data-layer.md](../docs/design/data-layer.md) has the rules such
+a migration keeps.
+
 The same check refuses a file not named `<14-digit version>_<name>.sql` (the
 CLI would skip it) or sharing another's version, and a `pg_temp` function
 created without `or replace`: the push runs every pending file over one
@@ -132,6 +141,26 @@ after it. A new migration adds its line here.
   there is no local migration
 - `20261111030434_track_art_read.sql` — any time; until it runs, venue
   members cannot download a shared track's cover art
+- `20261111120000_client_format.sql` — any time; refuses nothing until a
+  later migration raises `public.data_format()`. Before any migration that
+  does: a server without it takes writes from a build of any format
+- `20261111121000_terms_acceptance.sql` — before the release whose sign-in
+  shows the terms: that client cannot record an acceptance without it, so
+  nobody new gets past the terms page. Server only; there is no local
+  migration
+- `20261111235859_profiles_private.sql` — any time; until it runs, anyone
+  holding the app's public key can list every account id and display name.
+  Server only; there is no local migration
+- `20261112120000_data_layer.sql` — the cutover to data format 2
+  ([data-layer.md](../docs/design/data-layer.md)). After
+  `20261111120000_client_format.sql`, which is what turns older builds away
+  once this raises `public.data_format()`: from then on a 0.7.0 or older
+  install neither uploads nor downloads until it updates. Its contract marker
+  names 0.7.0, so it runs in the first release after it, and that release is
+  the first build that reads format 2: the two ship together and neither
+  works without the other. Then redeploy `powersync/sync-config.yaml`, whose
+  rules name the `deleted_at` this file adds; until they are deployed a
+  deleted row stays on the devices that hold it
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an

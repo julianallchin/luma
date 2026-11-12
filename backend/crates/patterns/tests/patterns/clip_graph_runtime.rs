@@ -641,6 +641,33 @@ fn a_mirror_moves_the_heads_never_the_ruler() {
 }
 
 #[test]
+fn a_split_after_a_mirror_measures_each_span_where_it_folded_to() {
+    // Two bars either side of the centre. Mirrored and then split, each
+    // bar is its own ruler where its heads now stand, so both run 0 to 1
+    // outward from the mirror and the left bar is the right bar's image.
+    let cells: Vec<Cell> = [("l", [-4., -3., -2.]), ("r", [2., 3., 4.])]
+        .into_iter()
+        .flat_map(|(bar, us)| {
+            us.into_iter()
+                .enumerate()
+                .map(move |(h, u)| cell(format!("{bar}:{h}"), [u, 0., 3.]))
+        })
+        .collect();
+    let a = coordinates(
+        json!({
+            "mirror1": {"kind": "mirror", "inputs": {"direction": [1, 0, 0]}},
+            "split1": {"kind": "split", "inputs": {"heads": {"node": "mirror1"}}},
+            "space1": {"kind": "space", "settings": {"kind": "line"},
+                       "inputs": {"heads": {"node": "split1"}, "direction": [1, 0, 0]}},
+            "curve1": {"kind": "curve", "inputs": {"x": {"node": "space1"}}},
+            "color1": {"kind": "color", "inputs": {"brightness": {"node": "curve1"}}}}),
+        &cells,
+    );
+    let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-9);
+    assert!(close(&a, &[1., 0.5, 0., 0., 0.5, 1.]), "{a:?}");
+}
+
+#[test]
 fn radial_runs_from_the_nearest_head_to_the_farthest() {
     // Distances 1, 2 and 3 from the centre on each side.
     let cells: Vec<Cell> = [-3., -2., -1., 1., 2., 3.]

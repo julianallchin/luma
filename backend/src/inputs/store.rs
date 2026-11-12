@@ -1,6 +1,7 @@
 //! A venue's controllers (`perform_controllers`) and the bindings each
 //! holds (`control_bindings`). Both sync, like the rest of the venue.
 
+use crate::sync::triggers::Attribution;
 use sqlx::{Row, SqlitePool};
 
 use super::profile::Profile;
@@ -36,9 +37,9 @@ fn failed(what: &'static str) -> impl Fn(sqlx::Error) -> String {
 async fn write<'a>(
     pool: &'a SqlitePool,
     venue_id: &str,
-    actor: Option<&str>,
+    attribution: Attribution<'_>,
 ) -> Result<VenueAccess<'a, Write>, String> {
-    VenueAccess::<Write>::write_as(pool, VenueResource::Venue(venue_id), actor).await
+    VenueAccess::<Write>::write_as(pool, VenueResource::Venue(venue_id), attribution).await
 }
 
 /// The venue's controllers and their bindings, oldest first.
@@ -172,14 +173,14 @@ async fn upsert(
 pub(super) async fn learned(
     pool: &SqlitePool,
     venue_id: &str,
-    actor: Option<&str>,
+    attribution: Attribution<'_>,
     controller: Option<&Controller>,
     port: Option<&str>,
     control: &str,
     address: &Address,
     mode: Mode,
 ) -> Result<Binding, String> {
-    let mut access = write(pool, venue_id, actor).await?;
+    let mut access = write(pool, venue_id, attribution).await?;
     let controller_id = match controller {
         Some(controller) => {
             if let Some(port) = port.filter(|_| controller.port.is_empty()) {
@@ -213,12 +214,12 @@ pub(super) async fn learned(
 pub(super) async fn update_binding(
     pool: &SqlitePool,
     venue_id: &str,
-    actor: Option<&str>,
+    attribution: Attribution<'_>,
     id: &str,
     mode: Mode,
     invert: bool,
 ) -> Result<(), String> {
-    let mut access = write(pool, venue_id, actor).await?;
+    let mut access = write(pool, venue_id, attribution).await?;
     let done = sqlx::query(
         "UPDATE control_bindings SET mode = ?, invert = ? WHERE id = ? AND venue_id = ?",
     )
@@ -238,10 +239,10 @@ pub(super) async fn update_binding(
 pub(super) async fn unbind(
     pool: &SqlitePool,
     venue_id: &str,
-    actor: Option<&str>,
+    attribution: Attribution<'_>,
     id: &str,
 ) -> Result<(), String> {
-    let mut access = write(pool, venue_id, actor).await?;
+    let mut access = write(pool, venue_id, attribution).await?;
     deletes::delete_where(
         access.connection(),
         "control_bindings",
@@ -255,11 +256,11 @@ pub(super) async fn unbind(
 pub(super) async fn add_controller(
     pool: &SqlitePool,
     venue_id: &str,
-    actor: Option<&str>,
+    attribution: Attribution<'_>,
     name: &str,
     port: &str,
 ) -> Result<Controller, String> {
-    let mut access = write(pool, venue_id, actor).await?;
+    let mut access = write(pool, venue_id, attribution).await?;
     let controller = insert_controller(&mut access, name, port).await?;
     access.commit().await?;
     Ok(controller)
@@ -269,11 +270,11 @@ pub(super) async fn add_controller(
 pub(super) async fn save_controller(
     pool: &SqlitePool,
     venue_id: &str,
-    actor: Option<&str>,
+    attribution: Attribution<'_>,
     controller: &Controller,
 ) -> Result<(), String> {
     let profile = serde_json::to_string(&controller.profile).map_err(|error| error.to_string())?;
-    let mut access = write(pool, venue_id, actor).await?;
+    let mut access = write(pool, venue_id, attribution).await?;
     let done = sqlx::query(
         "UPDATE perform_controllers SET name = ?, port = ?, profile_json = ?
          WHERE id = ? AND venue_id = ?",
@@ -296,10 +297,10 @@ pub(super) async fn save_controller(
 pub(super) async fn remove_controller(
     pool: &SqlitePool,
     venue_id: &str,
-    actor: Option<&str>,
+    attribution: Attribution<'_>,
     id: &str,
 ) -> Result<(), String> {
-    let mut access = write(pool, venue_id, actor).await?;
+    let mut access = write(pool, venue_id, attribution).await?;
     let removed = deletes::delete_where(
         access.connection(),
         "perform_controllers",
@@ -318,12 +319,12 @@ pub(super) async fn remove_controller(
 pub(super) async fn remap(
     pool: &SqlitePool,
     venue_id: &str,
-    actor: Option<&str>,
+    attribution: Attribution<'_>,
     id: &str,
     addresses: &[Address],
     bound: &[(String, Address, Mode)],
 ) -> Result<Vec<Binding>, String> {
-    let mut access = write(pool, venue_id, actor).await?;
+    let mut access = write(pool, venue_id, attribution).await?;
     for address in addresses {
         let json = serde_json::to_string(address).map_err(|error| error.to_string())?;
         deletes::delete_where(
@@ -358,7 +359,7 @@ pub(super) async fn adopt(pool: &SqlitePool, venue_id: &str) -> Result<(), Strin
     if !kept {
         return Ok(());
     }
-    let mut access = write(pool, venue_id, None).await?;
+    let mut access = write(pool, venue_id, Attribution::PERSON).await?;
     let rows = sqlx::query(
         "SELECT control, address_json, mode, invert FROM control_bindings_unsynced
          WHERE venue_id = ? ORDER BY created_at, id",

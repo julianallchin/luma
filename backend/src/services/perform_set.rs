@@ -22,6 +22,7 @@ use crate::database::local::venue_access::{
 use crate::error::CommandError;
 use crate::models::perform::{CellContent, PerformLayout, PerformPattern};
 use crate::perform::PerformSession;
+use crate::sync::triggers::Attribution;
 
 /// A venue's patterns, the top of the set first, and its layout.
 #[derive(Clone, Debug, PartialEq)]
@@ -160,9 +161,10 @@ pub struct PerformSet<'a> {
     pool: &'a SqlitePool,
     session: &'a PerformSession,
     venue_id: &'a str,
-    /// Who the change is attributed to: a model or an MCP client. `None` is
-    /// the person.
-    actor: Option<&'a str>,
+    /// Who the change is attributed to and what it belongs to: a model's
+    /// turn or an MCP client's session. The person, until
+    /// [`Self::acting_as`] says otherwise.
+    attribution: Attribution<'a>,
 }
 
 impl<'a> PerformSet<'a> {
@@ -171,13 +173,16 @@ impl<'a> PerformSet<'a> {
             pool,
             session,
             venue_id,
-            actor: None,
+            attribution: Attribution::PERSON,
         }
     }
 
     #[must_use]
-    pub fn acting_as(self, actor: Option<&'a str>) -> Self {
-        Self { actor, ..self }
+    pub fn acting_as(self, attribution: Attribution<'a>) -> Self {
+        Self {
+            attribution,
+            ..self
+        }
     }
 
     /// The set as stored; see [`read`].
@@ -197,7 +202,7 @@ impl<'a> PerformSet<'a> {
         let mut access = VenueAccess::<Write>::write_as(
             self.pool,
             VenueResource::Venue(self.venue_id),
-            self.actor,
+            self.attribution,
         )
         .await?;
         let patterns = db::list(&mut access).await?;

@@ -30,7 +30,7 @@ const CHILDREN: &[(&str, &[(&str, &str)])] = &[
         "fixtures",
         &[
             ("fixture_group_members", "fixture_id"),
-            ("laser_limits", "id"),
+            ("laser_limits", "fixture_id"),
         ],
     ),
     ("fixture_groups", &[("fixture_group_members", "group_id")]),

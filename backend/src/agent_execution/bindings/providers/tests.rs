@@ -153,8 +153,9 @@ impl Fixture {
         .unwrap();
 
         sqlx::query(
-            "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
-             VALUES (?, '[0.5,1.0,1.5,2.0]', '[0.5,2.5]', 128.0, 4)",
+            "INSERT INTO track_beats
+                (id, track_id, beats_json, downbeats_json, bpm, beats_per_bar)
+             VALUES (lower(hex(randomblob(16))), ?, '[0.5,1.0,1.5,2.0]', '[0.5,2.5]', 128.0, 4)",
         )
         .bind(TRACK_ID)
         .execute(&self.pool)
@@ -309,7 +310,7 @@ impl Fixture {
             .execute(&self.pool)
             .await
             .unwrap();
-        let root = crate::venue_graph::root_id(&self.venue_id);
+        let root = uuid::Uuid::new_v4().to_string();
         self.seed_node(&root, "venue", None, None, None, &[]).await;
         for (i, id) in ["fix-a", "fix-b"].iter().enumerate() {
             sqlx::query(
@@ -404,9 +405,10 @@ impl Fixture {
         .unwrap();
         for (key, value) in params {
             sqlx::query(
-                "INSERT INTO venue_node_params (node_id, uid, venue_id, key, value)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO venue_node_params (id, node_id, uid, venue_id, key, value)
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
+            .bind(uuid::Uuid::new_v4().to_string())
             .bind(id)
             .bind(TEST_OWNER)
             .bind(&self.venue_id)
@@ -433,10 +435,9 @@ impl Fixture {
             "INSERT INTO clips
                 (id, uid, score_id, name, graph_json, graph, start, duration, seed,
                  selection_json, z_index, blend_mode)
-             VALUES (? || ':ann-1', ?, ?, 'Strobe', '{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}', '', 12.5, 7.5, '0',
+             VALUES ('ann-1', ?, ?, 'Strobe', '{\"version\":1,\"nodes\":{\"strobe1\":{\"kind\":\"strobe\"}}}', '', 12.5, 7.5, '0',
                      '{\"all\":true}', 3, 'add')",
         )
-        .bind(SCORE_ID)
         .bind(TEST_OWNER)
         .bind(SCORE_ID)
         .execute(&self.pool)

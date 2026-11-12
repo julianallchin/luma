@@ -658,14 +658,14 @@ class ClipEditTests(unittest.TestCase):
 
     def test_add_and_update_check_the_one_clip(self):
         edit = self.track().edit()
-        clip = edit.add_clip(color(), name="Wash", at=("1", "2"), id="wash")
+        clip = edit.add_clip(color(), name="Wash", at=("1", "2"))
         self.assertEqual(self.calls[-1][0], "track.clip_check")
         self.assertEqual(self.calls[-1][1]["clip"]["name"], "Wash")
         self.refuse = "color1.brightness: expected a number 0–1 (share) or a number curve; got a coordinate wire from time1. Example: brightness=curve(time1, \"Ramp up\")"
         with self.assertRaises(ClipError) as caught:
             edit.update_clip(clip, graph=color(brightness=time()))
-        self.assertTrue(str(caught.exception).startswith("clip Wash (wash): color1.brightness"))
-        self.assertEqual(edit.candidate["clips"]["wash"]["graph"], color().json())
+        self.assertTrue(str(caught.exception).startswith(f"clip Wash ({clip.id}): color1.brightness"))
+        self.assertEqual(edit.candidate["clips"][clip.id]["graph"], color().json())
         self.refuse = None
         updated = edit.update_clip(clip, name="Glow", graph=color(alpha=0.5), blend="add")
         self.assertEqual((updated.name, updated.blend), ("Glow", "add"))
@@ -676,9 +676,10 @@ class ClipEditTests(unittest.TestCase):
         self.refuse = ("time1.every: expected a beat on the grid (a multiple of 1/32 or 1/24); "
                        "got 0.1. Example: every=3/32")
         with self.assertRaises(ClipError) as caught:
-            edit.add_clip(color(brightness=curve(time(every=0.1), "Drop")), name="Pulse", at=("1", "2"), id="pulse")
-        self.assertEqual(str(caught.exception), f"clip Pulse (pulse): {self.refuse}")
-        self.assertNotIn("pulse", edit.candidate["clips"])
+            edit.add_clip(color(brightness=curve(time(every=0.1), "Drop")), name="Pulse", at=("1", "2"))
+        id = self.calls[-1][1]["id"]
+        self.assertEqual(str(caught.exception), f"clip Pulse ({id}): {self.refuse}")
+        self.assertEqual(edit.candidate["clips"], {})
 
     def test_clips_read_back_with_source(self):
         track = self.track()

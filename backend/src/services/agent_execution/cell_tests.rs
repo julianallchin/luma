@@ -161,8 +161,9 @@ impl Fixture {
         .unwrap();
 
         sqlx::query(
-            "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
-             VALUES (?, ?, '[0.5,2.5]', 120.0, 4)",
+            "INSERT INTO track_beats
+                (id, track_id, beats_json, downbeats_json, bpm, beats_per_bar)
+             VALUES (lower(hex(randomblob(16))), ?, ?, '[0.5,2.5]', 120.0, 4)",
         )
         .bind(TRACK_ID)
         .bind(json!(BEATS).to_string())
@@ -189,8 +190,7 @@ impl Fixture {
         )
         .unwrap();
 
-        seed_venue(&self.pool, &self.venue_id, "Basement").await;
-        let root = crate::venue_graph::root_id(&self.venue_id);
+        let root = seed_venue(&self.pool, &self.venue_id, "Basement").await;
         for (i, id) in ["fix-a", "fix-b"].iter().enumerate() {
             sqlx::query(
                 "INSERT INTO fixtures (id, venue_id, universe, address, num_channels,
@@ -220,8 +220,10 @@ impl Fixture {
             .unwrap();
             for (key, value) in [("u", i as f64), ("v", 0.0), ("trim", 2.0)] {
                 sqlx::query(
-                    "INSERT INTO venue_node_params (node_id, venue_id, key, value) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO venue_node_params (id, node_id, venue_id, key, value)
+                     VALUES (?, ?, ?, ?, ?)",
                 )
+                .bind(uuid::Uuid::new_v4().to_string())
                 .bind(id)
                 .bind(&self.venue_id)
                 .bind(key)
@@ -458,14 +460,33 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
     expect_ok(&out, "use helper");
     assert_eq!(out.repr.as_deref(), Some("[0.5, 0.5, 0.5]"));
 
-    // §22.5 — the analysis changes underneath the conversation. The next cell
-    // sees the new beats; the helper and `kicks` survive.
-    sqlx::query("UPDATE track_beats SET beats_json = ? WHERE track_id = ?")
-        .bind(json!([0.0, 2.0, 4.0]).to_string())
-        .bind(TRACK_ID)
-        .execute(&f.pool)
-        .await
-        .unwrap();
+    // §22.5 — the score moves to a newer grid underneath the conversation.
+    // The next cell sees the new beats; the helper and `kicks` survive.
+    let reanalysed = crate::models::beat_grid::BeatGrid {
+        beats: vec![0.0, 2.0, 4.0],
+        downbeats: vec![0.5, 2.5],
+        bpm: 120.0,
+        downbeat_offset: 0.5,
+        beats_per_bar: 4,
+    };
+    crate::database::local::tracks::record_track_beats(
+        &mut *f.pool.acquire().await.unwrap(),
+        TRACK_ID,
+        &reanalysed,
+        1,
+    )
+    .await
+    .unwrap();
+    // Reanalysis alone leaves a score on the grid it was written against.
+    sqlx::query(
+        "UPDATE scores SET grid_id = (SELECT id FROM track_beats WHERE track_id = ?1
+                                      ORDER BY julianday(created_at) DESC, rowid DESC LIMIT 1)
+         WHERE track_id = ?1",
+    )
+    .bind(TRACK_ID)
+    .execute(&f.pool)
+    .await
+    .unwrap();
     let out = f
         .run(
             &thread,
@@ -931,6 +952,26 @@ legs = luma.venue.nodes(label="*leg")
     assert_eq!(
         out.repr.as_deref(),
         Some("(0, True, True, True, True)"),
+        "{}",
+        out.stdout
+    );
+
+    // A group the agent made can be taken away again, and only that one goes.
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            "v = luma.venue\n\
+             before = v.groups().names()\n\
+             v.group('scratch', [])\n\
+             said = v.remove_group('scratch')\n\
+             (said, v.groups().names() == before)",
+        )
+        .await;
+    expect_ok(&out, "remove a group");
+    assert_eq!(
+        out.repr.as_deref(),
+        Some("('removed group scratch', True)"),
         "{}",
         out.stdout
     );
@@ -1628,8 +1669,10 @@ assert row.ok
     f.service.shutdown_all();
 }
 
-/// The owner's venue and its root, as `create_venue` writes them.
-async fn seed_venue(pool: &sqlx::SqlitePool, venue_id: &str, name: &str) {
+/// The owner's venue and its root, as `create_venue` writes them. Answers
+/// the root's id.
+async fn seed_venue(pool: &sqlx::SqlitePool, venue_id: &str, name: &str) -> String {
+    let root = uuid::Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, 'owner', ?)")
         .bind(venue_id)
         .bind(name)
@@ -1637,9 +1680,111 @@ async fn seed_venue(pool: &sqlx::SqlitePool, venue_id: &str, name: &str) {
         .await
         .unwrap();
     sqlx::query("INSERT INTO venue_nodes (id, venue_id, kind) VALUES (?, ?, 'venue')")
-        .bind(crate::venue_graph::root_id(venue_id))
+        .bind(&root)
         .bind(venue_id)
         .execute(pool)
         .await
         .unwrap();
+    root
+}
+
+/// `luma.scores` reads the user's other scores and nobody else's: one of
+/// their own opens with its looks and its rig, and a score someone else made
+/// in the same venue is neither listed nor opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_track_thread_reads_the_users_other_scores_and_only_theirs() {
+    use crate::database::local::scores::rows;
+    let Some(f) = Fixture::new("other scores").await else {
+        return;
+    };
+    let thread = f.editable_thread().await;
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &thread,
+        AppendAgentThreadMessagesInput {
+            operation_id: session_turn(&thread),
+            expected_head_message_id: None,
+            messages: vec![NewAgentThreadMessage {
+                id: Some(session_turn(&thread)),
+                role: "session".into(),
+                parts: json!([{ "type": "text", "text": "Session opened." }]),
+            }],
+        },
+        "owner",
+    )
+    .await
+    .expect("open the thread's session");
+    let clip = |name: &str, start: f64| {
+        json!({
+            "name": name, "start": start, "duration": 1.0, "seed": 1,
+            "selection": {"all": true}, "blend_mode": "add",
+            "graph": {"version": 3, "nodes": {"color1": {"kind": "color"}}},
+        })
+    };
+    // A clip id names one row in the library, so each score gets its own.
+    let score = || {
+        let clips: serde_json::Map<String, serde_json::Value> = [
+            clip("Snare 1.2", 1.0),
+            clip("Snare 2.2", 5.0),
+            clip("Floor", 0.0),
+        ]
+        .into_iter()
+        .map(|clip| (uuid::Uuid::new_v4().to_string(), clip))
+        .collect();
+        serde_json::from_value::<luma_patterns::Score>(json!({ "clips": clips })).unwrap()
+    };
+    let mut connection = f.pool.acquire().await.unwrap();
+    for (id, owner, name) in [
+        ("mine", "owner", "Fantastic"),
+        ("theirs", "someone-else", "Secret"),
+    ] {
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(owner)
+        .bind(TRACK_ID)
+        .bind(&f.venue_id)
+        .bind(name)
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+        rows::save_score(&mut connection, id, &score())
+            .await
+            .unwrap();
+    }
+    drop(connection);
+
+    let mut scope = f.scope();
+    scope.score_id = Some(SCORE_ID.into());
+    let out = f
+        .run_scoped(
+            &thread,
+            r#"
+from luma_exec.host_errors import LumaHostCallError
+found = luma.scores.find(track=luma.track.id)
+assert [s.name for s in found] == ["Fantastic"], repr(found)
+assert [s.name for s in luma.scores.find("fantas")] == ["Fantastic"]
+assert len(luma.scores.find("no such show")) == 0
+ref = luma.scores.open(found[0])
+assert ref.same_track and len(ref.clips) == 3
+looks = ref.looks()
+assert "Snare: 2x color add, 1 beats, on all" in looks, looks
+assert "all: the whole rig: Floor 1x, Snare 2x" in ref.roles(), ref.roles()
+assert ref.look("Snare").at == ("1.2.1", "1.3.1"), ref.look("Snare").at
+assert ref.venue.name and isinstance(ref.venue.groups(), tuple)
+try:
+    luma.scores.open("theirs")
+    raise AssertionError("another person's score opened")
+except LumaHostCallError as error:
+    assert "only your own" in str(error), str(error)
+print("other scores passed")
+"#,
+            scope,
+            Some(session_turn(&thread)),
+            &|_| {},
+        )
+        .await;
+    expect_ok(&out, "other scores");
+    assert!(out.stdout.contains("other scores passed"), "{out:?}");
 }

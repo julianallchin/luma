@@ -342,13 +342,20 @@ struct Clip {
 }
 
 impl Clip {
-    /// A copy of this clip at a new span, under a fresh local id.
+    /// A copy of this clip at a new span. It is a clip of its own: a new id,
+    /// which is the row's id once saved, and no label, as a label names one
+    /// clip in its score and stays with the original.
     fn copy(&self, start: f64, end: f64, z: i64) -> Self {
+        let mut core = self.core.clone();
+        if let Some(core) = core.as_mut() {
+            core.label = None;
+        }
         Self {
-            id: format!("new:{}", uuid::Uuid::new_v4()).into(),
+            id: uuid::Uuid::new_v4().to_string().into(),
             start,
             end,
             z,
+            core,
             ..self.clone()
         }
     }

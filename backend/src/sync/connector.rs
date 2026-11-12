@@ -5,9 +5,18 @@
 //! row-level security is the only authorization. Downloads do not come through
 //! here: the SDK streams them and applies the statements in `schema.rs`.
 //!
-//! An entry an agent wrote carries its actor as metadata (see `triggers.rs`),
-//! and the request carries it as [`ACTOR_HEADER`] for the server's history
-//! trigger. A request without it is the signed-in person's.
+//! An attributed entry carries who wrote it and what it belongs to as
+//! metadata (see `triggers.rs`), and the request carries each part as one of
+//! [`ATTRIBUTION_HEADERS`] for the server's history trigger. A request without
+//! them is the signed-in person's. Every request names its change group: the
+//! entry's own, or one made for the local transaction it was written in, so
+//! what was written together is recorded together.
+//!
+//! The server never deletes a source row (docs/design/data-layer.md), so a
+//! queued delete of one uploads as an update that sets `deleted_at`, and every
+//! upsert of one sends `deleted_at: null`: inserting a row under the id of a
+//! flagged one is how it comes back. A derived or scratch row is deleted for
+//! real.
 //!
 //! A refusal is never silent. An upsert the policies refuse is a 403, but an
 //! update or a delete they refuse is filtered: PostgREST answers 204 and
@@ -15,7 +24,17 @@
 //! count of zero is a refusal like any other — recorded in `sync_rejections`,
 //! taken off the queue, and replaced by the server's version of the row on the
 //! next download.
+//!
+//! Every request says which data format this build reads, in
+//! [`FORMAT_HEADER`]. A server whose data has moved past it refuses the write
+//! with a 426, and before the stream opens the connector asks the server's
+//! format itself: a build behind it does not connect, because it would read
+//! the rows wrongly. Either way [`Connector`]'s `outdated` flag goes up, which
+//! the status reports as "update required". See
+//! `supabase/migrations/20261111120000_client_format.sql`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use luma_sync::powersync::sdk::{
@@ -26,9 +45,34 @@ use serde_json::{Map, Value};
 use sqlx::SqlitePool;
 
 use crate::database::local::auth;
+use crate::database::local::database::PROJECTION_VERSION;
+
+use super::schema::Kind;
+use super::supabase::FORMAT_HEADER;
 
 /// The header the history trigger reads the actor from.
 const ACTOR_HEADER: &str = "x-luma-actor";
+
+/// The header naming the changes a request's rows were made together with.
+const GROUP_HEADER: &str = "x-luma-group";
+
+/// The parts of an entry's attribution that only the entry can supply, and
+/// the header each travels in. The fourth part, `group`, always travels: see
+/// [`attributed`].
+const ATTRIBUTION_HEADERS: [(&str, &str); 3] = [
+    ("actor", ACTOR_HEADER),
+    ("thread", "x-luma-thread"),
+    ("message", "x-luma-message"),
+];
+
+/// The column a source row's delete sets, and an upsert of one clears.
+const FLAG: &str = "deleted_at";
+
+/// Whether the server keeps `table`'s rows for good, flagging a deleted one
+/// instead of removing it.
+fn is_source(table: &str) -> bool {
+    super::schema::table(table).is_some_and(|table| table.kind == Kind::Source)
+}
 
 /// A connector-side failure, as an `Error` so it can be handed to
 /// [`PowerSyncError::upload_error`] — the SDK's only public constructor.
@@ -42,6 +86,9 @@ fn upload_error(message: impl Into<String>) -> PowerSyncError {
 
 /// What a refusal the server answered with success records as its body.
 const NO_ROW_CHANGED: &str = "the server changed no row";
+
+/// The status the server refuses a build behind its data format with.
+const UPDATE_REQUIRED: u16 = 426;
 
 /// What to do about a failed request.
 enum Failure {
@@ -63,6 +110,15 @@ pub struct Connector {
     postgrest_url: String,
     powersync_url: String,
     anon_key: String,
+    /// The data format this build reads.
+    format: i64,
+    /// Raised when the server's data is past `format`. Shared with the
+    /// service, which reports it and stops connecting.
+    outdated: Arc<AtomicBool>,
+    /// The local transaction being uploaded and the change group made for
+    /// it. Kept so a transaction retried after a failure part-way through
+    /// sends the rest of its entries under the group the first ones went in.
+    group: Mutex<Option<(Option<i64>, String)>>,
 }
 
 /// Where the access token comes from.
@@ -83,6 +139,7 @@ impl Connector {
         db: PowerSyncDatabase,
         pool: SqlitePool,
         state_pool: SqlitePool,
+        outdated: Arc<AtomicBool>,
     ) -> Result<Self, String> {
         Ok(Self {
             db,
@@ -96,6 +153,9 @@ impl Connector {
             postgrest_url: crate::config::postgrest_url(),
             powersync_url: crate::config::powersync_url(),
             anon_key: crate::config::SUPABASE_ANON_KEY.to_owned(),
+            format: PROJECTION_VERSION,
+            outdated,
+            group: Mutex::default(),
         })
     }
 
@@ -117,7 +177,29 @@ impl Connector {
             http: reqwest::Client::new(),
             postgrest_url,
             powersync_url,
+            format: PROJECTION_VERSION,
+            outdated: Arc::default(),
+            group: Mutex::default(),
         }
+    }
+
+    /// The same connector as a build that reads data `format`, raising
+    /// `outdated` when the server is past it.
+    #[cfg(test)]
+    pub(super) fn reading(mut self, format: i64, outdated: Arc<AtomicBool>) -> Self {
+        self.format = format;
+        self.outdated = outdated;
+        self
+    }
+
+    /// Whether the server's data is past what this build reads; the flag
+    /// goes up if it is.
+    async fn behind(&self, token: &str) -> Option<i64> {
+        let server = server_format(&self.http, &self.postgrest_url, &self.anon_key, token).await?;
+        (server > self.format).then(|| {
+            self.outdated.store(true, Ordering::Release);
+            server
+        })
     }
 
     async fn token(&self) -> Result<String, PowerSyncError> {
@@ -135,37 +217,65 @@ impl Connector {
         format!("{}/{table}", self.postgrest_url.trim_end_matches('/'))
     }
 
+    /// The change group for the entries of local transaction `transaction`
+    /// that name none: the same one each time the transaction is tried.
+    fn group_of(&self, transaction: Option<i64>) -> String {
+        let mut current = self
+            .group
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &*current {
+            Some((held, group)) if *held == transaction => group.clone(),
+            _ => {
+                let group = uuid::Uuid::new_v4().to_string();
+                *current = Some((transaction, group.clone()));
+                group
+            }
+        }
+    }
+
     /// One PostgREST request for one CRUD entry.
     ///
     /// `PUT` upserts, so a retried insert and an insert that raced a download
     /// are the same request. `PATCH` and `DELETE` filter on `id`, which the
-    /// client supplies for every synced table — including the tables whose `id`
-    /// is generated locally from a natural key, because the same expression is
-    /// generated in Postgres and the value agrees.
+    /// client supplies for every synced table — including a derived table's,
+    /// whose `id` is built locally from its natural key, because Postgres
+    /// builds it with the same expression and the value agrees.
     ///
-    /// `PATCH` and `DELETE` ask for the count of rows they changed: a policy
-    /// refuses them by filtering the row out, not with an error.
-    fn request(&self, entry: &CrudEntry, token: &str) -> reqwest::RequestBuilder {
+    /// A `DELETE` of a source row is sent as an update that flags it; the
+    /// server stamps who. `PATCH` and `DELETE`, flag or not, ask for the count
+    /// of rows they changed: a policy refuses them by filtering the row out,
+    /// not with an error.
+    fn request(&self, entry: &CrudEntry, token: &str, group: &str) -> reqwest::RequestBuilder {
         let url = self.url(&entry.table);
         let filter = [("id", format!("eq.{}", entry.id))];
         let builder = match entry.update_type {
-            UpdateType::Put => return self.put_request(entry.table.as_ref(), &[entry], token),
+            UpdateType::Put => {
+                return self.put_request(entry.table.as_ref(), &[entry], token, group)
+            }
             UpdateType::Patch => self
                 .http
                 .patch(&url)
                 .query(&filter)
                 .header("Prefer", COUNTED)
                 .json(&Value::Object(body(entry))),
+            UpdateType::Delete if is_source(&entry.table) => self
+                .http
+                .patch(&url)
+                .query(&filter)
+                .header("Prefer", COUNTED)
+                .json(&serde_json::json!({ FLAG: now() })),
             UpdateType::Delete => self
                 .http
                 .delete(&url)
                 .query(&filter)
                 .header("Prefer", COUNTED),
         };
-        attributed(builder, entry)
+        attributed(builder, entry, group)
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
+            .header(FORMAT_HEADER, self.format)
     }
 
     /// One upsert for a run of rows in the same table.
@@ -175,12 +285,13 @@ impl Connector {
     /// between minutes and seconds. The header is the same as for a single
     /// row, because a batch *is* a single row repeated: `merge-duplicates`
     /// makes every one of them an upsert. Every entry in a batch has the same
-    /// actor, so the first one speaks for all.
+    /// attribution, so the first one speaks for all.
     fn put_request(
         &self,
         table: &str,
         entries: &[&CrudEntry],
         token: &str,
+        group: &str,
     ) -> reqwest::RequestBuilder {
         let url = self.url(table);
         let builder = self
@@ -188,7 +299,7 @@ impl Connector {
             .post(&url)
             .header("Prefer", "resolution=merge-duplicates,return=minimal");
         let builder = match entries.first() {
-            Some(first) => attributed(builder, first),
+            Some(first) => attributed(builder, first, group),
             None => builder,
         };
         builder
@@ -201,17 +312,23 @@ impl Connector {
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json")
+            .header(FORMAT_HEADER, self.format)
     }
 
     /// Send one batch of upserts, refreshing the token once on a 401.
-    async fn send_put_batch(&self, table: &str, entries: &[&CrudEntry]) -> Result<(), Failure> {
+    async fn send_put_batch(
+        &self,
+        table: &str,
+        entries: &[&CrudEntry],
+        group: &str,
+    ) -> Result<(), Failure> {
         let mut token = self
             .token()
             .await
             .map_err(|e| Failure::Transient(e.to_string()))?;
         for attempt in 0..2 {
             let response = self
-                .put_request(table, entries, &token)
+                .put_request(table, entries, &token, group)
                 .send()
                 .await
                 .map_err(|error| Failure::Transient(error.to_string()))?;
@@ -242,14 +359,14 @@ impl Connector {
     /// A 401 after a refresh is not transient — the session is gone, and the
     /// service will reconnect (or stop) when the auth watcher notices. Treating
     /// it as a rejection keeps the queue moving; the entry is recorded.
-    async fn send(&self, entry: &CrudEntry) -> Result<(), Failure> {
+    async fn send(&self, entry: &CrudEntry, group: &str) -> Result<(), Failure> {
         let mut token = self
             .token()
             .await
             .map_err(|e| Failure::Transient(e.to_string()))?;
         for attempt in 0..2 {
             let response = self
-                .request(entry, &token)
+                .request(entry, &token, group)
                 .send()
                 .await
                 .map_err(|error| Failure::Transient(error.to_string()))?;
@@ -278,8 +395,10 @@ impl Connector {
     /// Whether a successful `PATCH` or `DELETE` changed its row.
     ///
     /// Zero rows is a refusal, with one exception: a delete of a row that is
-    /// not there for this user any more — another device removed it, or it
-    /// was never theirs to see — already has the outcome it asked for.
+    /// not there for this user any more — its parent was deleted first and
+    /// took it along, or it was never theirs to see — already has the outcome
+    /// it asked for. That holds for a delete sent as a flag too. Flagging a
+    /// row that is already flagged counts as a change, so it never gets here.
     async fn changed(
         &self,
         entry: &CrudEntry,
@@ -340,6 +459,9 @@ impl Connector {
             entry.table,
             entry.id
         );
+        if status == UPDATE_REQUIRED {
+            self.outdated.store(true, Ordering::Release);
+        }
         let data = entry
             .data
             .as_ref()
@@ -363,21 +485,75 @@ impl Connector {
     }
 }
 
-/// Name the entry's actor on its request, when it has one.
-fn attributed(builder: reqwest::RequestBuilder, entry: &CrudEntry) -> reqwest::RequestBuilder {
-    match entry.metadata.as_deref() {
-        Some(actor) => builder.header(ACTOR_HEADER, actor),
-        None => builder,
+/// The format of the server's data, or `None` when it would not say: no
+/// network, or a server from before it had one. The write check is the
+/// server's own, so not knowing is not a reason to stay disconnected.
+pub(super) async fn server_format(
+    http: &reqwest::Client,
+    postgrest_url: &str,
+    anon_key: &str,
+    token: &str,
+) -> Option<i64> {
+    let response = http
+        .post(format!(
+            "{}/rpc/data_format",
+            postgrest_url.trim_end_matches('/')
+        ))
+        .header("apikey", anon_key)
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&Value::Object(Map::new()))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
     }
+    response.json().await.ok()
+}
+
+/// Put the entry's attribution on its request: one header per part it has,
+/// and its change group always.
+///
+/// The metadata is the object the upload triggers wrote. Anything else is an
+/// entry nobody attributed, which is the signed-in person's. An entry that
+/// names no group belongs to `group`, the one made for its local transaction:
+/// the server would otherwise group by request, and one local transaction is
+/// many requests.
+fn attributed(
+    mut builder: reqwest::RequestBuilder,
+    entry: &CrudEntry,
+    group: &str,
+) -> reqwest::RequestBuilder {
+    let attribution = match entry.metadata.as_deref().map(serde_json::from_str::<Value>) {
+        Some(Ok(Value::Object(attribution))) => attribution,
+        _ => Map::new(),
+    };
+    for (part, header) in ATTRIBUTION_HEADERS {
+        if let Some(value) = attribution.get(part).and_then(Value::as_str) {
+            builder = builder.header(header, value);
+        }
+    }
+    builder.header(
+        GROUP_HEADER,
+        attribution
+            .get("group")
+            .and_then(Value::as_str)
+            .unwrap_or(group),
+    )
+}
+
+/// The moment a delete is uploaded, as the server's `timestamptz` reads it.
+fn now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 /// Split a transaction's entries into the requests they become.
 ///
-/// A run of consecutive upserts of one table by one actor is one request;
-/// everything else is one request per entry. Consecutive is load-bearing: the
-/// queue is ordered and an update or a delete between two upserts of the same
-/// row is not something to reorder around. One actor, because the actor
-/// travels per request.
+/// A run of consecutive upserts of one table with one attribution is one
+/// request; everything else is one request per entry. Consecutive is
+/// load-bearing: the queue is ordered and an update or a delete between two
+/// upserts of the same row is not something to reorder around. One
+/// attribution, because it travels per request.
 #[must_use]
 fn batches(entries: &[CrudEntry]) -> Vec<&[CrudEntry]> {
     let mut batches = Vec::new();
@@ -432,10 +608,17 @@ fn transient(status: u16) -> bool {
 /// `id` is forced in for a `PUT`: the upsert needs the conflict target present,
 /// and a raw-table entry's `data` carries whatever the trigger wrote — which is
 /// everything, but this makes the requirement local rather than remote.
+///
+/// A `PUT` of a source row says it is live. The local row has no flag to
+/// send, and an upsert that left the column out would land on a flagged row
+/// and leave it flagged.
 fn body(entry: &CrudEntry) -> Map<String, Value> {
     let mut data = entry.data.clone().unwrap_or_default();
     if matches!(entry.update_type, UpdateType::Put) {
         data.insert("id".into(), Value::String(entry.id.clone()));
+        if is_source(&entry.table) {
+            data.insert(FLAG.into(), Value::Null);
+        }
     }
     data
 }
@@ -443,21 +626,32 @@ fn body(entry: &CrudEntry) -> Map<String, Value> {
 #[async_trait::async_trait]
 impl BackendConnector for Connector {
     async fn fetch_credentials(&self) -> Result<PowerSyncCredentials, PowerSyncError> {
+        let token = self.token().await?;
+        // Before the stream opens: a build behind the server's data would
+        // apply rows it reads wrongly.
+        if let Some(server) = self.behind(&token).await {
+            return Err(upload_error(format!(
+                "this build reads data format {} and the server holds format {server}",
+                self.format
+            )));
+        }
         Ok(PowerSyncCredentials {
             endpoint: self.powersync_url.clone(),
-            token: self.token().await?,
+            token,
         })
     }
 
     async fn upload_data(&self) -> Result<(), PowerSyncError> {
         while let Some(transaction) = self.db.next_crud_transaction().await? {
+            let group = self.group_of(transaction.id);
             for batch in batches(&transaction.crud) {
                 let entry = &batch[0];
                 let outcome = if batch.len() > 1 {
                     let entries: Vec<_> = batch.iter().collect();
-                    self.send_put_batch(entry.table.as_ref(), &entries).await
+                    self.send_put_batch(entry.table.as_ref(), &entries, &group)
+                        .await
                 } else {
-                    self.send(entry).await
+                    self.send(entry, &group).await
                 };
                 match outcome {
                     Ok(()) => {}
@@ -471,7 +665,7 @@ impl BackendConnector for Connector {
                             entry.table
                         );
                         for entry in batch {
-                            match self.send(entry).await {
+                            match self.send(entry, &group).await {
                                 Ok(()) => {}
                                 Err(Failure::Rejected { status, body }) => {
                                     self.reject(entry, status, &body).await;
@@ -514,6 +708,9 @@ mod tests {
             postgrest_url: "https://example.test/rest/v1".into(),
             powersync_url: "https://example.test".into(),
             anon_key: "anon".into(),
+            format: PROJECTION_VERSION,
+            outdated: Arc::default(),
+            group: Mutex::default(),
         }
     }
 
@@ -545,7 +742,7 @@ mod tests {
     #[tokio::test]
     async fn upserts_by_different_actors_are_separate_requests() {
         let mut model = in_table("clips", "clip-2", UpdateType::Put, Some(row()));
-        model.metadata = Some("claude-opus-5-5".into());
+        model.metadata = Some(by_the_model());
         let entries = vec![
             in_table("clips", "clip-1", UpdateType::Put, Some(row())),
             model,
@@ -555,27 +752,133 @@ mod tests {
 
         let connector = connector();
         let person = connector
-            .put_request("clips", &batches[0].iter().collect::<Vec<_>>(), "token")
+            .put_request(
+                "clips",
+                &batches[0].iter().collect::<Vec<_>>(),
+                "token",
+                GROUP,
+            )
             .build()
             .expect("request");
         assert!(person.headers().get(ACTOR_HEADER).is_none());
         let agent = connector
-            .put_request("clips", &batches[1].iter().collect::<Vec<_>>(), "token")
+            .put_request(
+                "clips",
+                &batches[1].iter().collect::<Vec<_>>(),
+                "token",
+                GROUP,
+            )
             .build()
             .expect("request");
         assert_eq!(agent.headers()[ACTOR_HEADER], "claude-opus-5-5");
+    }
+
+    /// The group a test's local transaction was given.
+    const GROUP: &str = "transaction-group";
+
+    /// One local transaction is one change group: an entry that names no
+    /// group travels under its transaction's, whatever request it lands in,
+    /// and a transaction tried again keeps the group it had. An entry that
+    /// names its own group keeps that.
+    #[tokio::test]
+    async fn an_entry_without_a_group_takes_its_transaction_s() {
+        let connector = connector();
+        let first = connector.group_of(Some(7));
+        assert_eq!(connector.group_of(Some(7)), first, "a retry is one group");
+        assert_ne!(connector.group_of(Some(8)), first, "the next is another");
+
+        let mut model = entry(UpdateType::Patch, Some(row()));
+        model.metadata = Some(by_the_model());
+        for (entry, group) in [
+            (entry(UpdateType::Put, Some(row())), GROUP),
+            (entry(UpdateType::Patch, Some(row())), GROUP),
+            (entry(UpdateType::Delete, None), GROUP),
+            (model, "group-1"),
+        ] {
+            let request = connector
+                .request(&entry, "token", GROUP)
+                .build()
+                .expect("request");
+            assert_eq!(request.headers()[GROUP_HEADER], group);
+        }
+    }
+
+    /// The server keeps a source row for good, so deleting one is an update
+    /// that flags it, counted like any update so a refusal shows.
+    #[tokio::test]
+    async fn a_delete_of_a_source_row_is_sent_as_a_flag() {
+        let request = connector()
+            .request(&entry(UpdateType::Delete, None), "token", GROUP)
+            .build()
+            .expect("request");
+        assert_eq!(request.method(), reqwest::Method::PATCH);
+        assert_eq!(
+            request.url().as_str(),
+            "https://example.test/rest/v1/clips?id=eq.clip-1"
+        );
+        assert_eq!(request.headers()["Prefer"], COUNTED);
+        let body: Value =
+            serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).expect("json");
+        let flag = body.as_object().expect("an object");
+        assert_eq!(flag.len(), 1, "the flag is the whole change: {body}");
+        let at = flag[FLAG].as_str().expect("a timestamp");
+        let at = chrono::DateTime::parse_from_rfc3339(at).expect("ISO 8601");
+        assert_eq!(at.offset().local_minus_utc(), 0, "in UTC");
+    }
+
+    /// An insert under a flagged row's id is how the row comes back, so every
+    /// upsert of a source row says it is live. A derived or a scratch row has
+    /// no flag to clear, and the server has no such column to take.
+    #[tokio::test]
+    async fn an_upsert_of_a_source_row_clears_its_flag() {
+        let connector = connector();
+        let body = |table: &str| {
+            let request = connector
+                .request(
+                    &in_table(table, "row-1", UpdateType::Put, Some(row())),
+                    "token",
+                    GROUP,
+                )
+                .build()
+                .expect("request");
+            serde_json::from_slice::<Value>(request.body().unwrap().as_bytes().unwrap())
+                .expect("json")[0]
+                .clone()
+        };
+        let clip = body("clips");
+        assert_eq!(clip.get(FLAG), Some(&Value::Null));
+        for table in ["track_stems", "drafts"] {
+            assert!(body(table).get(FLAG).is_none(), "{table} has no flag");
+        }
     }
 
     /// A delete has no row left to say who removed it, so the request does.
     #[tokio::test]
     async fn an_attributed_delete_names_its_actor() {
         let mut delete = entry(UpdateType::Delete, None);
-        delete.metadata = Some("claude-opus-5-5".into());
+        delete.metadata = Some(by_the_model());
         let request = connector()
-            .request(&delete, "token")
+            .request(&delete, "token", GROUP)
             .build()
             .expect("request");
         assert_eq!(request.headers()[ACTOR_HEADER], "claude-opus-5-5");
+        assert_eq!(request.headers()["x-luma-thread"], "thread-1");
+        assert_eq!(request.headers()[GROUP_HEADER], "group-1");
+        assert!(
+            request.headers().get("x-luma-message").is_none(),
+            "a part the write does not have sends no header"
+        );
+    }
+
+    /// An entry's metadata as the upload triggers write it for a model's turn.
+    fn by_the_model() -> String {
+        serde_json::json!({
+            "actor": "claude-opus-5-5",
+            "thread": "thread-1",
+            "message": null,
+            "group": "group-1",
+        })
+        .to_string()
     }
 
     fn entry(update_type: UpdateType, data: Option<Map<String, Value>>) -> CrudEntry {
@@ -617,7 +920,12 @@ mod tests {
         assert_eq!(batches[1].len(), 1);
 
         let request = connector()
-            .put_request("clips", &batches[0].iter().collect::<Vec<_>>(), "token")
+            .put_request(
+                "clips",
+                &batches[0].iter().collect::<Vec<_>>(),
+                "token",
+                GROUP,
+            )
             .build()
             .expect("request");
         assert_eq!(request.method(), reqwest::Method::POST);
@@ -653,7 +961,7 @@ mod tests {
     #[tokio::test]
     async fn a_put_upserts_the_whole_row_with_its_id() {
         let request = connector()
-            .request(&entry(UpdateType::Put, Some(row())), "token")
+            .request(&entry(UpdateType::Put, Some(row())), "token", GROUP)
             .build()
             .expect("request");
         assert_eq!(request.method(), reqwest::Method::POST);
@@ -675,7 +983,7 @@ mod tests {
         let mut data = Map::new();
         data.insert("duration".into(), Value::from(4.0));
         let request = connector()
-            .request(&entry(UpdateType::Patch, Some(data)), "token")
+            .request(&entry(UpdateType::Patch, Some(data)), "token", GROUP)
             .build()
             .expect("request");
         assert_eq!(request.method(), reqwest::Method::PATCH);
@@ -688,16 +996,28 @@ mod tests {
         assert_eq!(body, serde_json::json!({ "duration": 4.0 }));
     }
 
+    /// A derived row is a cache and a draft is scratch: both are deleted for
+    /// real.
     #[tokio::test]
-    async fn a_delete_filters_on_id_and_carries_no_body() {
+    async fn a_delete_of_a_derived_or_scratch_row_filters_on_id_and_carries_no_body() {
+        for table in ["track_stems", "drafts"] {
+            a_real_delete(table);
+        }
+    }
+
+    fn a_real_delete(table: &str) {
         let request = connector()
-            .request(&entry(UpdateType::Delete, None), "token")
+            .request(
+                &in_table(table, "row-1", UpdateType::Delete, None),
+                "token",
+                GROUP,
+            )
             .build()
             .expect("request");
         assert_eq!(request.method(), reqwest::Method::DELETE);
         assert_eq!(
             request.url().as_str(),
-            "https://example.test/rest/v1/clips?id=eq.clip-1"
+            format!("https://example.test/rest/v1/{table}?id=eq.row-1")
         );
         assert!(request
             .body()
@@ -709,9 +1029,17 @@ mod tests {
     #[tokio::test]
     async fn an_update_and_a_delete_ask_for_the_rows_they_changed() {
         let connector = connector();
-        for update_type in [UpdateType::Patch, UpdateType::Delete] {
+        for (table, update_type) in [
+            ("clips", UpdateType::Patch),
+            ("clips", UpdateType::Delete),
+            ("drafts", UpdateType::Delete),
+        ] {
             let request = connector
-                .request(&entry(update_type, Some(row())), "token")
+                .request(
+                    &in_table(table, "row-1", update_type, Some(row())),
+                    "token",
+                    GROUP,
+                )
                 .build()
                 .expect("request");
             assert_eq!(request.headers()["Prefer"], COUNTED);

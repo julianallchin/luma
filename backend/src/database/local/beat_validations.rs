@@ -53,30 +53,37 @@ pub async fn set(
     if !owns {
         return Err("Only the track owner can validate its beat grid".into());
     }
-    let current = crate::database::local::tracks::get_track_beats_for_connection(
+    // The grid a person reviews is the one on their screen: their score's,
+    // which stays one of the track's grids after the song is analysed again.
+    let (grid_id, processor_version) = crate::database::local::tracks::stored_grid_for_connection(
         access.connection(),
         track_id,
+        reviewed,
     )
     .await?
-    .ok_or("This track has no beat grid to validate")?;
-    if &current != reviewed {
-        return Err("The beat grid changed. Reopen the track before validating it.".into());
-    }
-    if current.beats.is_empty() || current.downbeats.is_empty() {
+    .ok_or("The beat grid changed. Reopen the track before validating it.")?;
+    if reviewed.beats.is_empty() || reviewed.downbeats.is_empty() {
         return Err("This track has no beat grid to validate".into());
     }
     let json = serde_json::to_string(reviewed).map_err(|e| format!("Invalid beat grid: {e}"))?;
+    // A track has one validation, found by its track: a second review changes
+    // that row, and only the first one makes a row, under its own id. It
+    // names the grid it is about, so it is never read as a verdict on another.
     sqlx::query(
         "INSERT INTO track_beat_validations
-         (track_id, uid, track_hash, grid_json, processor_version, verdict, reason)
-         SELECT t.id, t.uid, t.track_hash, ?, b.processor_version, ?, ?
-         FROM tracks t JOIN track_beats b ON b.track_id = t.id WHERE t.id = ?
+         (id, track_id, uid, track_hash, grid_id, grid_json, processor_version, verdict,
+          reason)
+         SELECT ?, t.id, t.uid, t.track_hash, ?, ?, ?, ?, ?
+         FROM tracks t WHERE t.id = ?
          ON CONFLICT(track_id) DO UPDATE SET
-         uid = excluded.uid, track_hash = excluded.track_hash,
+         uid = excluded.uid, track_hash = excluded.track_hash, grid_id = excluded.grid_id,
          grid_json = excluded.grid_json, processor_version = excluded.processor_version,
          verdict = excluded.verdict, reason = excluded.reason",
     )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(grid_id)
     .bind(json)
+    .bind(processor_version)
     .bind(verdict)
     .bind(reason)
     .bind(track_id)
@@ -84,4 +91,88 @@ pub async fn set(
     .await
     .map_err(|e| format!("Failed to save beat validation: {e}"))?;
     access.commit().await
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+
+    use super::*;
+
+    /// A track has one validation, found by its track: a second review
+    /// changes that row instead of making one, and the row's id is its own.
+    #[tokio::test]
+    async fn a_second_review_changes_the_tracks_one_validation() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(directory.path().join("validations.db"))
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO tracks (id, uid, track_hash, file_path)
+                 VALUES ('reviewed', 'alice', 'audio-hash', '/audio.ogg');
+             INSERT INTO track_beats
+                 (id, track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset,
+                  beats_per_bar, processor_version)
+                 VALUES ('grid', 'reviewed', 'alice', '[0,0.5,1,1.5,2]', '[0,2]', 120.0, 0.0, 4, 7)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let grid = BeatGrid {
+            beats: vec![0.0, 0.5, 1.0, 1.5, 2.0],
+            downbeats: vec![0.0, 2.0],
+            bpm: 120.0,
+            downbeat_offset: 0.0,
+            beats_per_bar: 4,
+        };
+        let rows = || async {
+            sqlx::query_as::<_, (String, String, i64, String)>(
+                "SELECT id, verdict, processor_version, grid_id FROM track_beat_validations
+                 WHERE track_id = 'reviewed'",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+
+        set(
+            &pool,
+            "reviewed",
+            &grid,
+            BeatValidationVerdict::Correct,
+            None,
+        )
+        .await
+        .unwrap();
+        let first = rows().await;
+        assert_eq!(first.len(), 1);
+        assert_ne!(first[0].0, "reviewed", "the id is its own, not its track's");
+        assert_eq!(first[0].2, 7, "the grid's processor is recorded");
+        assert_eq!(first[0].3, "grid", "the review names the grid it is about");
+
+        set(
+            &pool,
+            "reviewed",
+            &grid,
+            BeatValidationVerdict::Incorrect,
+            Some(BeatValidationReason::Tempo),
+        )
+        .await
+        .unwrap();
+        let second = rows().await;
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].0, first[0].0, "the same row, changed");
+        assert_eq!(second[0].1, "incorrect");
+    }
 }

@@ -20,6 +20,7 @@ use crate::models::tracks::TrackSummary;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::{AnalysisGuard, WorkerEnvironment};
 use crate::storage::StorageRoot;
+use crate::sync::triggers::{AttributedWrite, Attribution};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
@@ -60,6 +61,15 @@ impl<'a> PreprocessorContext<'a> {
 
     pub fn pool(&self) -> &SqlitePool {
         self.pool
+    }
+
+    /// The transaction a run writes its synced rows in. A result is the app's
+    /// doing, not an edit the signed-in person made, so the upload says
+    /// `app:analysis` and the server's history records it that way. Rows no
+    /// other device sees have no upload to label and go through
+    /// [`Self::pool`].
+    pub async fn publish(&self) -> Result<AttributedWrite<'a>, String> {
+        AttributedWrite::begin(self.pool, Attribution::ANALYSIS).await
     }
 
     pub fn storage(&self) -> &StorageRoot {
@@ -245,10 +255,13 @@ fn artifact_current(p: &(impl Preprocessor + ?Sized)) -> String {
         at("b.downbeats_json", "$[0]"),
         at("b.downbeats_json", "$[1]"),
     );
+    // The track's current grid: an earlier one is kept beside it for the
+    // scores written against it, and would call every row stale.
+    let current_grid = crate::database::local::tracks::current_grid!("a.track_id");
     format!(
         "({rows} AND NOT EXISTS (
             SELECT 1 FROM {table} a
-              JOIN track_beats b ON b.track_id = a.track_id
+              JOIN track_beats b ON b.id = {current_grid}
              WHERE a.track_id = t.id
                AND (ABS(({row_start}) - ({grid_start})) >= {SAME_BAR_SECS:?}
                  OR ABS(({row_end}) - ({grid_end})) >= {SAME_BAR_SECS:?})

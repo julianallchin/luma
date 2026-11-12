@@ -50,10 +50,11 @@ async fn shared(directory: &std::path::Path) -> (AppServices, String, String) {
         .unwrap();
     enter_remote_writes(&mut download).await.unwrap();
     sqlx::query(
-        "INSERT INTO venue_members (id, uid, venue_id, role) VALUES (?1 || ':' || ?2, ?2, ?1, 'member')",
+        "INSERT INTO venue_members (id, uid, venue_id, role) VALUES (?3, ?2, ?1, 'member')",
     )
     .bind(&venue)
     .bind(MEMBER)
+    .bind(uuid::Uuid::new_v4().to_string())
     .execute(&mut *download)
     .await
     .unwrap();
@@ -260,7 +261,6 @@ async fn a_member_edits_the_room_its_rig_and_its_set() {
         &services,
         "create_score",
         json!({
-            "requestId": "6f1c1d1e-0000-4000-8000-000000000001",
             "trackId": "song", "venueId": venue, "name": "Mine",
         }),
     )
@@ -319,7 +319,7 @@ async fn a_member_edits_the_room_its_rig_and_its_set() {
     run(
         &services,
         "duplicate_score",
-        json!({ "requestId": uuid::Uuid::new_v4().to_string(), "scoreId": score, "name": "Still mine copy" }),
+        json!({ "scoreId": score, "name": "Still mine copy" }),
     )
     .await;
     run(&services, "delete_score", json!({ "id": score })).await;

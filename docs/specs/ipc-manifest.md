@@ -5,7 +5,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` fails when it is stale and
 rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 
-**136 commands** across **27 domains**
+**139 commands** across **27 domains**
 
 ## Domains
 
@@ -13,7 +13,7 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | --- | ---: | --- |
 | `agent_execution` | 2 | `backend/src/dispatch/handlers/agent_execution.rs` |
 | `agent_threads` | 6 | `backend/src/dispatch/handlers/agent_threads.rs` |
-| `auth` | 7 | `backend/src/dispatch/handlers/auth.rs` |
+| `auth` | 9 | `backend/src/dispatch/handlers/auth.rs` |
 | `background` | 1 | `backend/src/dispatch/handlers/background.rs` |
 | `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
@@ -35,10 +35,10 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `stage` | 11 | `backend/src/dispatch/handlers/stage.rs` |
 | `sync` | 2 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
-| `tracks` | 5 | `backend/src/dispatch/handlers/tracks.rs` |
+| `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 11 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **136** | |
+| **total** | **139** | |
 
 ## Commands
 
@@ -69,6 +69,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `current_account` | — | `Option<crate::database::local::auth::AuthAccount>` |
 | `send_login_code` | `email: String` | `()` |
 | `verify_login_code` | `email: String`<br>`code: String` | `String` |
+| `terms_accepted` | — | `bool` |
+| `accept_terms` | `version: i32` | `()` |
 | `get_session_item` | `key: String` | `Option<String>` |
 | `set_session_item` | `key: String`<br>`value: String` | `()` |
 | `remove_session_item` | `key: String` | `()` |
@@ -238,11 +240,11 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | --- | --- | --- |
 | `list_scores_for_track` | `trackId: String`<br>`venueId: String` | `Vec<ScoreSummary>` |
 | `list_scores_across_venues` | `trackId: String` | `Vec<ScoreSummary>` |
-| `create_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
-| `ensure_venue_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
+| `create_score` | `trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
+| `ensure_venue_score` | `trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
 | `delete_score` | `id: String` | `()` |
 | `rename_score` | `scoreId: String`<br>`name: String` | `()` |
-| `duplicate_score` | `requestId: String`<br>`scoreId: String`<br>`name: String` | `Score` |
+| `duplicate_score` | `scoreId: String`<br>`name: String` | `Score` |
 | `get_score_document` | `scoreId: String` | `Option<luma_patterns::Score>` |
 | `edit_score_document` | `scoreId: String`<br>`edit: luma_patterns::ScoreEdit` | `()` |
 | `preview_score_clips` | `scoreId: String`<br>`clipIds: Vec<String>`<br>`score: Option<luma_patterns::Score>` | `Vec<crate::services::graph_scores::ClipStrip>` |
@@ -288,10 +290,11 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `list_tracks_enriched` | `venueId: Option<String>` | `Vec<TrackBrowserRow>` |
-| `get_track_beats` | `trackId: String` | `Option<BeatGrid>` |
+| `get_track_beats` | `trackId: String`<br>`scoreId: Option<String>` | `Option<BeatGrid>` |
 | `get_track_beat_validation` | `trackId: String` | `Option<BeatValidation>` |
 | `set_track_beat_validation` | `trackId: String`<br>`grid: BeatGrid`<br>`verdict: BeatValidationVerdict`<br>`reason: Option<BeatValidationReason>` | `()` |
 | `import_tracks` | `filePaths: Vec<String>` | `TrackImportResult` |
+| `reprocess_track` | `trackId: String` | `()` |
 
 ### `venues`
 

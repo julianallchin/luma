@@ -26,6 +26,8 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use uuid::Uuid;
+
 use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venue_graph::{NodePlacement, VenueConstraint, VenueGraphRows, VenueNode};
@@ -180,8 +182,8 @@ pub async fn root_id(access: &mut impl AuthorizedVenue) -> Result<Option<String>
 // Writes
 // -----------------------------------------------------------------------------
 
-/// Insert a node under an id the caller chose: a fixture (whose node id is
-/// its patch-row id) or a restored row.
+/// Insert a node under an id the caller chose: a new random one, a fixture's
+/// (whose node id is its patch-row id) or a restored row's.
 ///
 /// `placement` is `None` for the root and only for the root: a node is never
 /// written without one, and the schema refuses one that tries.
@@ -299,9 +301,10 @@ pub async fn set_placement(
 
 /// Record a far end, replacing whatever check that socket already carried.
 ///
-/// One statement, because `(node_id, my_socket)` is the primary key: a socket
-/// has one far end or none, and an insert-then-delete would be two states that
-/// is false in.
+/// One statement, because `(node_id, my_socket)` is unique: a socket has one
+/// far end or none, and an insert-then-delete would be two states that is
+/// false in. The row a socket already has keeps its id; a new one gets its
+/// own.
 ///
 /// Admission is [`luma_scene::venue::VenueGraph::constrain`]'s, upstream of
 /// here, exactly as it is for [`set_placement`]: this layer writes rows the
@@ -320,14 +323,15 @@ pub async fn upsert_constraint(
     let venue_id = access.venue_id().to_owned();
     sqlx::query(
         "INSERT INTO venue_constraints
-             (node_id, uid, venue_id, my_socket, target_node, target_socket)
-         VALUES (?, ?, ?, ?, ?, ?)
+             (id, node_id, uid, venue_id, my_socket, target_node, target_socket)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(node_id, my_socket) DO UPDATE SET
              uid = excluded.uid,
              venue_id = excluded.venue_id,
              target_node = excluded.target_node,
              target_socket = excluded.target_socket",
     )
+    .bind(Uuid::new_v4().to_string())
     .bind(node_id)
     .bind(principal)
     .bind(venue_id)
@@ -342,7 +346,8 @@ pub async fn upsert_constraint(
 }
 
 /// Merge parameters into a node. A `None` value clears the key, so "unset the
-/// trim" and "set the trim" are the same call rather than two.
+/// trim" and "set the trim" are the same call rather than two. A key the node
+/// already has keeps its row; a new one gets a row with its own id.
 ///
 /// # Errors
 /// Fails if any write is refused.
@@ -357,13 +362,14 @@ pub async fn set_params(
         match value {
             Some(value) if value.is_finite() => {
                 sqlx::query(
-                    "INSERT INTO venue_node_params (node_id, uid, venue_id, key, value)
-                     VALUES (?, ?, ?, ?, ?)
+                    "INSERT INTO venue_node_params (id, node_id, uid, venue_id, key, value)
+                     VALUES (?, ?, ?, ?, ?, ?)
                      ON CONFLICT(node_id, key) DO UPDATE SET
                          uid = excluded.uid,
                          venue_id = excluded.venue_id,
                          value = excluded.value",
                 )
+                .bind(Uuid::new_v4().to_string())
                 .bind(node_id)
                 .bind(principal.clone())
                 .bind(venue_id.clone())

@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::database::local::deletes;
 use crate::models::beat_grid::BeatGrid;
 use crate::models::tracks::{ChordSection, TrackBeats, TrackBrowserRow, TrackStem, TrackSummary};
+use crate::sync::triggers::{self, AttributedWrite, Attribution};
 
 // Helper structs for internal queries
 #[derive(FromRow)]
@@ -43,7 +44,7 @@ pub async fn list_tracks_enriched_for_connection(
     venue_id: Option<&str>,
 ) -> Result<Vec<TrackBrowserRow>, String> {
     let vid = venue_id.unwrap_or("");
-    let mut rows = sqlx::query_as::<_, TrackBrowserRow>(
+    let mut rows = sqlx::query_as::<_, TrackBrowserRow>(concat!(
         "SELECT
             t.id, t.uid, t.title, t.artist, t.album, t.duration_seconds,
             t.album_art_path, t.album_art_mime, t.source_type, t.file_path, t.created_at,
@@ -55,7 +56,9 @@ pub async fn list_tracks_enriched_for_connection(
             (t.storage_path IS NOT NULL) AS has_storage
          FROM tracks t
          JOIN auth_visible_tracks visible ON visible.track_id = t.id
-         LEFT JOIN track_beats tb ON tb.track_id = t.id
+         LEFT JOIN track_beats tb ON tb.id = ",
+        current_grid!("t.id"),
+        "
          LEFT JOIN (
              SELECT s.track_id,
                  SUM((SELECT COUNT(*) FROM clips WHERE clips.score_id = s.id)) AS cnt
@@ -79,7 +82,7 @@ pub async fn list_tracks_enriched_for_connection(
              GROUP BY s.track_id
          ) vsc ON vsc.track_id = t.id
          ORDER BY t.created_at DESC, t.id DESC",
-    )
+    ))
     .bind(vid)
     .bind(vid)
     .fetch_all(&mut *connection)
@@ -91,24 +94,29 @@ pub async fn list_tracks_enriched_for_connection(
     // noisy and this set is small.
     if !vid.is_empty() {
         let mut intervals: Vec<(String, f64, f64)> = Vec::new();
-        let clips: Vec<(String, f64, f64)> = sqlx::query_as(
-            "SELECT s.track_id, clip.start, clip.duration
+        let clips: Vec<(String, String, f64, f64)> = sqlx::query_as(
+            "SELECT s.id, s.track_id, clip.start, clip.duration
              FROM scores s
              JOIN clips clip ON clip.score_id = s.id
              JOIN auth_venue_access access ON access.venue_id = s.venue_id
              WHERE s.venue_id = ?
-             ORDER BY s.track_id, clip.start",
+             ORDER BY s.track_id, s.id, clip.start",
         )
         .bind(vid)
         .fetch_all(&mut *connection)
         .await
         .map_err(|error| format!("Failed to load annotation intervals: {error}"))?;
         let mut clocks = HashMap::new();
-        for (track_id, start, duration) in clips {
-            if !clocks.contains_key(&track_id) {
-                let grid = get_track_beats_for_connection(connection, &track_id).await?;
+        // Clips are in beats of the grid their score was written against.
+        for (score_id, track_id, start, duration) in clips {
+            if !clocks.contains_key(&score_id) {
+                let grid = get_track_beats_for_connection(
+                    connection,
+                    Grid::of_score(&track_id, &score_id),
+                )
+                .await?;
                 clocks.insert(
-                    track_id.clone(),
+                    score_id.clone(),
                     grid.map(|grid| grid.timeline())
                         .transpose()
                         .map_err(|error| error.to_string())?,
@@ -116,7 +124,7 @@ pub async fn list_tracks_enriched_for_connection(
             }
             // A score may arrive before its beat metadata. Its clip count is
             // already known; time coverage waits for that grid.
-            let Some(clock) = clocks[&track_id].as_ref() else {
+            let Some(clock) = clocks[&score_id].as_ref() else {
                 continue;
             };
             intervals.push((
@@ -190,6 +198,46 @@ pub async fn get_track_by_id(
     .map_err(|e| format!("Failed to fetch track by id: {}", e))
 }
 
+/// The track `uid` already has for this audio: the one imported from the
+/// same source item, else the one with the same content hash. Ownership is
+/// part of both identities: separate principals may legitimately import the
+/// same source item or bytes.
+///
+/// [`insert_track_record`] decides with this inside its transaction. An
+/// import may also ask first, to skip work on a song it already has; that
+/// answer is a shortcut, and the insert still has the last word.
+pub async fn existing_track(
+    connection: &mut sqlx::SqliteConnection,
+    uid: &str,
+    track_hash: &str,
+    source: Option<(&str, &str)>,
+) -> Result<Option<String>, String> {
+    if let Some((source_type, source_id)) = source {
+        let source_match = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM tracks
+             WHERE uid = ? AND source_type = ? AND source_id = ?
+             LIMIT 1",
+        )
+        .bind(uid)
+        .bind(source_type)
+        .bind(source_id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|error| format!("Failed to resolve track source identity: {error}"))?;
+        if source_match.is_some() {
+            return Ok(source_match);
+        }
+    }
+    sqlx::query_scalar::<_, String>(
+        "SELECT id FROM tracks WHERE uid = ? AND track_hash = ? LIMIT 1",
+    )
+    .bind(uid)
+    .bind(track_hash)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(|error| format!("Failed to resolve track content identity: {error}"))
+}
+
 pub async fn insert_track_record(
     pool: &SqlitePool,
     track_hash: &str,
@@ -229,34 +277,14 @@ pub async fn insert_track_record(
     // Deduplication belongs to this immediate transaction. The write lock
     // makes the lookup plus insert one atomic conflict-resolution operation,
     // so two concurrent imports cannot both observe absence and publish two
-    // rows. Ownership is part of both identities: separate principals may
-    // legitimately import the same source item or bytes.
-    let source_match = match (source_type, source_id) {
-        (Some(source_type), Some(source_id)) => sqlx::query_scalar::<_, String>(
-            "SELECT id FROM tracks
-             WHERE uid = ? AND source_type = ? AND source_id = ?
-             LIMIT 1",
-        )
-        .bind(uid)
-        .bind(source_type)
-        .bind(source_id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| format!("Failed to resolve track source identity: {error}"))?,
-        _ => None,
-    };
-    let existing = if source_match.is_some() {
-        source_match
-    } else {
-        sqlx::query_scalar::<_, String>(
-            "SELECT id FROM tracks WHERE uid = ? AND track_hash = ? LIMIT 1",
-        )
-        .bind(uid)
-        .bind(track_hash)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|error| format!("Failed to resolve track content identity: {error}"))?
-    };
+    // rows.
+    let existing = existing_track(
+        &mut transaction,
+        uid,
+        track_hash,
+        source_type.zip(source_id),
+    )
+    .await?;
     if let Some(id) = existing {
         transaction
             .rollback()
@@ -265,6 +293,10 @@ pub async fn insert_track_record(
         return Ok((id, false));
     }
 
+    // The row is what the import read off the file, not something the
+    // person typed, and history says so. Cleared before the commit, so the
+    // connection goes back to the pool as the person's.
+    triggers::attribute(&mut transaction, Attribution::IMPORT).await?;
     sqlx::query(
         "INSERT INTO tracks (id, track_hash, title, artist, album, track_number, disc_number, duration_seconds, file_path, album_art_path, album_art_mime, uid, source_type, source_id, source_filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -286,6 +318,7 @@ pub async fn insert_track_record(
     .execute(&mut *transaction)
     .await
     .map_err(|e| format!("Failed to insert track: {}", e))?;
+    triggers::unattribute(&mut transaction).await?;
 
     transaction
         .commit()
@@ -420,47 +453,101 @@ pub async fn get_track_duration(pool: &SqlitePool, track_id: &str) -> Result<Opt
 // -----------------------------------------------------------------------------
 
 /// Fetch the uid for a track (used to propagate auth.uid() to child rows).
-pub(crate) async fn track_uid(pool: &SqlitePool, track_id: &str) -> Result<Option<String>, String> {
+pub(crate) async fn track_uid(
+    executor: impl sqlx::SqliteExecutor<'_>,
+    track_id: &str,
+) -> Result<Option<String>, String> {
     sqlx::query_scalar::<_, Option<String>>("SELECT uid FROM tracks WHERE id = ?")
         .bind(track_id)
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await
         .map_err(|e| format!("Failed to get track uid: {}", e))
 }
 
-pub async fn upsert_track_beats(
-    pool: &SqlitePool,
+/// The columns of [`TrackBeats`], from a `track_beats` row aliased `beats`.
+macro_rules! grid_columns {
+    () => {
+        "beats.id, beats.track_id, beats.uid, beats.beats_json, beats.downbeats_json,
+         beats.bpm, beats.downbeat_offset, beats.beats_per_bar, beats.processor_version,
+         beats.created_at, beats.updated_at"
+    };
+}
+
+/// Record `grid` as `track_id`'s beat grid, as version `processor_version`
+/// of the detector found it.
+///
+/// A grid is written once and never edited (the server refuses an update), and
+/// scores name the one they were written against, so this adds a row rather
+/// than replacing one. The row it adds is the track's current grid
+/// ([`current_grid`]). A detection that finds the grid the track already has
+/// writes nothing: analysing a song again must not grow the table, or the
+/// server's history, with copies.
+pub async fn record_track_beats(
+    connection: &mut SqliteConnection,
     track_id: &str,
-    beats_json: &str,
-    downbeats_json: &str,
-    bpm: Option<f64>,
-    downbeat_offset: Option<f64>,
-    beats_per_bar: Option<i64>,
+    grid: &BeatGrid,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
-    sqlx::query(
-        "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar, processor_version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(track_id) DO UPDATE SET
-            uid = excluded.uid,
-            beats_json = excluded.beats_json,
-            downbeats_json = excluded.downbeats_json,
-            bpm = excluded.bpm,
-            downbeat_offset = excluded.downbeat_offset,
-            beats_per_bar = excluded.beats_per_bar,
-            processor_version = excluded.processor_version,
-            updated_at = datetime('now')",
-    )
+    let current = sqlx::query_as::<_, TrackBeats>(concat!(
+        "SELECT ",
+        grid_columns!(),
+        " FROM track_beats beats WHERE beats.id = ",
+        current_grid!("?")
+    ))
     .bind(track_id)
-    .bind(&uid)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(|e| format!("Failed to read the current beat grid: {e}"))?;
+    let id = Uuid::new_v4().to_string();
+    // A score that names no grid has been reading the current one. It is
+    // pinned to that grid before a newer one exists, or to this one when it
+    // is the track's first, so its clips stay where they were put.
+    sqlx::query("UPDATE scores SET grid_id = ?1 WHERE track_id = ?2 AND grid_id IS NULL")
+        .bind(current.as_ref().map_or(&id, |current| &current.id))
+        .bind(track_id)
+        .execute(&mut *connection)
+        .await
+        .map_err(|e| format!("Failed to pin scores to their beat grid: {e}"))?;
+    let replaced = match current {
+        Some(current) => {
+            // A newer detector that agrees still writes its row: the stamp is
+            // what tells reconcile the track needs no further run, and the
+            // row that carries the old one cannot be edited.
+            let stamped = current.processor_version >= i64::from(processor_version);
+            let created_at = current.created_at.clone();
+            if stamped && beat_grid(current)? == *grid {
+                return Ok(());
+            }
+            Some(created_at)
+        }
+        None => None,
+    };
+    let beats_json = serde_json::to_string(&grid.beats)
+        .map_err(|e| format!("Failed to serialize beats: {e}"))?;
+    let downbeats_json = serde_json::to_string(&grid.downbeats)
+        .map_err(|e| format!("Failed to serialize downbeats: {e}"))?;
+    // Stamped after the grid it replaces even if this clock is behind the one
+    // that wrote that grid, so the row just written is the current one.
+    sqlx::query(
+        "INSERT INTO track_beats
+            (id, track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset,
+             beats_per_bar, processor_version, created_at, updated_at)
+         SELECT ?1, ?2, (SELECT uid FROM tracks WHERE id = ?2), ?3, ?4, ?5, ?6, ?7, ?8,
+                stamp.at, stamp.at
+         FROM (SELECT strftime('%Y-%m-%dT%H:%M:%fZ', MAX(
+                   julianday('now'),
+                   COALESCE(julianday(?9) + 2.0 / 86400000.0, 0))) AS at) stamp",
+    )
+    .bind(id)
+    .bind(track_id)
     .bind(beats_json)
     .bind(downbeats_json)
-    .bind(bpm)
-    .bind(downbeat_offset)
-    .bind(beats_per_bar)
-    .bind(processor_version as i64)
-    .execute(pool)
+    .bind(f64::from(grid.bpm))
+    .bind(f64::from(grid.downbeat_offset))
+    .bind(i64::from(grid.beats_per_bar))
+    .bind(i64::from(processor_version))
+    .bind(replaced)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist beat data: {}", e))?;
 
@@ -468,13 +555,13 @@ pub async fn upsert_track_beats(
 }
 
 pub async fn upsert_track_roots(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     sections_json: &str,
     logits_path: Option<&str>,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_roots (track_id, uid, sections_json, logits_path, processor_version)
          VALUES (?, ?, ?, ?, ?)
@@ -490,7 +577,7 @@ pub async fn upsert_track_roots(
     .bind(sections_json)
     .bind(logits_path)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist root data: {}", e))?;
 
@@ -498,13 +585,13 @@ pub async fn upsert_track_roots(
 }
 
 pub async fn upsert_track_bar_classifications(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     classifications_json: &str,
     tag_order_json: &str,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_bar_classifications (track_id, uid, classifications_json, tag_order_json, processor_version)
          VALUES (?, ?, ?, ?, ?)
@@ -520,7 +607,7 @@ pub async fn upsert_track_bar_classifications(
     .bind(classifications_json)
     .bind(tag_order_json)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist bar classifications: {}", e))?;
 
@@ -528,13 +615,13 @@ pub async fn upsert_track_bar_classifications(
 }
 
 pub async fn upsert_track_genres(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     genres_json: &str,
     labels_json: &str,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_genres (track_id, uid, genres_json, labels_json, processor_version)
          VALUES (?, ?, ?, ?, ?)
@@ -550,7 +637,7 @@ pub async fn upsert_track_genres(
     .bind(genres_json)
     .bind(labels_json)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist genres: {}", e))?;
 
@@ -606,12 +693,12 @@ pub async fn get_track_drum_onsets(
 }
 
 pub async fn upsert_track_drum_onsets(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     onsets_json: &str,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_drum_onsets (track_id, uid, onsets_json, processor_version)
          VALUES (?, ?, ?, ?)
@@ -625,7 +712,7 @@ pub async fn upsert_track_drum_onsets(
     .bind(&uid)
     .bind(onsets_json)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist drum onsets: {}", e))?;
 
@@ -679,14 +766,14 @@ pub async fn get_track_mert_paths(
 }
 
 pub async fn upsert_track_stem(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     track_id: &str,
     stem_name: &str,
     file_path: &str,
     storage_path: Option<&str>,
     processor_version: u32,
 ) -> Result<(), String> {
-    let uid = track_uid(pool, track_id).await?;
+    let uid = track_uid(&mut *connection, track_id).await?;
     sqlx::query(
         "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path, processor_version)
          VALUES (?, ?, ?, ?, ?, ?)
@@ -703,7 +790,7 @@ pub async fn upsert_track_stem(
     .bind(file_path)
     .bind(storage_path)
     .bind(processor_version as i64)
-    .execute(pool)
+    .execute(&mut *connection)
     .await
     .map_err(|e| format!("Failed to persist stem data: {}", e))?;
 
@@ -771,41 +858,109 @@ fn parse_chord_sections(json: &str) -> Option<Vec<ChordSection>> {
     )
 }
 
+/// The id of a track's current beat grid, as SQL: its newest. `$track` is
+/// the SQL for the track's id.
+///
+/// `julianday()` rather than the raw column because one instant is spelled
+/// more than one way (a row this device wrote, a row another wrote, a row
+/// from before the stamps were ISO-8601), and text order files `T` above a
+/// space whatever the clock says. `rowid` settles two grids stamped in the
+/// same millisecond as the one this database learned of last.
+///
+/// "Newest" is defined here and nowhere else. A macro so the statements that
+/// use it stay one `concat!`-ed literal.
+macro_rules! current_grid {
+    ($track:literal) => {
+        concat!(
+            "(SELECT newest.id FROM track_beats newest WHERE newest.track_id = ",
+            $track,
+            " ORDER BY julianday(newest.created_at) DESC, newest.rowid DESC LIMIT 1)"
+        )
+    };
+}
+pub(crate) use current_grid;
+
+/// Which of a track's beat grids a read means. A track has one per detection
+/// that found something new, and every read of `track_beats` says which.
+#[derive(Clone, Copy, Debug)]
+pub struct Grid<'a> {
+    track_id: &'a str,
+    score_id: Option<&'a str>,
+}
+
+impl<'a> Grid<'a> {
+    /// The track's current grid: its newest. What a read with no score in
+    /// hand means.
+    pub fn current(track_id: &'a str) -> Self {
+        Self {
+            track_id,
+            score_id: None,
+        }
+    }
+
+    /// The grid `score_id` was written against (`scores.grid_id`), so its
+    /// clips stay where they were put when the song is analysed again. A
+    /// score that names no grid, or one this device does not hold, reads its
+    /// track's current grid.
+    pub fn of_score(track_id: &'a str, score_id: &'a str) -> Self {
+        Self {
+            track_id,
+            score_id: Some(score_id),
+        }
+    }
+
+    /// [`Grid::of_score`] when a score is in scope, else [`Grid::current`].
+    pub fn in_scope(track_id: &'a str, score_id: Option<&'a str>) -> Self {
+        Self { track_id, score_id }
+    }
+
+    pub fn track_id(&self) -> &'a str {
+        self.track_id
+    }
+}
+
 pub async fn get_track_beats_raw(
     pool: &SqlitePool,
-    track_id: &str,
+    grid: Grid<'_>,
 ) -> Result<Option<TrackBeats>, String> {
     let mut connection = pool
         .acquire()
         .await
         .map_err(|error| format!("Failed to open beat data read: {error}"))?;
-    get_track_beats_raw_for_connection(&mut connection, track_id).await
+    get_track_beats_raw_for_connection(&mut connection, grid).await
 }
 
 async fn get_track_beats_raw_for_connection(
     connection: &mut SqliteConnection,
-    track_id: &str,
+    grid: Grid<'_>,
 ) -> Result<Option<TrackBeats>, String> {
-    sqlx::query_as::<_, TrackBeats>(
-        "SELECT beats.track_id, beats.uid, beats.beats_json, beats.downbeats_json,
-                beats.bpm, beats.downbeat_offset, beats.beats_per_bar,
-                beats.created_at, beats.updated_at
-         FROM track_beats beats
+    sqlx::query_as::<_, TrackBeats>(concat!(
+        "SELECT ",
+        grid_columns!(),
+        " FROM track_beats beats
          JOIN auth_visible_tracks visible ON visible.track_id = beats.track_id
-         WHERE beats.track_id = ?",
-    )
-    .bind(track_id)
+         WHERE beats.id = COALESCE(
+             (SELECT written.id FROM scores score
+                JOIN track_beats written ON written.id = score.grid_id
+               WHERE score.id = ?2 AND written.track_id = ?1),
+             ",
+        current_grid!("?1"),
+        ")"
+    ))
+    .bind(grid.track_id)
+    .bind(grid.score_id)
     .fetch_optional(connection)
     .await
     .map_err(|e| format!("Failed to fetch beat data: {}", e))
 }
 
-/// A track's beat grid; `None` when beat detection has not run for it.
+/// One of a track's beat grids; `None` when beat detection has not run for
+/// the track.
 pub async fn get_track_beats(
     pool: &SqlitePool,
-    track_id: &str,
+    grid: Grid<'_>,
 ) -> Result<Option<BeatGrid>, String> {
-    get_track_beats_raw(pool, track_id)
+    get_track_beats_raw(pool, grid)
         .await?
         .map(beat_grid)
         .transpose()
@@ -814,12 +969,52 @@ pub async fn get_track_beats(
 /// [`get_track_beats`] through a connection the caller already holds.
 pub(crate) async fn get_track_beats_for_connection(
     connection: &mut SqliteConnection,
-    track_id: &str,
+    grid: Grid<'_>,
 ) -> Result<Option<BeatGrid>, String> {
-    get_track_beats_raw_for_connection(connection, track_id)
+    get_track_beats_raw_for_connection(connection, grid)
         .await?
         .map(beat_grid)
         .transpose()
+}
+
+/// The id of `track_id`'s current grid, which a score made now is written
+/// against. `None` until beat detection has run.
+pub(crate) async fn current_grid_id(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+) -> Result<Option<String>, String> {
+    sqlx::query_scalar(concat!("SELECT ", current_grid!("?")))
+        .bind(track_id)
+        .fetch_one(connection)
+        .await
+        .map_err(|e| format!("Failed to find the track's current beat grid: {e}"))
+}
+
+/// The id of `grid` and the detector version that found it, when it is one
+/// of `track_id`'s grids: the newest that matches. A person reviews the grid on their screen,
+/// which is their score's and not always the track's current one.
+pub(crate) async fn stored_grid_for_connection(
+    connection: &mut SqliteConnection,
+    track_id: &str,
+    grid: &BeatGrid,
+) -> Result<Option<(String, i64)>, String> {
+    let rows = sqlx::query_as::<_, TrackBeats>(concat!(
+        "SELECT ",
+        grid_columns!(),
+        " FROM track_beats beats WHERE beats.track_id = ?
+         ORDER BY julianday(beats.created_at) DESC, beats.rowid DESC"
+    ))
+    .bind(track_id)
+    .fetch_all(connection)
+    .await
+    .map_err(|e| format!("Failed to fetch the track's beat grids: {e}"))?;
+    for row in rows {
+        let stored = (row.id.clone(), row.processor_version);
+        if beat_grid(row)? == *grid {
+            return Ok(Some(stored));
+        }
+    }
+    Ok(None)
 }
 
 /// The grid a row stores, with any metadata it lacks inferred from its beats.
@@ -905,13 +1100,15 @@ pub async fn get_match_candidates(
     duration: Option<(f64, f64)>,
 ) -> Result<Vec<TrackWithBpm>, String> {
     let (target, tolerance) = duration.unzip();
-    sqlx::query_as::<_, TrackWithBpm>(
+    sqlx::query_as::<_, TrackWithBpm>(concat!(
         "SELECT t.id, t.title, t.artist, tb.bpm
          FROM tracks t
          JOIN auth_visible_tracks visible ON visible.track_id = t.id
-         LEFT JOIN track_beats tb ON tb.track_id = t.id
+         LEFT JOIN track_beats tb ON tb.id = ",
+        current_grid!("t.id"),
+        "
          WHERE ?1 IS NULL OR ABS(COALESCE(t.duration_seconds, 0) - ?1) <= ?2",
-    )
+    ))
     .bind(target)
     .bind(tolerance)
     .fetch_all(pool)
@@ -945,6 +1142,8 @@ pub async fn fill_track_metadata_gaps(
     album: &Option<String>,
     duration_seconds: Option<f64>,
 ) -> Result<(), String> {
+    // What the file's tags say, filled in by the import rather than typed.
+    let mut write = AttributedWrite::begin(pool, Attribution::IMPORT).await?;
     sqlx::query(
         "UPDATE tracks SET
             title = COALESCE(title, ?),
@@ -959,10 +1158,10 @@ pub async fn fill_track_metadata_gaps(
     .bind(album)
     .bind(duration_seconds)
     .bind(track_id)
-    .execute(pool)
+    .execute(write.connection())
     .await
     .map_err(|e| format!("Failed to fill track metadata gaps: {}", e))?;
-    Ok(())
+    write.commit().await
 }
 
 #[cfg(test)]
@@ -1003,6 +1202,294 @@ mod tests {
         (directory, pool)
     }
 
+    /// Four beats to the bar from zero at `bpm`, for one bar and a beat.
+    fn grid_at(bpm: f32) -> BeatGrid {
+        let beat = 60. / bpm;
+        BeatGrid {
+            beats: (0..5).map(|i| i as f32 * beat).collect(),
+            downbeats: vec![0., 4. * beat],
+            bpm,
+            downbeat_offset: 0.,
+            beats_per_bar: 4,
+        }
+    }
+
+    async fn grid_count(pool: &SqlitePool, track_id: &str) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM track_beats WHERE track_id = ?")
+            .bind(track_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// Alice's track `song` in her venue `room`, with her admitted.
+    async fn song_in_a_room(pool: &SqlitePool) {
+        sqlx::query(
+            "INSERT INTO venues (id, uid, name) VALUES ('room', 'alice', 'Room');
+             INSERT INTO tracks (id, uid, track_hash, file_path)
+             VALUES ('song', 'alice', 'hash', '/song.mp3')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        crate::database::local::auth::arm_write_admission(pool, Some("alice"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn analysing_again_adds_a_grid_only_when_it_finds_another() {
+        let (_directory, pool) = test_pool().await;
+        song_in_a_room(&pool).await;
+        let current = || async { get_track_beats(&pool, Grid::current("song")).await.unwrap() };
+        assert_eq!(current().await, None);
+
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
+        let first: String = sqlx::query_scalar("SELECT id FROM track_beats")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        // The same detector finding the same grid writes nothing.
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
+        assert_eq!(grid_count(&pool, "song").await, 1);
+
+        // Another grid becomes the current one beside the first, unedited.
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(60.),
+            7,
+        )
+        .await
+        .unwrap();
+        assert_eq!(grid_count(&pool, "song").await, 2);
+        assert_eq!(current().await, Some(grid_at(60.)));
+        let kept: (String, f64) =
+            sqlx::query_as("SELECT beats_json, bpm FROM track_beats WHERE id = ?")
+                .bind(&first)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            (serde_json::from_str::<Vec<f32>>(&kept.0).unwrap(), kept.1),
+            (grid_at(120.).beats, 120.)
+        );
+
+        // Going back to an earlier grid is a change too.
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
+        assert_eq!(grid_count(&pool, "song").await, 3);
+        assert_eq!(current().await, Some(grid_at(120.)));
+
+        // The song still lists once, at its current tempo.
+        let listed = list_tracks_enriched(&pool, None).await.unwrap();
+        assert_eq!(
+            listed.iter().map(|row| row.bpm).collect::<Vec<_>>(),
+            [Some(120.)]
+        );
+    }
+
+    /// A grid row cannot be edited, so a newer detector that finds the same
+    /// grid writes its own: otherwise the track would look unanalysed by it
+    /// at every launch.
+    #[tokio::test]
+    async fn a_newer_detector_that_agrees_still_stamps_the_track() {
+        let (_directory, pool) = test_pool().await;
+        song_in_a_room(&pool).await;
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            8,
+        )
+        .await
+        .unwrap();
+        let versions: Vec<i64> = sqlx::query_scalar(
+            "SELECT processor_version FROM track_beats WHERE track_id = 'song'
+             ORDER BY processor_version",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(versions, [7, 8]);
+
+        // And an older one that agrees has nothing to add.
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
+        assert_eq!(grid_count(&pool, "song").await, 2);
+    }
+
+    /// The grid written last is current even when the one before it carries
+    /// a later stamp, as a grid from a device whose clock runs ahead does.
+    #[tokio::test]
+    async fn the_grid_just_written_is_current_whatever_the_clocks_say() {
+        let (_directory, pool) = test_pool().await;
+        song_in_a_room(&pool).await;
+        sqlx::query(
+            "INSERT INTO track_beats (id, track_id, uid, beats_json, downbeats_json, created_at)
+             VALUES ('ahead', 'song', 'alice', '[0,1,2,3,4]', '[0,4]', '2999-01-01 00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get_track_beats(&pool, Grid::current("song")).await.unwrap(),
+            Some(grid_at(120.))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_score_reads_the_grid_it_was_written_against() {
+        use crate::services::catalog;
+        let (_directory, pool) = test_pool().await;
+        song_in_a_room(&pool).await;
+        let beats = |score: &str| {
+            let score = score.to_owned();
+            let pool = pool.clone();
+            async move {
+                get_track_beats(&pool, Grid::of_score("song", &score))
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // A score made before the song is analysed names no grid until the
+        // first one is found, and keeps that one from then on.
+        let early = catalog::create_score(
+            &pool,
+            "song",
+            "room",
+            None,
+            crate::sync::triggers::Attribution::PERSON,
+        )
+        .await
+        .unwrap();
+        assert_eq!(early.grid_id, None);
+        assert_eq!(beats(&early.id).await, None);
+
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
+        let written = catalog::create_score(
+            &pool,
+            "song",
+            "room",
+            None,
+            crate::sync::triggers::Attribution::PERSON,
+        )
+        .await
+        .unwrap();
+        assert!(written.grid_id.is_some());
+        // Four beats of it, which the song list measures in seconds.
+        sqlx::query(
+            "INSERT INTO clips
+             (id, uid, score_id, graph_json, graph, start, duration, seed, selection_json,
+              blend_mode)
+             VALUES (?2, 'alice', ?1, '{\"version\":1,\"nodes\":{}}', '', 0, 4, '0',
+                     '{\"all\":true}', 'replace')",
+        )
+        .bind(&written.id)
+        .bind(Uuid::new_v4().to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let coverage = || async {
+            list_tracks_enriched(&pool, Some("room")).await.unwrap()[0]
+                .venue_annotation_coverage_seconds
+        };
+        let before = coverage().await;
+        assert!(before > 0.);
+
+        // The song is analysed again and found at half the tempo.
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(60.),
+            7,
+        )
+        .await
+        .unwrap();
+        assert_eq!(beats(&written.id).await, Some(grid_at(120.)));
+        assert_eq!(coverage().await, before);
+        assert_eq!(beats(&early.id).await, Some(grid_at(120.)));
+
+        // A copy holds the same clips, so it names the same grid; a new
+        // score is written against the current one.
+        let copy = catalog::duplicate_score(&pool, &written.id, "Copy")
+            .await
+            .unwrap();
+        assert_eq!(copy.grid_id, written.grid_id);
+        assert_eq!(beats(&copy.id).await, Some(grid_at(120.)));
+        let late = catalog::create_score(
+            &pool,
+            "song",
+            "room",
+            None,
+            crate::sync::triggers::Attribution::PERSON,
+        )
+        .await
+        .unwrap();
+        assert_ne!(late.grid_id, written.grid_id);
+        assert_eq!(beats(&late.id).await, Some(grid_at(60.)));
+
+        // A grid this device no longer holds leaves its scores on the
+        // current one, not without beats.
+        sqlx::query("DELETE FROM track_beats WHERE id = ?")
+            .bind(&written.grid_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(beats(&written.id).await, Some(grid_at(60.)));
+    }
+
     #[tokio::test]
     async fn beat_validation_snapshots_survive_reanalysis_and_reject_stale_approval() {
         use super::super::beat_validations;
@@ -1015,19 +1502,16 @@ mod tests {
             .unwrap();
         sqlx::query("INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('reviewed', 'alice', 'audio-hash', '/audio.ogg')")
             .execute(&pool).await.unwrap();
-        upsert_track_beats(
-            &pool,
-            "reviewed",
-            "[0,0.5,1,1.5,2]",
-            "[0,2]",
-            Some(120.),
-            Some(0.),
-            Some(4),
-            7,
-        )
-        .await
-        .unwrap();
-        let grid = get_track_beats(&pool, "reviewed").await.unwrap().unwrap();
+        let grid = grid_at(120.);
+        record_track_beats(&mut *pool.acquire().await.unwrap(), "reviewed", &grid, 7)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_track_beats(&pool, Grid::current("reviewed"))
+                .await
+                .unwrap(),
+            Some(grid.clone())
+        );
         assert!(beat_validations::get(&pool, "reviewed")
             .await
             .unwrap()
@@ -1079,14 +1563,10 @@ mod tests {
         beat_validations::set(&pool, "reviewed", &grid, Verdict::Correct, None)
             .await
             .unwrap();
-        upsert_track_beats(
-            &pool,
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
             "reviewed",
-            "[0,1,2,3,4]",
-            "[0,4]",
-            Some(60.),
-            Some(0.),
-            Some(4),
+            &grid_at(60.),
             8,
         )
         .await
@@ -1099,12 +1579,18 @@ mod tests {
                 reason: None
             })
         );
+        // A grid the track never had is not one a person can have reviewed.
         assert!(
-            beat_validations::set(&pool, "reviewed", &grid, Verdict::Correct, None)
+            beat_validations::set(&pool, "reviewed", &grid_at(90.), Verdict::Correct, None)
                 .await
                 .unwrap_err()
                 .contains("changed")
         );
+        // The earlier grid is still the track's, on the screen of anyone whose
+        // score was written against it, and is stamped with its own detector.
+        beat_validations::set(&pool, "reviewed", &grid, Verdict::Correct, None)
+            .await
+            .unwrap();
         let snapshot: (String, i64, String) = sqlx::query_as("SELECT track_hash, processor_version, verdict FROM track_beat_validations WHERE track_id = 'reviewed'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(snapshot, ("audio-hash".into(), 7, "correct".into()));

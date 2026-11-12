@@ -108,6 +108,7 @@ impl ClipPreset {
     pub fn clip(&self, start: f64, duration: f64) -> Clip {
         Clip {
             name: self.name.clone(),
+            label: None,
             start,
             duration,
             seed: 0,

@@ -204,6 +204,12 @@ pub struct Fixture {
     /// signed in as [`session::PRINCIPAL`] either way; a second account's
     /// rows are `sql`, under its own principal.
     accounts: HashMap<String, String>,
+    /// The addresses in `accounts` that have yet to accept the terms: signing
+    /// in as one lands on the terms page. Every other account has accepted.
+    terms_pending: Vec<String>,
+    /// Open with the terms page still owed to the signed-in account, as it
+    /// is to one that quit on the page: the launch lands back on it.
+    terms_owed: bool,
     /// Files written into the library directory after the rows, by path
     /// relative to it: a fixture definition with a second mode over the rig's
     /// (`fixtures/Luma/Mover.qxf`), say.
@@ -386,6 +392,8 @@ impl Default for Fixture {
             outside_clips: Vec::new(),
             sql: Vec::new(),
             accounts: HashMap::new(),
+            terms_pending: Vec::new(),
+            terms_owed: false,
             files: HashMap::new(),
             assets: HashMap::new(),
             library: None,
@@ -469,6 +477,12 @@ impl Fixture {
         let source_import_fixture_delay = self.source_import_fixture_delay;
         let venues_delay = self.venues_delay;
         let accounts = self.accounts.clone();
+        let terms_pending: std::collections::HashSet<String> = self
+            .terms_pending
+            .iter()
+            .filter_map(|address| self.accounts.get(address).cloned())
+            .collect();
+        let terms_owed = self.terms_owed;
         let model = self.model.clone();
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
@@ -507,6 +521,10 @@ impl Fixture {
                 }
                 if !accounts.is_empty() {
                     library.set_sign_in_fixture(session::accounts(accounts.clone()));
+                }
+                // Whoever can reach the terms page needs somewhere to accept.
+                if !accounts.is_empty() || terms_owed {
+                    library.set_terms_fixture(terms_pending.clone());
                 }
                 if let Some(steps) = &model {
                     library.set_agent_model(Arc::new(agent::model(steps, model_cadence)));
@@ -651,6 +669,9 @@ impl Fixture {
         if !self.camera_tour {
             session::toured(config_dir, &owner).await;
         }
+        if self.terms_owed {
+            session::owes_terms(config_dir, &owner).await;
+        }
     }
 
     async fn write(&self, config_dir: &Path) {
@@ -669,14 +690,17 @@ impl Fixture {
             .execute(pool)
             .await
             .expect("failed to seed the venue");
-        // Every venue has its root from the moment it exists.
-        sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'venue')")
-            .bind(luma_lib::venue_graph::root_id(VENUE))
-            .bind(session::PRINCIPAL)
-            .bind(VENUE)
-            .execute(pool)
-            .await
-            .expect("failed to seed the venue root");
+        // Every venue has its root from the moment it exists, under a random
+        // id like any row's: a test finds it by its kind.
+        sqlx::query(
+            "INSERT INTO venue_nodes (id, uid, venue_id, kind)
+             VALUES (lower(hex(randomblob(16))), ?, ?, 'venue')",
+        )
+        .bind(session::PRINCIPAL)
+        .bind(VENUE)
+        .execute(pool)
+        .await
+        .expect("failed to seed the venue root");
         if self.seed_track {
             sqlx::query(
                 "INSERT INTO tracks
@@ -791,6 +815,9 @@ impl Fixture {
         if !self.camera_tour {
             session::toured(config_dir, session::PRINCIPAL).await;
         }
+        if self.terms_owed {
+            session::owes_terms(config_dir, session::PRINCIPAL).await;
+        }
         let services = luma_lib::boot::open(luma_lib::boot::Boot {
             storage: luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf()),
             fixtures_root: config_dir.to_path_buf(),
@@ -817,8 +844,7 @@ impl Fixture {
                 &services,
                 "create_score",
                 json!({
-                    "requestId": request_id(0), "trackId": TRACK,
-                    "venueId": VENUE, "name": "Fixture Score",
+                    "trackId": TRACK, "venueId": VENUE, "name": "Fixture Score",
                 }),
             )
             .await;
@@ -833,12 +859,11 @@ impl Fixture {
         };
 
         let mut scores: Vec<String> = score_id.iter().cloned().collect();
-        for extra in 0..self.extra_scores {
+        for _ in 0..self.extra_scores {
             let score = call(
                 &services,
                 "create_score",
                 json!({
-                    "requestId": request_id(900 + extra),
                     "trackId": TRACK,
                     "venueId": VENUE,
                     "name": null,
@@ -1069,7 +1094,9 @@ impl Fixture {
         sqlx::query(
             "INSERT INTO venue_nodes
                  (id, uid, venue_id, kind, catalog_ref, label, parent_id, my_socket, their_socket, roll)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0)",
+             VALUES (?, ?, ?, ?, ?, ?,
+                     (SELECT id FROM venue_nodes WHERE venue_id = ? AND kind = 'venue'),
+                     ?, ?, 0.0)",
         )
         .bind(id)
         .bind(session::PRINCIPAL)
@@ -1077,7 +1104,7 @@ impl Fixture {
         .bind(kind)
         .bind(catalog_ref)
         .bind(label)
-        .bind(luma_lib::venue_graph::root_id(VENUE))
+        .bind(VENUE)
         .bind(my_socket)
         .bind(their_socket)
         .execute(pool)
@@ -1085,8 +1112,8 @@ impl Fixture {
         .expect("failed to place a venue node");
         for (key, value) in [("u", u), ("v", v), ("trim", trim)] {
             sqlx::query(
-                "INSERT INTO venue_node_params (node_id, uid, venue_id, key, value)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO venue_node_params (id, node_id, uid, venue_id, key, value)
+                 VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?, ?)",
             )
             .bind(id)
             .bind(session::PRINCIPAL)
@@ -1107,8 +1134,8 @@ impl Fixture {
             .collect();
         let downbeats: Vec<f64> = beats.iter().copied().step_by(4).collect();
         sqlx::query(
-            "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)
-             VALUES (?, ?, ?, ?, 120.0, 0.0, 4)",
+            "INSERT INTO track_beats (id, track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)
+             VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?, 120.0, 0.0, 4)",
         )
         .bind(TRACK)
         .bind(session::PRINCIPAL)

@@ -280,6 +280,19 @@ async fn the_perform_set_saves_lists_changes_and_deletes() {
     .await
     .unwrap();
     assert_eq!(read_layout(&services, &venue).await, Some(layout.clone()));
+    let layout_rows = || async {
+        sqlx::query_scalar::<_, String>("SELECT id FROM perform_layouts WHERE venue_id = ?")
+            .bind(&venue)
+            .fetch_all(&services.db.0)
+            .await
+            .unwrap()
+    };
+    let stored = layout_rows().await;
+    assert_eq!(stored.len(), 1);
+    assert_ne!(
+        stored[0], venue,
+        "the layout's id is its own, not its venue's"
+    );
 
     dispatch(
         &services,
@@ -288,6 +301,11 @@ async fn the_perform_set_saves_lists_changes_and_deletes() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        layout_rows().await,
+        stored,
+        "a venue has one layout row, changed in place"
+    );
     let listed = dispatch(
         &services,
         "list_perform_patterns",
@@ -529,7 +547,12 @@ async fn two_groups(services: &AppServices, venue: &str) {
     use crate::database::local::groups as groups_db;
     use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
 
-    let root = crate::venue_graph::root_id(venue);
+    let root: String =
+        sqlx::query_scalar("SELECT id FROM venue_nodes WHERE venue_id = ? AND kind = 'venue'")
+            .bind(venue)
+            .fetch_one(&services.db.0)
+            .await
+            .unwrap();
     for (i, id) in ["left", "right"].iter().enumerate() {
         sqlx::query(
             "INSERT INTO fixtures (id, venue_id, universe, address, num_channels,
@@ -558,8 +581,10 @@ async fn two_groups(services: &AppServices, venue: &str) {
         .unwrap();
         for (key, value) in [("u", i as f64), ("v", 0.0), ("trim", 2.0)] {
             sqlx::query(
-                "INSERT INTO venue_node_params (node_id, venue_id, key, value) VALUES (?, ?, ?, ?)",
+                "INSERT INTO venue_node_params (id, node_id, venue_id, key, value)
+                 VALUES (?, ?, ?, ?, ?)",
             )
+            .bind(uuid::Uuid::new_v4().to_string())
             .bind(id)
             .bind(venue)
             .bind(key)

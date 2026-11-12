@@ -41,6 +41,7 @@ use crate::models::universe::UniverseState;
 use crate::services::groups;
 use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
+use crate::sync::triggers::TurnAttribution;
 use luma_scene::environment::{HazeAppearance, SkyParams, VenueEnvironment, VenueHaze};
 use luma_scene::venue_tiles::TileMap;
 use luma_scene::View;
@@ -53,8 +54,8 @@ pub struct VenueHost {
     resource_root: PathBuf,
     workspace: Arc<Workspace>,
     venue_id: String,
-    /// Who this thread's writes are attributed to: the thread's `actor`.
-    actor: Option<String>,
+    /// Who this cell's writes are attributed to and the turn they belong to.
+    attribution: TurnAttribution,
     /// The score that lights the room, when the thread has one. Without it the
     /// rig uses the venue's saved environment, with geometry and no score beams.
     lighting: Option<Arc<TrackHost>>,
@@ -74,7 +75,7 @@ impl VenueHost {
         resource_root: PathBuf,
         workspace: Arc<Workspace>,
         venue_id: String,
-        actor: Option<String>,
+        attribution: TurnAttribution,
         lighting: Option<Arc<TrackHost>>,
     ) -> Self {
         Self {
@@ -83,7 +84,7 @@ impl VenueHost {
             resource_root,
             workspace,
             venue_id,
-            actor,
+            attribution,
             lighting,
             drafts: std::sync::Mutex::default(),
         }
@@ -420,7 +421,7 @@ impl VenueHost {
         VenueAccess::<Write>::write_as(
             &self.pool,
             VenueResource::Venue(&self.venue_id),
-            self.actor.as_deref(),
+            self.attribution.get(),
         )
         .await
     }
@@ -462,7 +463,7 @@ impl VenueHost {
     /// This thread's venue, bound to the verbs.
     fn stage(&self) -> Stage<'_> {
         Stage::new(&self.pool, &self.resource_root, &self.venue_id)
-            .attributed(self.actor.as_deref())
+            .attributed(self.attribution.get())
     }
 
     /// The placeable vocabulary. A read of the catalog, not of the venue, so it
@@ -602,6 +603,38 @@ impl VenueHost {
         access.commit().await.map_err(invalid)?;
         crate::database::local::venue_graph::rig_changed();
         Ok(json!({ "universe": universe, "address": address, "pinned": true }))
+    }
+
+    /// Delete a collection by name. A selection that named it keeps it listed
+    /// and selects nothing there, so the answer says what selected it.
+    async fn remove_group(&self, request: RemoveGroupRequest) -> Result<Value, HostCallError> {
+        let invalid = |error: String| HostCallError::new("invalid_group", error);
+        let mut access = self.write_access().await.map_err(invalid)?;
+        let name = crate::models::groups::normalize_group_name(&request.name);
+        let group = crate::database::local::groups::list_groups(&mut access)
+            .await
+            .map_err(invalid)?
+            .into_iter()
+            .find(|group| group.name.as_deref() == Some(name.as_str()))
+            .ok_or_else(|| invalid(format!("no group named `{name}` in this venue")))?;
+        let usage = crate::dispatch::handlers::group_references::usage(&mut access)
+            .await
+            .map_err(invalid)?
+            .into_iter()
+            .find(|usage| usage.group_id == group.id);
+        crate::database::local::groups::delete_group(&mut access, &group.id)
+            .await
+            .map_err(invalid)?;
+        access.commit().await.map_err(invalid)?;
+        crate::database::local::venue_graph::rig_changed();
+        Ok(json!({
+            "name": name,
+            "clips": usage.as_ref().map_or(0, |usage| usage.clips),
+            "scores": usage.as_ref().map_or(0, |usage| usage.scores.len()),
+            "perform": usage
+                .as_ref()
+                .map_or(0, |usage| usage.perform_patterns.len() + usage.perform_cells),
+        }))
     }
 
     async fn generate_groups(&self) -> Result<Value, HostCallError> {
@@ -1194,6 +1227,7 @@ impl HostCallHandler for VenueHost {
                     "venue.group" => self.group(decode(payload)?).await,
                     "venue.fixtures" => self.fixtures().await,
                     "venue.patch" => self.patch(decode(payload)?).await,
+                    "venue.remove_group" => self.remove_group(decode(payload)?).await,
                     "venue.generate_groups" => self.generate_groups().await,
                     "venue.laser_zones" => self.laser_zones().await,
                     "venue.laser_zone" => self.laser_zone(decode(payload)?).await,
@@ -1409,6 +1443,12 @@ struct GroupRequest {
     fixtures: Vec<String>,
     #[serde(default)]
     replace: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoveGroupRequest {
+    name: String,
 }
 
 /// The room's own light. Every field absent is a read; any field present is a write.

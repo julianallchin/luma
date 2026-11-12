@@ -10,6 +10,7 @@ use sqlx::SqlitePool;
 use super::error::SyncError;
 use crate::storage::StorageRoot;
 use crate::sync::supabase::Storage;
+use crate::sync::triggers::{AttributedWrite, Attribution};
 
 /// Stats from a file sync operation.
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -21,17 +22,6 @@ pub struct FileSyncStats {
     pub stems_downloaded: usize,
     pub art_downloaded: usize,
     pub errors: Vec<String>,
-}
-
-fn audio_content_type(ext: &str) -> &'static str {
-    match ext {
-        "mp3" => "audio/mpeg",
-        "m4a" | "aac" => "audio/mp4",
-        "flac" => "audio/flac",
-        "wav" => "audio/wav",
-        "ogg" => "audio/ogg",
-        _ => "application/octet-stream",
-    }
 }
 
 fn stem_content_type(ext: &str) -> &'static str {
@@ -66,7 +56,7 @@ async fn upload<Record, Recorded>(
 ) -> bool
 where
     Record: FnOnce(String) -> Recorded,
-    Recorded: std::future::Future<Output = Result<(), sqlx::Error>>,
+    Recorded: std::future::Future<Output = Result<(), String>>,
 {
     match remote
         .upload_file(bucket, object, bytes, content_type, token)
@@ -84,6 +74,21 @@ where
             false
         }
     }
+}
+
+/// Write down where an upload landed. Nobody edited the row: the app moved
+/// its bytes, so the change uploads as `app:media-sync` and the server's
+/// history does not put it on the person.
+pub(super) async fn record_upload(
+    pool: &SqlitePool,
+    query: sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>,
+) -> Result<(), String> {
+    let mut write = AttributedWrite::begin(pool, Attribution::MEDIA_SYNC).await?;
+    query
+        .execute(write.connection())
+        .await
+        .map_err(|error| error.to_string())?;
+    write.commit().await
 }
 
 /// Fetch the object `storage_path` (`bucket/object`) names and write it to
@@ -118,39 +123,6 @@ async fn download(
 // Upload
 // ============================================================================
 
-/// Transcode an audio file to OGG Opus using the bundled ffmpeg.
-/// Returns the compressed bytes, or None if transcoding fails.
-fn transcode_to_ogg_opus(source: &std::path::Path) -> Option<Vec<u8>> {
-    let tmp = tempfile::Builder::new().suffix(".ogg").tempfile().ok()?;
-    let tmp_path = tmp.path().to_path_buf();
-
-    let ffmpeg = crate::runtime::ffmpeg::ffmpeg_path();
-    let output = crate::runtime::command::command(&ffmpeg)
-        .args([
-            "-i",
-            source.to_str()?,
-            "-c:a",
-            "libopus",
-            "-b:a",
-            "96k",
-            "-vn",
-            "-y",
-            tmp_path.to_str()?,
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        eprintln!(
-            "[file-sync] ffmpeg transcode failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return None;
-    }
-
-    std::fs::read(&tmp_path).ok()
-}
-
 #[derive(sqlx::FromRow)]
 struct PendingAudioUpload {
     id: String,
@@ -158,8 +130,8 @@ struct PendingAudioUpload {
     file_path: String,
 }
 
-/// Upload audio files that have a local file but no storage_path.
-/// Audio is transcoded to OGG Opus before upload to reduce storage/bandwidth.
+/// Upload audio that is on this machine in the stored format and has no
+/// storage_path. The bytes go up as they are.
 pub async fn upload_pending_audio(
     pool: &SqlitePool,
     remote: &Storage,
@@ -170,9 +142,10 @@ pub async fn upload_pending_audio(
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingAudioUpload>(
         "SELECT id, track_hash, file_path FROM tracks
-         WHERE uid = ? AND storage_path IS NULL AND file_path NOT LIKE '%.stub'",
+         WHERE uid = ? AND storage_path IS NULL AND file_path LIKE ?",
     )
     .bind(uid)
+    .bind(format!("%.{}", crate::audio::stored::EXTENSION))
     .fetch_all(pool)
     .await?;
 
@@ -184,47 +157,30 @@ pub async fn upload_pending_audio(
             continue;
         }
 
-        // Transcode to OGG Opus; fall back to original if ffmpeg fails
-        let (bytes, storage_path, content_type) =
-            if let Some(compressed) = transcode_to_ogg_opus(file_path) {
-                (
-                    compressed,
-                    format!("{uid}/{}/audio.ogg", row.track_hash),
-                    "audio/ogg",
-                )
-            } else {
-                let ext = file_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("bin");
-                let bytes = match std::fs::read(file_path) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        stats.errors.push(format!("read audio {}: {e}", row.id));
-                        continue;
-                    }
-                };
-                (
-                    bytes,
-                    format!("{uid}/{}/audio.{ext}", row.track_hash),
-                    audio_content_type(ext),
-                )
-            };
+        let bytes = match std::fs::read(file_path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                stats.errors.push(format!("read audio {}: {e}", row.id));
+                continue;
+            }
+        };
+        let storage_path = format!("{uid}/{}/audio.ogg", row.track_hash);
 
         let recorded = upload(
             remote,
             token,
             ("track-audio", &storage_path),
-            (bytes, content_type),
+            (bytes, "audio/ogg"),
             &format!("audio {}", row.id),
             &mut stats.errors,
             |full_path| async move {
-                sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
-                    .bind(full_path)
-                    .bind(&row.id)
-                    .execute(pool)
-                    .await
-                    .map(drop)
+                record_upload(
+                    pool,
+                    sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
+                        .bind(full_path)
+                        .bind(&row.id),
+                )
+                .await
             },
         )
         .await;
@@ -294,15 +250,17 @@ pub async fn upload_pending_stems(
             &format!("stem {}/{}", row.track_id, row.stem_name),
             &mut stats.errors,
             |full_path| async move {
-                sqlx::query(
-                    "UPDATE track_stems SET storage_path = ? WHERE track_id = ? AND stem_name = ?",
+                record_upload(
+                    pool,
+                    sqlx::query(
+                        "UPDATE track_stems SET storage_path = ?
+                          WHERE track_id = ? AND stem_name = ?",
+                    )
+                    .bind(full_path)
+                    .bind(&row.track_id)
+                    .bind(&row.stem_name),
                 )
-                .bind(full_path)
-                .bind(&row.track_id)
-                .bind(&row.stem_name)
-                .execute(pool)
                 .await
-                .map(drop)
             },
         )
         .await;
@@ -369,12 +327,13 @@ pub async fn upload_pending_album_art(
             &format!("art {}", row.id),
             &mut stats.errors,
             |full_path| async move {
-                sqlx::query("UPDATE tracks SET album_art_storage_path = ? WHERE id = ?")
-                    .bind(full_path)
-                    .bind(&row.id)
-                    .execute(pool)
-                    .await
-                    .map(drop)
+                record_upload(
+                    pool,
+                    sqlx::query("UPDATE tracks SET album_art_storage_path = ? WHERE id = ?")
+                        .bind(full_path)
+                        .bind(&row.id),
+                )
+                .await
             },
         )
         .await;
@@ -439,6 +398,7 @@ pub async fn upload_pending_agent_figures(
                     .execute(pool)
                     .await
                     .map(drop)
+                    .map_err(|error| error.to_string())
             },
         )
         .await;

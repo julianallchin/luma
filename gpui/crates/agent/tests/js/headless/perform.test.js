@@ -112,7 +112,7 @@ fixture({
               ('${BAR}', '$PRINCIPAL', 'venue-main', 'Bar wash',
                '{"all":true}', 2, 'replace', '7', '${onTheBar}')`,
     `INSERT INTO perform_layouts (id, uid, venue_id, layout_json)
-       VALUES ('venue-main', '$PRINCIPAL', 'venue-main', '${layout}')`,
+       VALUES ('layout-main', '$PRINCIPAL', 'venue-main', '${layout}')`,
     `INSERT INTO perform_controllers (id, uid, venue_id, name, port, profile_json)
        VALUES ('controller-pads', '$PRINCIPAL', 'venue-main', 'Pads', 'Pads MIDI 1', '${profile}')`,
   ],

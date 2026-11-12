@@ -1,15 +1,21 @@
 ---
 name: color
-description: Palettes, temperature, and what hues mean. Read before choosing any palette. The most common failure in amateur shows is color noise — this is how to avoid it.
+description: Palettes, temperature, what hues mean, and how many colors a song can carry. How to move between colors smoothly and how many lights a gradient needs. Read before choosing any palette.
 ---
 # Color
 
 Color is the emotional register of the show. Brightness says how much; color
-says what kind. The most common amateur failure is treating color as variety —
-cycling hues because more feels like more. It reads as noise. A held color is
-a statement; a cycling rainbow is a screensaver.
+says what kind. How many colors a passage carries comes from its harmony
+(see `reading-music-into-light`). A drone or a riff holds one or two. A big,
+moving, generous progression can carry a whole spectrum, and a rainbow that
+glides through it is the right answer. What fails is color as variety:
+hues cycling because more feels like more, with nothing in the music moving
+them.
 
-## The rules that hold
+## Defaults that usually hold
+
+These describe most songs. The song in front of you, or the user, can
+overrule any of them.
 
 - **A section is a palette.** Two colors, maybe three with one as accent-only.
   Choose them before authoring the section, name what each is for, and hold
@@ -21,6 +27,9 @@ a statement; a cycling rainbow is a screensaver.
 - **Temperature is the arc.** Cold → warm across a build is a lift the body
   feels. Warm verse, cold drop is betrayal (the good kind). Track temperature
   across the whole show the way you track brightness terracing.
+- **Check the set, not just each color.** Some combinations carry a meaning
+  nobody chose: red, yellow and green together read as a flag. Look at the
+  palette as a whole before committing.
 - **White is a color, and it's expensive.** Full white reads as revelation or
   blast — the biggest single accent available. More than a few moments of it
   and it's a work light.
@@ -49,6 +58,24 @@ chord, but a lean (blue toward violet on the minor lift, amber toward gold on
 resolve). The room won't name it; they'll feel the light agreeing with the
 song. Trance, melodic house, and melodic bass earn this; percussive genres
 don't — there, color belongs to sections.
+
+## Moving between colors
+
+- A gradient blends in OKLab, so a curve over time through two or more stops
+  glides between them with no muddy middle. For a color that slides, put the
+  stops on one curve; do not alternate clips.
+- A hard change is a jump in the curve or a new clip. Use it when the sound
+  changes hard.
+- A gradient across space needs heads to carry it. Count the heads along the
+  axis: a dozen can show a soft blend of neighbors, and many colors across a
+  few heads look choppy. With few heads, narrow the range of hues or let the
+  colors move over time.
+- A scrolling gradient that loops must end where it began. If you stretch
+  the gradient so a light shows only part of it, the travel per loop has to
+  cover the whole gradient, or it snaps back at the wrap. Measure the frame
+  before and after the loop point.
+- Iridescence is neighbors, not opposites: a narrow band of hues spread
+  across a surface and drifting, so each light is slightly off the next.
 
 ## Choosing a palette for a track
 

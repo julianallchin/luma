@@ -102,6 +102,7 @@ pub(super) async fn run(
             }
         }
     };
+    turn.remember_score().await;
     // Cloud cleanup runs independently when Claim drops. Only local execution
     // determines the result consumed by the parent and its merge.
     drop(turn.claim.take());
@@ -173,7 +174,7 @@ impl Document {
                     "SELECT (SELECT count(*) || ' ' || coalesce(max(updated_at), '')
                              FROM perform_patterns WHERE venue_id = ?1)
                          || ' ' || coalesce(
-                             (SELECT updated_at FROM perform_layouts WHERE id = ?1), '')",
+                             (SELECT updated_at FROM perform_layouts WHERE venue_id = ?1), '')",
                 )
                 .bind(venue_id)
                 .fetch_optional(pool)
@@ -259,6 +260,10 @@ impl Turn {
         // Resuming continues the open assistant row, when there is one, and
         // attributes its tools to the prompt that row answers.
         let mut resume_row = None;
+        let prompt = match prompt {
+            Some(prompt) => Some(self.with_hand_edits(prompt).await),
+            None => None,
+        };
         let mut turn_message_id = match &prompt {
             Some(prompt) => self.append_user(prompt).await?,
             None => self.prepare_resume(&mut resume_row).await?,
@@ -399,7 +404,10 @@ impl Turn {
                 .pop_front()
                 .or_else(|| self.steer.try_recv().ok())
             {
-                Some(prompt) => turn_message_id = self.append_user(&prompt).await?,
+                Some(prompt) => {
+                    let prompt = self.with_hand_edits(prompt).await;
+                    turn_message_id = self.append_user(&prompt).await?;
+                }
                 None => return Ok(()),
             }
         }
@@ -721,6 +729,60 @@ impl Turn {
         Ok((StopReason::EndTurn, Usage::default(), ready))
     }
 
+    /// `prompt` with what the user changed in the score by hand since this
+    /// thread's last reply, when it was sent from the track editor. Only a
+    /// prompt that starts a reply gets this: a steer lands while the agent's
+    /// own edits are still unremembered.
+    async fn with_hand_edits(&self, mut prompt: UserPrompt) -> UserPrompt {
+        let Some(context) = prompt.context.as_mut() else {
+            return prompt;
+        };
+        let (Some(editor), Some(scope)) = (context.editor.as_mut(), context.scope.as_ref()) else {
+            return prompt;
+        };
+        let Some(score_id) = scope.score_id.as_deref() else {
+            return prompt;
+        };
+        let pool = &self.service.services().db().0;
+        match super::hand_edits::since(pool, &self.thread_id, score_id).await {
+            Ok(Some(edits)) if !edits.is_empty() => {
+                let grid = crate::database::local::tracks::get_track_beats(
+                    pool,
+                    crate::database::local::tracks::Grid::of_score(&scope.subject_id, score_id),
+                )
+                .await;
+                match grid {
+                    Ok(grid) => editor.note_hand_edits(edits, grid.as_ref()),
+                    Err(error) => log::warn!(
+                        "[agent] thread {} could not place the user's edits: {error}",
+                        self.thread_id
+                    ),
+                }
+            }
+            Ok(_) => {}
+            Err(error) => log::warn!(
+                "[agent] thread {} could not read the user's edits: {error}",
+                self.thread_id
+            ),
+        }
+        prompt
+    }
+
+    /// Remember the score as this reply leaves it, so the next message can
+    /// say what the user changed by hand since.
+    async fn remember_score(&self) {
+        let Some((Document::Score(score_id), _)) = &self.document else {
+            return;
+        };
+        let pool = &self.service.services().db().0;
+        if let Err(error) = super::hand_edits::remember(pool, &self.thread_id, score_id).await {
+            log::warn!(
+                "[agent] thread {} did not remember its score: {error}",
+                self.thread_id
+            );
+        }
+    }
+
     /// Persist the user's message before any remote call is made: the prompt is
     /// durable before it can produce a response. Returns its id, which is the
     /// turn message every tool call in the rows that follow is attributed to.
@@ -743,17 +805,11 @@ impl Turn {
     /// events only carry the text, and the model reads the context from this
     /// fold.
     fn attach_context(&mut self, id: &str, prompt: &UserPrompt) {
-        let Some(context) = &prompt.context else {
-            return;
-        };
-        if let Some(row) = self
-            .transcript
-            .messages
-            .iter_mut()
-            .rev()
-            .find(|message| message.id == id)
-        {
-            row.parts.push(context::part(context));
+        if let Some(context) = &prompt.context {
+            self.emit(TurnEvent::ContextAttached {
+                id: id.to_owned(),
+                context: Box::new(context.clone()),
+            });
         }
     }
 
@@ -789,6 +845,7 @@ impl Turn {
                 self.emit(TurnEvent::DocumentChanged);
             }
         }
+        self.remember_score().await;
         let _ = self.events.send(ended);
         Ok(())
     }

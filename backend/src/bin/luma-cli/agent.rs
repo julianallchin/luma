@@ -54,9 +54,15 @@ pub async fn run(mut args: super::Args) -> Result<(), String> {
         .await?
         .into_shared();
     if let (Some(track), Some(venue)) = (track, venue) {
-        let score = dispatch(&services, "create_score", &serde_json::json!({
-            "requestId":uuid::Uuid::new_v4().to_string(),"trackId":track,"venueId":venue,"name":null
-        })).await.map_err(|e| e.to_string())?;
+        let score = dispatch(
+            &services,
+            "create_score",
+            &serde_json::json!({
+                "trackId":track,"venueId":venue,"name":null
+            }),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         let score = score["id"].as_str().ok_or("create_score returned no id")?;
         eprintln!("score {score}");
         scope = Some(ThreadScope::track(track, venue, score));

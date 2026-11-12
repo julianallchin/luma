@@ -3,6 +3,7 @@ pub mod decoder;
 pub(crate) mod fft;
 pub mod filters;
 pub(crate) mod spectrum;
+pub mod stored;
 
 pub use cache::{
     decode_file_shared, load_or_decode_audio_shared, read_pcm_file, read_pcm_header,

@@ -93,7 +93,9 @@ pub async fn track_bar_boundaries(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<Vec<(f64, f64)>, String> {
-    let Some(beats) = tracks_db::get_track_beats_raw(pool, track_id).await? else {
+    let Some(beats) =
+        tracks_db::get_track_beats_raw(pool, tracks_db::Grid::current(track_id)).await?
+    else {
         return Ok(Vec::new());
     };
     let downbeats: Vec<f64> = serde_json::from_str(&beats.downbeats_json)

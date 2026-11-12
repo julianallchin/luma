@@ -25,7 +25,8 @@
 //! Like `luma-cli rpc`, this is a thin adapter over `luma_lib::dispatch` — it
 //! implements no command of its own, so scope resolution, the binding manifest,
 //! the write-admission gate and the interrupt ladder are the app's, not a
-//! second copy. What it adds is the *session*: an MCP client has no editor to
+//! second copy. The one call that goes past dispatch is minting a session's
+//! score ([`bind_venue`]), so that the write names this client. What it adds is the *session*: an MCP client has no editor to
 //! read a track from, so `open` pins one durable agent thread and every later
 //! call addresses it.
 //!
@@ -51,7 +52,10 @@ use luma_lib::agent::tools::python::{cell_content_blocks, PYTHON_TOOL_DESCRIPTIO
 use luma_lib::agent::tools::skill::SKILL_TOOL_DESCRIPTION;
 use luma_lib::dispatch::{self, AppServices};
 use luma_lib::headless_host::{boot, HostConfig};
+use luma_lib::models::actor::Actor;
 use luma_lib::models::agent_execution::PythonCellResult;
+use luma_lib::services::catalog;
+use luma_lib::sync::triggers::Attribution;
 
 const SERVER: ServerInfo = ServerInfo {
     name: "luma",
@@ -329,8 +333,26 @@ async fn open(
     // span one.
     let connected = client.read().await.clone();
 
-    let (venue_id, score_id) =
-        bind_venue(services, &track_id, &label, venue_id, &venues, new_score).await?;
+    // The session's turn is named before it is written. The thread is pinned
+    // to a score, so a score this open mints comes first, and it belongs to
+    // the same turn as everything the session writes afterwards. The label
+    // is held to what `agent_thread_set_actor` accepts, so the score and the
+    // session's cells name the same writer or neither does.
+    let session_message_id = uuid();
+    let actor = connected
+        .as_ref()
+        .map(|connected| client_actor(connected, model))
+        .filter(|label| Actor::parse(label).is_ok());
+    let minting = Attribution {
+        actor: actor.as_deref(),
+        thread: None,
+        message: Some(&session_message_id),
+        group: Some(&session_message_id),
+    };
+    let (venue_id, score_id) = bind_venue(
+        services, &track_id, &label, venue_id, &venues, new_score, minting,
+    )
+    .await?;
 
     let thread = invoke(
         services,
@@ -357,7 +379,7 @@ async fn open(
         .await;
     }
 
-    let session_message_id = session_turn(services, &thread_id, &label).await?;
+    session_turn(services, &thread_id, &session_message_id, &label).await?;
 
     let opened = Session {
         thread_id,
@@ -454,7 +476,8 @@ async fn open_venue(
         .await;
     }
 
-    let session_message_id = session_turn(services, &thread_id, &label).await?;
+    let session_message_id = uuid();
+    session_turn(services, &thread_id, &session_message_id, &label).await?;
     let opened = Session {
         thread_id,
         session_message_id,
@@ -488,14 +511,17 @@ async fn open_venue(
 ///
 /// [`Role::Session`] and no speech — this client is a principal but not a
 /// *user*, and who opened it is the thread's actor, not a sentence in the
-/// transcript.
+/// transcript. The caller names the row, `message_id`, because a score
+/// minted for the session is attributed to this turn before the thread, and
+/// so the row, can exist.
 ///
 /// [`Role::Session`]: luma_lib::agent::transcript::Role::Session
 async fn session_turn(
     services: &AppServices,
     thread_id: &str,
+    message_id: &str,
     label: &str,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let appended = invoke(
         services,
         "agent_thread_append_messages",
@@ -504,18 +530,22 @@ async fn session_turn(
             "input": {
                 "operationId": uuid(),
                 "expectedHeadMessageId": Value::Null,
-                "messages": [{ "role": "session", "parts": [
+                "messages": [{ "id": message_id, "role": "session", "parts": [
                     { "type": "text", "text": format!("Session opened on {label}.") },
                 ]}],
             },
         }),
     )
     .await?;
-    appended
+    let appended_id = appended
         .as_array()
         .and_then(|messages| messages.first())
-        .map(|message| string(message, "id"))
-        .ok_or_else(|| format!("the session turn was not appended: {appended}"))
+        .map(|message| string(message, "id"));
+    if appended_id.as_deref() == Some(message_id) {
+        Ok(())
+    } else {
+        Err(format!("the session turn was not appended: {appended}"))
+    }
 }
 
 /// The room this session binds, and the track's membership in it.
@@ -535,6 +565,11 @@ async fn session_turn(
 /// `new_score` is the other intent: not "the score the operator sees" but "a
 /// blank one of my own". A track may hold many scores in a room, so this adds
 /// rather than replaces — nothing already authored is touched.
+///
+/// A score minted here is this client's doing, so it is made through the
+/// service the `create_score` and `ensure_venue_score` commands call rather
+/// than through those commands, which write as the person: `minting` names
+/// the client and the session turn in the server's history.
 async fn bind_venue(
     services: &AppServices,
     track_id: &str,
@@ -542,6 +577,7 @@ async fn bind_venue(
     requested: Option<&str>,
     venues: &[Value],
     new_score: bool,
+    minting: Attribution<'_>,
 ) -> Result<(String, String), String> {
     let venue_id = match requested {
         Some(requested) => {
@@ -555,22 +591,15 @@ async fn bind_venue(
         }
         None => default_venue(services, track_id, label, venues).await?,
     };
+    let pool = &services.db().0;
     if new_score {
         // Named by nobody: a score's title is the operator's to give, and a
         // run that invented one would be guessing at the show it is about to
         // author. The app shows an unnamed score by its track.
-        let score = invoke(
-            services,
-            "create_score",
-            json!({
-                "requestId": uuid(),
-                "trackId": track_id,
-                "venueId": venue_id,
-                "name": Value::Null,
-            }),
-        )
-        .await?;
-        return Ok((venue_id, string(&score, "id")));
+        let score = catalog::create_score(pool, track_id, &venue_id, None, minting)
+            .await
+            .map_err(|error| format!("create_score: {error}"))?;
+        return Ok((venue_id, score.id));
     }
     let existing = invoke(
         services,
@@ -581,18 +610,10 @@ async fn bind_venue(
     if let Some(score) = existing.as_array().and_then(|scores| scores.first()) {
         return Ok((venue_id, string(score, "id")));
     }
-    let score = invoke(
-        services,
-        "ensure_venue_score",
-        json!({
-            "requestId": uuid(),
-            "trackId": track_id,
-            "venueId": venue_id,
-            "name": Value::Null,
-        }),
-    )
-    .await?;
-    Ok((venue_id, string(&score, "id")))
+    let score = catalog::ensure_venue_score(pool, track_id, &venue_id, None, minting)
+        .await
+        .map_err(|error| format!("ensure_venue_score: {error}"))?;
+    Ok((venue_id, score.id))
 }
 
 /// The venue an unqualified `open` means: the one this track is already in, or

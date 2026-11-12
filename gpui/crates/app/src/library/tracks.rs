@@ -43,6 +43,17 @@ impl Library {
         }
     }
 
+    /// Analyse a track again, in the background.
+    pub fn reprocess_track(
+        &self,
+        track_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let track_id = track_id.to_owned();
+        self.call("reprocess_track", |services| async move {
+            handlers::tracks::reprocess_track(&services, track_id).await
+        })
+    }
+
     /// The track browser's rows for `venue_id`, carrying that venue's
     /// annotation counts.
     pub fn tracks(
@@ -205,14 +216,17 @@ impl Library {
         })
     }
 
-    /// A track's analyzed beats, or `None` when it has not been analyzed.
+    /// A track's analyzed beats, or `None` when it has not been analyzed:
+    /// the grid `score_id` was written against, or with no score the track's
+    /// current one.
     pub fn track_beats(
         &self,
         track_id: &str,
+        score_id: Option<&str>,
     ) -> impl Future<Output = Result<Option<BeatGrid>, LibraryError>> + use<> {
-        let track_id = track_id.to_owned();
+        let (track_id, score_id) = (track_id.to_owned(), score_id.map(str::to_owned));
         self.call("get_track_beats", |services| async move {
-            handlers::tracks::get_track_beats(&services, track_id).await
+            handlers::tracks::get_track_beats(&services, track_id, score_id).await
         })
     }
 
