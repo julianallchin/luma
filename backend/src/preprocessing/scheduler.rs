@@ -414,7 +414,8 @@ pub async fn run_for_track(
 }
 
 /// Run every step of one track again, on someone's request: the artifacts it
-/// has are rewritten in place as each step finishes, and a step in failure
+/// has are rewritten in place as each step finishes, except the beat grid,
+/// which gains a new version when the detection changed. A step in failure
 /// backoff gets a new try. On another principal's track that is the steps
 /// computed here; the owner's synced rows stand. The track shows as analysing
 /// while it runs.
@@ -1055,9 +1056,14 @@ mod tests {
             downbeat_offset: 0.5,
             beats_per_bar: 4,
         };
-        tracks_db::record_track_beats(&mut *pool.acquire().await.unwrap(), "t1", &grid, version("beat_grid"))
-            .await
-            .unwrap();
+        tracks_db::record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "t1",
+            &grid,
+            version("beat_grid"),
+        )
+        .await
+        .unwrap();
         let stems = services.storage.stems_root().join("hash");
         std::fs::create_dir_all(&stems).unwrap();
         for stem in ["bass", "drums", "other", "vocals"] {
@@ -1108,9 +1114,14 @@ mod tests {
             downbeat_offset: downbeats[0],
             beats_per_bar: 4,
         };
-        tracks_db::record_track_beats(&mut *pool.acquire().await.unwrap(), "t1", &grid([0.5, 2.5, 4.5]), 1)
-            .await
-            .unwrap();
+        tracks_db::record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "t1",
+            &grid([0.5, 2.5, 4.5]),
+            1,
+        )
+        .await
+        .unwrap();
         sqlx::query(
             r#"INSERT INTO track_bar_classifications
                 (track_id, classifications_json, tag_order_json, processor_version)
@@ -1148,9 +1159,14 @@ mod tests {
 
         // The song is analysed again, or another device's grid syncs in:
         // a second grid, beside the one the row was computed against.
-        tracks_db::record_track_beats(&mut *pool.acquire().await.unwrap(), "t1", &grid([0.0, 2.0, 4.0]), 1)
-            .await
-            .unwrap();
+        tracks_db::record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "t1",
+            &grid([0.0, 2.0, 4.0]),
+            1,
+        )
+        .await
+        .unwrap();
         assert!(queued().await, "reconcile would not queue the track");
         assert!(
             !classifier.is_complete(&ctx, "t1").await.unwrap(),

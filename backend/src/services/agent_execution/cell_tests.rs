@@ -469,9 +469,14 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
         downbeat_offset: 0.5,
         beats_per_bar: 4,
     };
-    crate::database::local::tracks::record_track_beats(&mut *f.pool.acquire().await.unwrap(), TRACK_ID, &reanalysed, 1)
-        .await
-        .unwrap();
+    crate::database::local::tracks::record_track_beats(
+        &mut *f.pool.acquire().await.unwrap(),
+        TRACK_ID,
+        &reanalysed,
+        1,
+    )
+    .await
+    .unwrap();
     let out = f
         .run(
             &thread,
@@ -1706,10 +1711,18 @@ async fn a_track_thread_reads_the_users_other_scores_and_only_theirs() {
             "graph": {"version": 3, "nodes": {"color1": {"kind": "color"}}},
         })
     };
-    let score: luma_patterns::Score = serde_json::from_value(json!({"clips": {
-        "a": clip("Snare 1.2", 1.0), "b": clip("Snare 2.2", 5.0), "c": clip("Floor", 0.0),
-    }}))
-    .unwrap();
+    // A clip id names one row in the library, so each score gets its own.
+    let score = || {
+        let clips: serde_json::Map<String, serde_json::Value> = [
+            clip("Snare 1.2", 1.0),
+            clip("Snare 2.2", 5.0),
+            clip("Floor", 0.0),
+        ]
+        .into_iter()
+        .map(|clip| (uuid::Uuid::new_v4().to_string(), clip))
+        .collect();
+        serde_json::from_value::<luma_patterns::Score>(json!({ "clips": clips })).unwrap()
+    };
     let mut connection = f.pool.acquire().await.unwrap();
     for (id, owner, name) in [
         ("mine", "owner", "Fantastic"),
@@ -1726,7 +1739,9 @@ async fn a_track_thread_reads_the_users_other_scores_and_only_theirs() {
         .execute(&mut *connection)
         .await
         .unwrap();
-        rows::save_score(&mut connection, id, &score).await.unwrap();
+        rows::save_score(&mut connection, id, &score())
+            .await
+            .unwrap();
     }
     drop(connection);
 

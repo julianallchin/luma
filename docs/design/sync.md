@@ -113,9 +113,16 @@ with `sync::triggers::attribute`, which takes an `Attribution`: the actor,
 the thread, the message and the change group. The upload triggers put it in
 each `powersync_crud` entry's metadata as one JSON object, and the connector
 sends its parts as the `x-luma-actor`, `x-luma-thread`, `x-luma-message` and
-`x-luma-group` headers. An unattributed write has no metadata and sends no
-header, and the server records it as the signed-in person's. Upserts
+`x-luma-group` headers. An unattributed write has no metadata and names no
+actor, and the server records it as the signed-in person's. Upserts
 attributed differently are never batched into one request.
+
+- The app's own writes are `app:analysis`, `app:import` and `app:media-sync`.
+- An agent turn's change group is the id of the message that started it. A
+  score an MCP session mints names the client and the session message but no
+  thread, which does not exist yet.
+- Every request carries a group: the entry's own, or one the connector makes
+  per local transaction and reuses when that transaction is retried.
 
 Session undo in the editors stays in memory. A score's "last edited" time is
 `scores.authored_at`, which `save_score` sets when a save moves something.

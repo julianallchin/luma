@@ -1234,24 +1234,39 @@ mod tests {
         let current = || async { get_track_beats(&pool, Grid::current("song")).await.unwrap() };
         assert_eq!(current().await, None);
 
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(120.), 7)
-            .await
-            .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
         let first: String = sqlx::query_scalar("SELECT id FROM track_beats")
             .fetch_one(&pool)
             .await
             .unwrap();
 
         // The same detector finding the same grid writes nothing.
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(120.), 7)
-            .await
-            .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
         assert_eq!(grid_count(&pool, "song").await, 1);
 
         // Another grid becomes the current one beside the first, unedited.
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(60.), 7)
-            .await
-            .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(60.),
+            7,
+        )
+        .await
+        .unwrap();
         assert_eq!(grid_count(&pool, "song").await, 2);
         assert_eq!(current().await, Some(grid_at(60.)));
         let kept: (String, f64) =
@@ -1266,9 +1281,14 @@ mod tests {
         );
 
         // Going back to an earlier grid is a change too.
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(120.), 7)
-            .await
-            .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
         assert_eq!(grid_count(&pool, "song").await, 3);
         assert_eq!(current().await, Some(grid_at(120.)));
 
@@ -1287,12 +1307,22 @@ mod tests {
     async fn a_newer_detector_that_agrees_still_stamps_the_track() {
         let (_directory, pool) = test_pool().await;
         song_in_a_room(&pool).await;
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(120.), 7)
-            .await
-            .unwrap();
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(120.), 8)
-            .await
-            .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            8,
+        )
+        .await
+        .unwrap();
         let versions: Vec<i64> = sqlx::query_scalar(
             "SELECT processor_version FROM track_beats WHERE track_id = 'song'
              ORDER BY processor_version",
@@ -1303,9 +1333,14 @@ mod tests {
         assert_eq!(versions, [7, 8]);
 
         // And an older one that agrees has nothing to add.
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(120.), 7)
-            .await
-            .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
         assert_eq!(grid_count(&pool, "song").await, 2);
     }
 
@@ -1322,9 +1357,14 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(120.), 7)
-            .await
-            .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             get_track_beats(&pool, Grid::current("song")).await.unwrap(),
             Some(grid_at(120.))
@@ -1349,28 +1389,48 @@ mod tests {
 
         // A score made before the song is analysed names no grid, and reads
         // whichever is current.
-        let early = catalog::create_score(&pool, &request(1), "song", "room", None)
-            .await
-            .unwrap();
+        let early = catalog::create_score(
+            &pool,
+            &request(1),
+            "song",
+            "room",
+            None,
+            crate::sync::triggers::Attribution::PERSON,
+        )
+        .await
+        .unwrap();
         assert_eq!(early.grid_id, None);
         assert_eq!(beats(&early.id).await, None);
 
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(120.), 7)
-            .await
-            .unwrap();
-        let written = catalog::create_score(&pool, &request(2), "song", "room", None)
-            .await
-            .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(120.),
+            7,
+        )
+        .await
+        .unwrap();
+        let written = catalog::create_score(
+            &pool,
+            &request(2),
+            "song",
+            "room",
+            None,
+            crate::sync::triggers::Attribution::PERSON,
+        )
+        .await
+        .unwrap();
         assert!(written.grid_id.is_some());
         // Four beats of it, which the song list measures in seconds.
         sqlx::query(
             "INSERT INTO clips
              (id, uid, score_id, graph_json, graph, start, duration, seed, selection_json,
               blend_mode)
-             VALUES (?1 || ':clip', 'alice', ?1, '{\"version\":1,\"nodes\":{}}', '', 0, 4, '0',
+             VALUES (?2, 'alice', ?1, '{\"version\":1,\"nodes\":{}}', '', 0, 4, '0',
                      '{\"all\":true}', 'replace')",
         )
         .bind(&written.id)
+        .bind(Uuid::new_v4().to_string())
         .execute(&pool)
         .await
         .unwrap();
@@ -1382,9 +1442,14 @@ mod tests {
         assert!(before > 0.);
 
         // The song is analysed again and found at half the tempo.
-        record_track_beats(&mut *pool.acquire().await.unwrap(), "song", &grid_at(60.), 7)
-            .await
-            .unwrap();
+        record_track_beats(
+            &mut *pool.acquire().await.unwrap(),
+            "song",
+            &grid_at(60.),
+            7,
+        )
+        .await
+        .unwrap();
         assert_eq!(beats(&written.id).await, Some(grid_at(120.)));
         assert_eq!(coverage().await, before);
         assert_eq!(beats(&early.id).await, Some(grid_at(60.)));
@@ -1396,9 +1461,16 @@ mod tests {
             .unwrap();
         assert_eq!(copy.grid_id, written.grid_id);
         assert_eq!(beats(&copy.id).await, Some(grid_at(120.)));
-        let late = catalog::create_score(&pool, &request(4), "song", "room", None)
-            .await
-            .unwrap();
+        let late = catalog::create_score(
+            &pool,
+            &request(4),
+            "song",
+            "room",
+            None,
+            crate::sync::triggers::Attribution::PERSON,
+        )
+        .await
+        .unwrap();
         assert_ne!(late.grid_id, written.grid_id);
         assert_eq!(beats(&late.id).await, Some(grid_at(60.)));
 
@@ -1491,8 +1563,8 @@ mod tests {
             &grid_at(60.),
             8,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(
             beat_validations::get(&pool, "reviewed").await.unwrap(),
             Some(BeatValidation {
