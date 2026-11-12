@@ -397,7 +397,11 @@ async fn merge_draft(pool: &sqlx::SqlitePool, child_thread_id: &str) -> Result<(
         return Ok(());
     };
     if let Some(actor) = actor.as_deref() {
-        crate::sync::triggers::attribute(&mut transaction, actor).await?;
+        crate::sync::triggers::attribute(
+            &mut transaction,
+            crate::sync::triggers::Attribution::actor(actor),
+        )
+        .await?;
     }
     drafts::merge(&mut transaction, &draft).await?;
     if actor.is_some() {

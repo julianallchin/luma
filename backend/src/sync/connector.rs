@@ -5,9 +5,10 @@
 //! row-level security is the only authorization. Downloads do not come through
 //! here: the SDK streams them and applies the statements in `schema.rs`.
 //!
-//! An entry an agent wrote carries its actor as metadata (see `triggers.rs`),
-//! and the request carries it as [`ACTOR_HEADER`] for the server's history
-//! trigger. A request without it is the signed-in person's.
+//! An attributed entry carries who wrote it and what it belongs to as
+//! metadata (see `triggers.rs`), and the request carries each part as one of
+//! [`ATTRIBUTION_HEADERS`] for the server's history trigger. A request without
+//! them is the signed-in person's.
 //!
 //! A refusal is never silent. An upsert the policies refuse is a 403, but an
 //! update or a delete they refuse is filtered: PostgREST answers 204 and
@@ -42,6 +43,14 @@ use super::supabase::FORMAT_HEADER;
 
 /// The header the history trigger reads the actor from.
 const ACTOR_HEADER: &str = "x-luma-actor";
+
+/// The parts of an entry's attribution and the header each travels in.
+const ATTRIBUTION_HEADERS: [(&str, &str); 4] = [
+    ("actor", ACTOR_HEADER),
+    ("thread", "x-luma-thread"),
+    ("message", "x-luma-message"),
+    ("group", "x-luma-group"),
+];
 
 /// A connector-side failure, as an `Error` so it can be handed to
 /// [`PowerSyncError::upload_error`] — the SDK's only public constructor.
@@ -439,12 +448,22 @@ pub(super) async fn server_format(
     response.json().await.ok()
 }
 
-/// Name the entry's actor on its request, when it has one.
-fn attributed(builder: reqwest::RequestBuilder, entry: &CrudEntry) -> reqwest::RequestBuilder {
-    match entry.metadata.as_deref() {
-        Some(actor) => builder.header(ACTOR_HEADER, actor),
-        None => builder,
+/// Put the entry's attribution on its request: one header per part it has.
+///
+/// The metadata is the object the upload triggers wrote. Anything else is an
+/// entry nobody attributed, which is the signed-in person's.
+fn attributed(mut builder: reqwest::RequestBuilder, entry: &CrudEntry) -> reqwest::RequestBuilder {
+    let Some(Ok(Value::Object(attribution))) =
+        entry.metadata.as_deref().map(serde_json::from_str::<Value>)
+    else {
+        return builder;
+    };
+    for (part, header) in ATTRIBUTION_HEADERS {
+        if let Some(value) = attribution.get(part).and_then(Value::as_str) {
+            builder = builder.header(header, value);
+        }
     }
+    builder
 }
 
 /// Split a transaction's entries into the requests they become.
@@ -632,7 +651,7 @@ mod tests {
     #[tokio::test]
     async fn upserts_by_different_actors_are_separate_requests() {
         let mut model = in_table("clips", "clip-2", UpdateType::Put, Some(row()));
-        model.metadata = Some("claude-opus-5-5".into());
+        model.metadata = Some(by_the_model());
         let entries = vec![
             in_table("clips", "clip-1", UpdateType::Put, Some(row())),
             model,
@@ -657,12 +676,29 @@ mod tests {
     #[tokio::test]
     async fn an_attributed_delete_names_its_actor() {
         let mut delete = entry(UpdateType::Delete, None);
-        delete.metadata = Some("claude-opus-5-5".into());
+        delete.metadata = Some(by_the_model());
         let request = connector()
             .request(&delete, "token")
             .build()
             .expect("request");
         assert_eq!(request.headers()[ACTOR_HEADER], "claude-opus-5-5");
+        assert_eq!(request.headers()["x-luma-thread"], "thread-1");
+        assert_eq!(request.headers()["x-luma-group"], "group-1");
+        assert!(
+            request.headers().get("x-luma-message").is_none(),
+            "a part the write does not have sends no header"
+        );
+    }
+
+    /// An entry's metadata as the upload triggers write it for a model's turn.
+    fn by_the_model() -> String {
+        serde_json::json!({
+            "actor": "claude-opus-5-5",
+            "thread": "thread-1",
+            "message": null,
+            "group": "group-1",
+        })
+        .to_string()
     }
 
     fn entry(update_type: UpdateType, data: Option<Map<String, Value>>) -> CrudEntry {

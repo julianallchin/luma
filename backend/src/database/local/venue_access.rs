@@ -141,7 +141,11 @@ impl<'a> VenueAccess<'a, Write> {
             .map_err(|error| format!("Failed to begin venue mutation: {error}"))?;
         let mut access: Self = authorize(transaction, resource, |can| can.edit).await?;
         if let Some(actor) = actor {
-            crate::sync::triggers::attribute(&mut access.transaction, actor).await?;
+            crate::sync::triggers::attribute(
+                &mut access.transaction,
+                crate::sync::triggers::Attribution::actor(actor),
+            )
+            .await?;
             access.attributed = true;
         }
         Ok(access)

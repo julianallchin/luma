@@ -7,20 +7,40 @@
 
 use luma_sync::powersync::sdk::schema::{PendingStatement, PendingStatementValue, RawTable};
 
+/// What a synced table holds, which decides what a delete of its row means
+/// to the server (docs/design/data-layer.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// What a person or an agent made. Its id is a random UUID the writer
+    /// generates, and the server never deletes it: a delete uploads as a flag.
+    Source,
+    /// Computed from audio. A cache, deleted for real and rebuilt.
+    Derived,
+    /// Private working state, deleted for real.
+    Scratch,
+}
+
 /// One synced table.
 pub struct SyncedTable {
     pub name: &'static str,
-    /// SQL for the row's id in terms of a trigger's `NEW`/`OLD` row. A table
-    /// with a natural composite key spells it as the concatenation its
+    pub kind: Kind,
+    /// SQL for the row's id in terms of a trigger's `NEW`/`OLD` row. A source
+    /// table stores it. A derived table spells it as the concatenation its
     /// generated `id` column uses, because a generated column is not reliably
     /// readable from a trigger.
     pub id: &'static str,
     /// The column holding the owner. Every synced table spells it `uid`.
     pub uid: &'static str,
-    /// The columns that travel, in schema order. A composite-key table omits
-    /// `id`: locally it is a `GENERATED ALWAYS` column, so nothing may write
-    /// it, and it is reconstructed from the key columns that are here.
+    /// The columns that travel, in schema order. A derived table omits `id`:
+    /// locally it is a `GENERATED ALWAYS` column, so nothing may write it, and
+    /// it is reconstructed from the key columns that are here.
     pub columns: &'static [&'static str],
+    /// The columns that name "the one for this parent and key" on a table
+    /// whose rows are also found that way: a node's parameter by its key, a
+    /// thread's transcript head. Unique locally, so a download of a row whose
+    /// slot another id holds takes the slot over. Empty for a table found by
+    /// id alone.
+    pub slot: &'static [&'static str],
     /// Local-only `NOT NULL` columns a download has to fill, and the SQL that
     /// fills them. A `?` in the expression binds the row's id.
     ///
@@ -46,9 +66,10 @@ impl SyncedTable {
         self.columns.contains(&"id")
     }
 
-    /// The columns the row's `id` is built from — its natural key, and the
-    /// conflict target a download upserts on. Read straight off [`Self::id`]
-    /// so the two cannot disagree.
+    /// The columns the row's `id` is built from: `id` itself where it is
+    /// stored, a derived table's natural key otherwise. The conflict target a
+    /// download upserts on. Read straight off [`Self::id`] so the two cannot
+    /// disagree.
     #[must_use]
     pub fn key(&self) -> Vec<&'static str> {
         self.id
@@ -61,7 +82,7 @@ impl SyncedTable {
     /// `json_object('column', <row>.column, ...)` for one side of a change.
     ///
     /// `id` leads whether or not it is stored: the server's copy of the row has
-    /// one and a composite-key table's local copy computes it. The boolean
+    /// one and a derived table's local copy computes it. The boolean
     /// columns are 0/1 integers in SQLite and `boolean` in Postgres, and
     /// PostgREST refuses a JSON `0` for a boolean — so they are injected as
     /// real JSON `true`/`false`.
@@ -82,19 +103,27 @@ impl SyncedTable {
         }
         format!("json_object({})", pairs.join(", "))
     }
+
+    /// This table, with the columns that name a row's [`Self::slot`].
+    const fn slot(mut self, columns: &'static [&'static str]) -> Self {
+        self.slot = columns;
+        self
+    }
 }
 
 macro_rules! table {
-    ($name:literal, $id:literal, $uid:literal, [$($column:literal),* $(,)?]) => {
-        table!($name, $id, $uid, [$($column),*], [])
+    ($name:literal, $kind:ident, $id:literal, $uid:literal, [$($column:literal),* $(,)?]) => {
+        table!($name, $kind, $id, $uid, [$($column),*], [])
     };
-    ($name:literal, $id:literal, $uid:literal, [$($column:literal),* $(,)?],
+    ($name:literal, $kind:ident, $id:literal, $uid:literal, [$($column:literal),* $(,)?],
      [$(($local:literal, $fill:literal)),* $(,)?]) => {
         SyncedTable {
             name: $name,
+            kind: Kind::$kind,
             id: $id,
             uid: $uid,
             columns: &[$($column),*],
+            slot: &[],
             local_defaults: &[$(($local, $fill)),*],
         }
     };
@@ -105,6 +134,7 @@ macro_rules! table {
 pub const SYNCED_TABLES: &[SyncedTable] = &[
     table!(
         "venues",
+        Source,
         "@.id",
         "uid",
         [
@@ -122,12 +152,14 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "venue_members",
+        Source,
         "@.id",
         "uid",
         ["id", "uid", "venue_id", "role", "created_at", "updated_at"]
     ),
     table!(
         "fixtures",
+        Source,
         "@.id",
         "uid",
         [
@@ -149,6 +181,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "fixture_groups",
+        Source,
         "@.id",
         "uid",
         [
@@ -167,6 +200,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "fixture_group_members",
+        Source,
         "@.id",
         "uid",
         [
@@ -183,6 +217,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "venue_nodes",
+        Source,
         "@.id",
         "uid",
         [
@@ -202,9 +237,11 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "venue_node_params",
-        "@.node_id || ':' || @.key",
+        Source,
+        "@.id",
         "uid",
         [
+            "id",
             "node_id",
             "uid",
             "venue_id",
@@ -213,12 +250,15 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at"
         ]
-    ),
+    )
+    .slot(&["node_id", "key"]),
     table!(
         "venue_constraints",
-        "@.node_id || ':' || @.my_socket",
+        Source,
+        "@.id",
         "uid",
         [
+            "id",
             "node_id",
             "uid",
             "venue_id",
@@ -228,9 +268,11 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at"
         ]
-    ),
+    )
+    .slot(&["node_id", "my_socket"]),
     table!(
         "tracks",
+        Source,
         "@.id",
         "uid",
         [
@@ -256,9 +298,11 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "track_beats",
-        "@.track_id",
+        Source,
+        "@.id",
         "uid",
         [
+            "id",
             "track_id",
             "uid",
             "beats_json",
@@ -273,6 +317,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "track_roots",
+        Derived,
         "@.track_id",
         "uid",
         [
@@ -287,6 +332,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "track_stems",
+        Derived,
         "@.track_id || ':' || @.stem_name",
         "uid",
         [
@@ -302,6 +348,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "track_drum_onsets",
+        Derived,
         "@.track_id",
         "uid",
         [
@@ -315,6 +362,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "track_bar_classifications",
+        Derived,
         "@.track_id",
         "uid",
         [
@@ -329,6 +377,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "track_genres",
+        Derived,
         "@.track_id",
         "uid",
         [
@@ -343,9 +392,11 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "track_beat_validations",
-        "@.track_id",
+        Source,
+        "@.id",
         "uid",
         [
+            "id",
             "track_id",
             "uid",
             "track_hash",
@@ -356,9 +407,11 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at"
         ]
-    ),
+    )
+    .slot(&["track_id"]),
     table!(
         "scores",
+        Source,
         "@.id",
         "uid",
         [
@@ -369,11 +422,13 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "name",
             "created_at",
             "updated_at",
-            "authored_at"
+            "authored_at",
+            "grid_id"
         ]
     ),
     table!(
         "clips",
+        Source,
         "@.id",
         "uid",
         [
@@ -392,17 +447,20 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at",
             "name",
-            "graph_json"
+            "graph_json",
+            "label"
         ]
     ),
     table!(
         "folders",
+        Source,
         "@.id",
         "uid",
         ["id", "uid", "venue_id", "name", "created_at", "updated_at"]
     ),
     table!(
         "laser_zones",
+        Source,
         "@.id",
         "uid",
         [
@@ -420,6 +478,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "perform_patterns",
+        Source,
         "@.id",
         "uid",
         [
@@ -438,6 +497,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "perform_layouts",
+        Source,
         "@.id",
         "uid",
         [
@@ -451,6 +511,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "perform_controllers",
+        Source,
         "@.id",
         "uid",
         [
@@ -466,6 +527,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "control_bindings",
+        Source,
         "@.id",
         "uid",
         [
@@ -483,22 +545,27 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "laser_limits",
+        Source,
         "@.id",
         "uid",
         [
             "id",
             "uid",
             "venue_id",
+            "fixture_id",
             "points",
             "created_at",
             "updated_at"
         ]
-    ),
+    )
+    .slot(&["fixture_id"]),
     table!(
         "folder_tracks",
-        "@.folder_id || ':' || @.track_id",
+        Source,
+        "@.id",
         "uid",
         [
+            "id",
             "folder_id",
             "track_id",
             "uid",
@@ -506,9 +573,11 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at"
         ]
-    ),
+    )
+    .slot(&["folder_id", "track_id"]),
     table!(
         "agent_threads",
+        Source,
         "@.id",
         "uid",
         [
@@ -536,6 +605,7 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "agent_thread_messages",
+        Source,
         "@.id",
         "uid",
         [
@@ -553,9 +623,11 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     ),
     table!(
         "agent_thread_transcript_heads",
-        "@.thread_id",
+        Source,
+        "@.id",
         "uid",
         [
+            "id",
             "thread_id",
             "uid",
             "head_message_id",
@@ -563,9 +635,11 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at"
         ]
-    ),
+    )
+    .slot(&["thread_id"]),
     table!(
         "drafts",
+        Scratch,
         "@.id",
         "uid",
         [
@@ -629,7 +703,15 @@ pub fn column_expression(column: &str) -> &'static str {
 /// Split out of [`raw_tables`] so a test can read the SQL without building a
 /// `RawTable`. The delete addresses the row by `id`, which every synced table
 /// has — stored, or generated with a unique index over it. The put upserts on
-/// the natural key instead, because a generated `id` cannot be written.
+/// [`SyncedTable::key`]: `id` where it is stored, the natural key where it is
+/// generated and cannot be written.
+///
+/// A table with a [`SyncedTable::slot`] upserts on that too. A checkpoint
+/// that replaces a slot's row delivers the old row's removal and the new
+/// row's put in no promised order, and a thread's transcript head exists
+/// here, under an id of this device's making, before the server's copy
+/// arrives. Either way the arriving row is the slot's row: it takes the slot
+/// over, id included, and a removal of the id it replaced finds nothing.
 #[must_use]
 pub fn statements(table: &SyncedTable) -> (String, String) {
     let values = table
@@ -639,14 +721,6 @@ pub fn statements(table: &SyncedTable) -> (String, String) {
         .chain(table.local_defaults.iter().map(|(_, fill)| *fill))
         .collect::<Vec<_>>()
         .join(", ");
-    let key = table.key();
-    let assignments = table
-        .columns
-        .iter()
-        .filter(|column| !key.contains(column))
-        .map(|column| format!("\"{column}\" = excluded.\"{column}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
     let names = table
         .columns
         .iter()
@@ -654,19 +728,34 @@ pub fn statements(table: &SyncedTable) -> (String, String) {
         .map(|column| format!("\"{column}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let conflict = key
+    let mut put = format!(
+        "INSERT INTO {} ({names}) VALUES ({values}) {}",
+        table.name,
+        upsert_on(table, &table.key())
+    );
+    if !table.slot.is_empty() {
+        put.push(' ');
+        put.push_str(&upsert_on(table, table.slot));
+    }
+    (put, format!("DELETE FROM {} WHERE id = ?", table.name))
+}
+
+/// `ON CONFLICT(target) DO UPDATE` over every travelling column but the
+/// target's own.
+fn upsert_on(table: &SyncedTable, target: &[&str]) -> String {
+    let conflict = target
         .iter()
         .map(|column| format!("\"{column}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let name = table.name;
-    (
-        format!(
-            "INSERT INTO {name} ({names}) VALUES ({values}) \
-             ON CONFLICT({conflict}) DO UPDATE SET {assignments}"
-        ),
-        format!("DELETE FROM {name} WHERE id = ?"),
-    )
+    let assignments = table
+        .columns
+        .iter()
+        .filter(|column| !target.contains(column))
+        .map(|column| format!("\"{column}\" = excluded.\"{column}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("ON CONFLICT({conflict}) DO UPDATE SET {assignments}")
 }
 
 /// Every synced table as a PowerSync raw table.
@@ -740,13 +829,13 @@ mod tests {
 
     #[test]
     fn a_composite_key_spells_the_id_its_generated_column_uses() {
-        let params = table("venue_node_params").expect("venue_node_params is synced");
-        assert_eq!(params.id_of("NEW"), "NEW.node_id || ':' || NEW.key");
-        assert_eq!(params.key(), vec!["node_id", "key"]);
-        assert!(!params.id_is_stored());
+        let stems = table("track_stems").expect("track_stems is synced");
+        assert_eq!(stems.id_of("NEW"), "NEW.track_id || ':' || NEW.stem_name");
+        assert_eq!(stems.key(), vec!["track_id", "stem_name"]);
+        assert!(!stems.id_is_stored());
     }
 
-    /// A composite-key table's download upserts on the natural key: `id` is
+    /// A derived table's download upserts on the natural key: `id` is
     /// generated locally, so inserting into it would fail.
     #[test]
     fn a_generated_id_is_never_written_by_a_download() {
@@ -763,6 +852,35 @@ mod tests {
                 assert!(
                     !put.contains("\"id\""),
                     "{} writes its generated id: {put}",
+                    synced.name
+                );
+            }
+        }
+    }
+
+    /// A source row's id is its writer's and travels as a column; only a
+    /// cache may spell its id from the key it is cached under.
+    #[test]
+    fn only_a_derived_table_builds_its_id() {
+        for synced in SYNCED_TABLES {
+            assert_eq!(
+                synced.id_is_stored(),
+                synced.kind != Kind::Derived,
+                "{}",
+                synced.name
+            );
+        }
+    }
+
+    /// A device holds live rows only, so the server's flag is not a column
+    /// here: a delete is a queued delete, and the connector turns it into one.
+    #[test]
+    fn the_delete_flag_never_travels() {
+        for synced in SYNCED_TABLES {
+            for flag in ["deleted_at", "deleted_by"] {
+                assert!(
+                    !synced.columns.contains(&flag),
+                    "{} carries {flag}",
                     synced.name
                 );
             }

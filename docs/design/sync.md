@@ -16,17 +16,19 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   `agent_thread_messages.updated_at` and
   `agent_thread_transcript_heads.created_at` are nullable with no default, so
   every writer has to set them. `backend/src/sync/schema.rs` is the list.
-- Twelve tables keep their natural key as the local primary key and carry `id`
-  as a `GENERATED ALWAYS … VIRTUAL` column with a unique index. Four
-  concatenate two columns — `venue_node_params` (`node_id || ':' || key`),
-  `venue_constraints` (`node_id || ':' || my_socket`), `track_stems`
-  (`track_id || ':' || stem_name`), `folder_tracks`
-  (`folder_id || ':' || track_id`). The other eight alias a single column:
-  `venue_edges.id = child_id`, each `track_*` analysis table `= track_id`,
-  `agent_thread_transcript_heads.id = thread_id`. Generation is local only — in
-  Postgres `id` is a plain `text primary key` the client supplies, and the
-  triggers spell the concatenation themselves because a generated column is not
-  reliably readable from a trigger.
+- A source table's `id` is a random UUID its writer generates, stored as an
+  ordinary column ([data-layer.md](data-layer.md)). The five derived tables
+  keep their natural key as the local primary key and carry `id` as a
+  `GENERATED ALWAYS … VIRTUAL` column with a unique index: `track_stems`
+  (`track_id || ':' || stem_name`), and `track_roots`, `track_drum_onsets`,
+  `track_bar_classifications` and `track_genres` (`= track_id`). Generation is
+  local only — in Postgres `id` is a plain `text primary key` the client
+  supplies, and the triggers spell the concatenation themselves because a
+  generated column is not reliably readable from a trigger.
+- A row that is "the one for this parent and key" (a node's parameter, a
+  thread's transcript head) is unique on those columns locally, and a
+  download that finds the slot held under another id takes it over
+  (`SyncedTable::slot`).
 - Postgres row-level security decides who may read and write a row. Owner or
   venue member for venue content, the venue row included; owner for private
   content and for the venue's door (its owner, its share code, deleting it,
@@ -34,7 +36,8 @@ layer. Every domain writes its own tables in ordinary SQLite transactions.
   validates before it writes. The server does not re-run domain rules.
 - Concurrent edits to one row merge per column, last write wins. PowerSync
   uploads only the columns a local write changed (`PATCH`).
-- Deletes are hard deletes on both sides. PowerSync replicates them.
+- A device deletes for real and holds no flagged rows. What a delete means to
+  the server is in [data-layer.md](data-layer.md).
 - Local-only tables never appear in the PowerSync schema or the sync rules.
 - A synced table's foreign keys are `DEFERRABLE INITIALLY DEFERRED`. A
   download is one transaction holding a consistent snapshot of the server in
@@ -104,10 +107,12 @@ table (venues and their content, `scores`, `clips`) appends to `public.history` 
 An update whose only difference is `updated_at` is skipped. `uid` is who made
 the change, and only they can read it. `actor` is `user:<uid>` for a person, or
 a model id or MCP client label for an agent. An agent's write runs in a
-transaction attributed with `sync::triggers::attribute`; the upload triggers
-put the actor in each `powersync_crud` entry's metadata, and the connector
-sends it as the `x-luma-actor` header. Upserts from different actors are never
-batched into one request. See
+transaction attributed with `sync::triggers::attribute`, which takes an
+`Attribution`: the actor, the thread, the message and the change group. The
+upload triggers put it in each `powersync_crud` entry's metadata as one JSON
+object, and the connector sends its parts as the `x-luma-actor`,
+`x-luma-thread`, `x-luma-message` and `x-luma-group` headers. Upserts
+attributed differently are never batched into one request. See
 `supabase/migrations/20260924000000_server_history.sql`.
 
 Session undo in the editors stays in memory. A score's "last edited" time is
