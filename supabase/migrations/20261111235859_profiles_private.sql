@@ -23,6 +23,7 @@ begin
         using (id = auth.uid());
 
     revoke all on public.profiles from anon;
-    revoke delete, truncate, references, trigger on public.profiles from authenticated;
+    revoke all on public.profiles from authenticated;
+    grant select, insert, update on public.profiles to authenticated;
 end
 $$;
