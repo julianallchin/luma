@@ -2365,6 +2365,7 @@ class Venue:
         width: float | None = None,
         depth: float | None = None,
         height: float | None = None,
+        shade: float | None = None,
     ) -> str:
         """Give the room a size in metres, so it has walls and a ceiling.
 
@@ -2382,6 +2383,11 @@ class Venue:
         room's height. To hang from the ceiling, hang as from any height:
         `face=(0, 0, -1), trim=height`.
 
+        `shade=` paints the walls and ceiling: the share of light they send
+        back, 0.02 (black box) to 0.85 (white hall), 0.18 until chosen. It
+        decides how far light bounces round the room. Alone it repaints the
+        room as it is: `v.room(shade=0.5)`.
+
         With no arguments the room is open floor again, which is refused
         while anything is still on a wall.
         """
@@ -2392,9 +2398,12 @@ class Venue:
                 "invalid_argument", "a room has a width, a depth and a height: give all three"
             )
         payload = {"size": [_finite(name, side) for name, side in
-                            zip(("width", "depth", "height"), size)] if all(given) else None}
+                            zip(("width", "depth", "height"), size)] if all(given) else None,
+                   "shade": None if shade is None else _finite("shade", shade)}
         self._verb("venue.room", payload)
-        return ("the room is %g x %g x %g m" % size) if all(given) else "the room is open floor"
+        if not all(given):
+            return "the room is open floor" if shade is None else "the walls are repainted"
+        return "the room is %g x %g x %g m" % size
 
     def move(
         self,

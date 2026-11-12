@@ -528,6 +528,28 @@ impl<'a> Stage<'a> {
         Ok(out)
     }
 
+    /// Paint the room's walls and ceiling: `shade` is the share of light they
+    /// send back, kept within [`luma_scene::venue::WALL_SHADES`].
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] for a shade that is not a number.
+    pub async fn set_wall_shade(&self, shade: f64) -> Result<()> {
+        use luma_scene::venue::{WALL_SHADES, WALL_SHADE_PARAM};
+        if !shade.is_finite() {
+            return Err(StageError::Refused("a wall's shade is a number".into()));
+        }
+        let shade = shade.clamp(
+            f64::from(*WALL_SHADES.start()),
+            f64::from(*WALL_SHADES.end()),
+        );
+        let mut access = self.write().await?;
+        let root = venue_graph::graph(&mut access).await?.root().to_string();
+        let params = BTreeMap::from([(WALL_SHADE_PARAM.to_string(), Some(shade))]);
+        venue_graph_db::set_params(&mut access, &root, &params).await?;
+        venue_graph::commit_graph(access).await?;
+        Ok(())
+    }
+
     /// Delete a node and everything hanging off it.
     ///
     /// A light never exists without a place, so pulling a truss down takes its

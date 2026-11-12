@@ -115,6 +115,18 @@ pub const WALL_SOCKETS: [&str; 4] = ["wall_back", "wall_front", "wall_left", "wa
 /// metres. A venue with none of them is open floor with no walls.
 pub const ROOM_PARAMS: [&str; 3] = ["width", "depth", "height"];
 
+/// The root's parameter for how light its walls and ceiling are painted:
+/// the share of light they send back. Read it through [`wall_shade`].
+pub const WALL_SHADE_PARAM: &str = "shade";
+
+/// A room's walls before anyone has chosen: matt dark grey, a hall's
+/// painted walls.
+pub const WALL_SHADE: f32 = 0.18;
+
+/// The darkest and lightest a wall can be painted: black-box black to
+/// white plaster. No paint sends back nothing, or everything.
+pub const WALL_SHADES: std::ops::RangeInclusive<f32> = 0.02..=0.85;
+
 /// The parameters held in radians in the graph and quoted in **degrees** at
 /// every surface a person or an agent reads.
 ///
@@ -198,7 +210,7 @@ impl Node {
 
         // The room is not placed on anything: all it has is its size.
         if self.kind == NodeKind::Venue {
-            return ROOM_PARAMS.to_vec();
+            return ROOM_PARAMS.into_iter().chain([WALL_SHADE_PARAM]).collect();
         }
         let mut names = vec!["u", "v", "trim"];
         match self.kind {
@@ -816,6 +828,18 @@ fn floor_socket() -> ResolvedSocket {
 pub fn room_size(params: &Params) -> Option<[f64; 3]> {
     let size = ROOM_PARAMS.map(|key| params.lookup(key).filter(|metres| *metres > 0.0));
     Some([size[0]?, size[1]?, size[2]?])
+}
+
+/// How light the room's walls and ceiling are painted, always within
+/// [`WALL_SHADES`]: a venue that never chose has [`WALL_SHADE`].
+#[must_use]
+pub fn wall_shade(params: &Params) -> f32 {
+    params
+        .lookup(WALL_SHADE_PARAM)
+        .filter(|shade| shade.is_finite())
+        .map_or(WALL_SHADE, |shade| {
+            (shade as f32).clamp(*WALL_SHADES.start(), *WALL_SHADES.end())
+        })
 }
 
 /// One flat face of the room: a plane through `position` facing `normal`.
@@ -1894,6 +1918,20 @@ pub fn invert_placement(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// A wall is as light as the venue says, within what paint can be, and
+    /// the grey it always was until someone chooses.
+    #[test]
+    fn a_wall_is_painted_within_what_paint_can_be() {
+        let mut params = Params::default();
+        assert_eq!(wall_shade(&params), WALL_SHADE);
+        params.set(WALL_SHADE_PARAM, 0.5);
+        assert_eq!(wall_shade(&params), 0.5);
+        for (asked, limit) in [(-3.0, WALL_SHADES.start()), (9.0, WALL_SHADES.end())] {
+            params.set(WALL_SHADE_PARAM, asked);
+            assert_eq!(wall_shade(&params), *limit);
+        }
+    }
 
     /// A socket table keyed by catalog ref, which is all the resolver needs of
     /// the geometry — no GLB, no generator, no GPU.

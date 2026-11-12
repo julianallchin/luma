@@ -25,6 +25,7 @@ test("an indoor room gets walls, keeps its size and loses them to undo", () => {
 
   nav.step("walls", "button", "Add walls and ceiling");
   until("the room's size", () => side("Width (m)") !== undefined && side("Height (m)") !== undefined);
+  until("the walls' paint", () => side("Wall brightness (%)") !== undefined);
   until("the way back", () => button("Remove walls") !== undefined);
 
   // Leave and come back: the walls are the venue's, not the page's.
@@ -35,6 +36,7 @@ test("an indoor room gets walls, keeps its size and loses them to undo", () => {
 
   nav.step("no walls", "button", "Remove walls");
   until("open floor", () => button("Add walls and ceiling") !== undefined);
+  expect(side("Wall brightness (%)")).toBe(undefined);
   app.action("luma::Undo");
   until("the walls back", () => button("Remove walls") !== undefined);
 });

@@ -175,12 +175,15 @@ impl VenueGeometry {
         BTreeMap<String, luma_scene::definition::Definition>,
     ) {
         let mut render = offscreen_render(self.environment, self.haze);
-        render.room = self
+        if let Some(root) = self
             .venue
             .poses()
             .find(|pose| pose.kind == luma_scene::venue::NodeKind::Venue)
-            .and_then(|root| luma_scene::venue::room_size(&root.params))
-            .map(|size| size.map(|metres| metres as f32));
+        {
+            render.room = luma_scene::venue::room_size(&root.params)
+                .map(|size| size.map(|metres| metres as f32));
+            render.wall_shade = luma_scene::venue::wall_shade(&root.params);
+        }
         let definitions: BTreeMap<String, luma_scene::definition::Definition> = self
             .definitions
             .iter()

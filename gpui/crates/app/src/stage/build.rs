@@ -281,15 +281,16 @@ impl Build {
         }
     }
 
-    /// The room itself, and its size when it has one: `[width, depth,
-    /// height]` in metres.
-    pub(crate) fn room(&self) -> (&str, Option<[f64; 3]>) {
+    /// The room itself, its size when it has one (`[width, depth, height]`
+    /// in metres), and how light its walls are painted.
+    pub(crate) fn room(&self) -> (&str, Option<[f64; 3]>, f32) {
         let root = self.graph.root();
-        let size = self
-            .graph
-            .node(root)
-            .and_then(|node| luma_scene::venue::room_size(&node.params));
-        (root, size)
+        let params = self.graph.node(root).map(|node| &node.params);
+        (
+            root,
+            params.and_then(luma_scene::venue::room_size),
+            params.map_or(luma_scene::venue::WALL_SHADE, luma_scene::venue::wall_shade),
+        )
     }
 
     /// The run being measured out of a socket, as the stick it would be: its

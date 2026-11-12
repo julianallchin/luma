@@ -1017,7 +1017,10 @@ pub fn build_at(
                 mesh,
                 textures: MaterialTextures::default(),
                 model: Mat4::from_mat3(r) * Mat4::from_translation(at) * turn,
-                material: crate::materials::VENUE_WALL,
+                material: Material {
+                    base_color: Vec3::splat(scene.render.wall_shade),
+                    ..crate::materials::VENUE_WALL
+                },
                 editor_object: None,
             });
         }

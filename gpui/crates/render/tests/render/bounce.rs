@@ -41,10 +41,15 @@ fn frame_with(
 ) -> Frame {
     let mut render = RenderSettings::room(environment, VenueHaze::default(), 50.0, 1.0);
     render.room = room;
+    render.quality = quality;
+    frame_of(render, eye, target, pieces)
+}
+
+/// As [`frame_with`], under `render` whole.
+fn frame_of(mut render: RenderSettings, eye: Vec3, target: Vec3, pieces: Vec<Piece>) -> Frame {
     render.haze.enabled = false;
     render.show_grid = false;
     render.show_gizmos = false;
-    render.quality = quality;
     // Camera poses are three-space: (x, up, -y).
     let three = |p: Vec3| [p.x, p.z, -p.y];
     let scene = Scene {
@@ -518,4 +523,38 @@ fn a_dark_case_against_a_wall_leaves_the_wall_alone() {
     );
     assert!(red((left + right) / 2) > 0.03, "the wall took no bounce");
     assert!(step < 0.03, "the wall over the case steps by {step}");
+}
+
+/// A pool of light on the floor of an empty hall reaches the floor far from
+/// it only by way of the walls and ceiling, so that floor is brighter in a
+/// hall painted light than in the same hall painted dark.
+#[test]
+fn lighter_walls_send_more_light_round_the_room() {
+    let mut renderer = Renderer::new().unwrap();
+    let eye = Vec3::new(0.0, -6.5, 3.0);
+    let mut floor = |shade: f32| {
+        let mut render = RenderSettings::room(
+            VenueEnvironment::indoor(0.0).with_floor(Floor::Concrete),
+            VenueHaze::default(),
+            50.0,
+            1.0,
+        );
+        render.room = Some([12.0, 14.0, 5.0]);
+        render.wall_shade = shade;
+        let mut frame = frame_of(render, eye, Vec3::new(3.0, 0.0, 0.0), Vec::new());
+        frame.fixture_cones.push(wash(
+            Vec3::new(-3.0, 0.0, 4.5),
+            Vec3::new(-3.0, 0.0, 0.0),
+            Vec3::ONE,
+        ));
+        let pixels = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+        capture(&format!("walls-{shade}"), &pixels, WIDTH, HEIGHT);
+        mean(&pixels, project(&frame, Vec3::new(4.0, 0.0, 0.0)), 6).length()
+    };
+    let (dark, light) = (floor(0.03), floor(0.7));
+    eprintln!("far floor: dark walls {dark:.4}, light walls {light:.4}");
+    assert!(
+        light > 1.5 * dark && light > dark + 0.01,
+        "the far floor is no brighter under light walls: {light} against {dark}"
+    );
 }

@@ -159,6 +159,12 @@ a new bake when it is done and shows the old one meanwhile; a changed stage is
 baked once it has held still for a few frames. Fixture bodies are left out of
 the bake, so a moving head never starts one.
 
+How much comes back off a room's walls and ceiling is the venue's own choice:
+the root node's `shade` parameter (`luma_scene::venue::wall_shade`), set by
+the Wall brightness row on the venue's environment panel and by the agent's
+`room(shade=)`. A black-box club and a white hall are the same room at 0.02
+and 0.85.
+
 Not built: emissive surfaces (LED panels) send no bounce, the sharp sheen of
 a polished floor is blurred to the discs' size, and outdoors the sky hidden by
 the stage is still taken off by the ambient visibility alone.

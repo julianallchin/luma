@@ -21,6 +21,8 @@ pub(super) struct RenderControls {
     /// The room's size, when it has one: `[width, depth, height]` in metres.
     /// Venue truth like the house, read off the venue's graph.
     pub(super) room: Option<[f32; 3]>,
+    /// How light that room's walls are painted, off the same graph.
+    pub(super) wall_shade: f32,
     sun_enabled: bool,
     sun_azimuth_deg: f32,
     sun_elevation_deg: f32,
@@ -121,6 +123,7 @@ impl RenderControls {
         // takes its background, ambient and sun from.
         render.house = Some(self.house);
         render.room = self.room;
+        render.wall_shade = self.wall_shade;
         render.sky = house::fill(self.house).sky;
         // `room` already carried the venue's own haze in. These two are the
         // local cost knobs it deliberately does not hold.
@@ -142,6 +145,7 @@ impl RenderControls {
         let mut controls = Self {
             house: environment,
             room: None,
+            wall_shade: luma_scene::venue::WALL_SHADE,
             sun_enabled: true,
             // The editor key light in polar form. Read off
             // `DirectionalLight::EDITOR` rather than typed again, so the

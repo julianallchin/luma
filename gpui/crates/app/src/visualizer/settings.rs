@@ -977,7 +977,7 @@ fn room_rows(state: &Visualizer, environment: VenueEnvironment, app: &Entity<Lum
     if !matches!(environment, VenueEnvironment::Indoor { .. }) {
         return None;
     }
-    let (root, size) = state.build.as_ref()?.room();
+    let (root, size, shade) = state.build.as_ref()?.room();
     let toggle = app.clone();
     let (label, to) = match size {
         Some(_) => ("Remove walls", None),
@@ -1003,6 +1003,23 @@ fn room_rows(state: &Visualizer, environment: VenueEnvironment, app: &Entity<Lum
             move |metres, cx| {
                 app.update(cx, |this, cx| {
                     this.stage_set_param(&root, key, f64::from(metres), cx);
+                });
+            },
+        ));
+    }
+    if size.is_some() {
+        let (app, root) = (app.clone(), root.to_string());
+        let shades = luma_scene::venue::WALL_SHADES;
+        rows = rows.child(super::scrub_row(
+            "Wall brightness (%)",
+            shade * 100.0,
+            shades.start() * 100.0..=shades.end() * 100.0,
+            1.0,
+            1.0,
+            move |percent, cx| {
+                app.update(cx, |this, cx| {
+                    let shade = f64::from(percent) / 100.0;
+                    this.stage_set_param(&root, luma_scene::venue::WALL_SHADE_PARAM, shade, cx);
                 });
             },
         ));

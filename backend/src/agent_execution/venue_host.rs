@@ -804,9 +804,15 @@ impl VenueHost {
         })
     }
 
-    /// Give the room a size, or take it away.
+    /// Give the room a size, or take it away, and paint its walls. A shade
+    /// alone repaints the room it is.
     async fn room(&self, request: RoomRequest) -> Result<Value, HostCallError> {
-        self.stage().set_room(request.size).await?;
+        if request.size.is_some() || request.shade.is_none() {
+            self.stage().set_room(request.size).await?;
+        }
+        if let Some(shade) = request.shade {
+            self.stage().set_wall_shade(shade).await?;
+        }
         Ok(json!({ "describe": self.stage().summary().await? }))
     }
 
@@ -1638,6 +1644,8 @@ struct RemoveRequest {
 struct RoomRequest {
     /// `[width, depth, height]` in metres; `None` is open floor.
     size: Option<[f64; 3]>,
+    /// How light the walls and ceiling are painted, 0 to 1.
+    shade: Option<f64>,
 }
 
 #[derive(Deserialize)]

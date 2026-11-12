@@ -246,6 +246,10 @@ pub struct RenderSettings {
     /// floor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room: Option<[f32; 3]>,
+    /// How light that room's walls and ceiling are painted, as
+    /// [`luma_scene::venue::wall_shade`].
+    #[serde(skip_serializing_if = "is_default_wall_shade")]
+    pub wall_shade: f32,
     /// The physically based sky, when the room is open air.
     ///
     /// `None` — the default everywhere, including every tracked contract
@@ -831,6 +835,7 @@ impl RenderSettings {
             show_gizmos: true,
             house: None,
             room: None,
+            wall_shade: luma_scene::venue::WALL_SHADE,
             sky: None,
             debug_view: DebugView::Pbr,
             look: Look::NEUTRAL,
@@ -869,6 +874,7 @@ impl RenderSettings {
             show_gizmos: true,
             house: None,
             room: None,
+            wall_shade: luma_scene::venue::WALL_SHADE,
             sky: None,
             debug_view: DebugView::Pbr,
             look: Look::NEUTRAL,
@@ -923,6 +929,7 @@ impl RenderSettings {
             show_gizmos: true,
             house: Some(environment),
             room: None,
+            wall_shade: luma_scene::venue::WALL_SHADE,
             sky: fill.sky,
             debug_view: DebugView::Pbr,
             look: Look::NEUTRAL,
@@ -961,6 +968,8 @@ struct RenderSettingsWire {
     #[serde(default)]
     room: Option<[f32; 3]>,
     #[serde(default)]
+    wall_shade: Option<f32>,
+    #[serde(default)]
     sky: Option<SkyParams>,
     #[serde(default)]
     debug_view: DebugView,
@@ -987,6 +996,11 @@ struct RenderSettingsWire {
     haze_resolution: Option<f32>,
     #[serde(default)]
     haze_density: Option<f32>,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_wall_shade(shade: &f32) -> bool {
+    *shade == luma_scene::venue::WALL_SHADE
 }
 
 impl RenderSettings {
@@ -1027,6 +1041,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 // over them would rewrite all nineteen.
                 house: wire.house,
                 room: wire.room,
+                wall_shade: wire.wall_shade.unwrap_or(luma_scene::venue::WALL_SHADE),
                 // Absent means no atmosphere, which is what every tracked
                 // contract image was captured under.
                 sky: wire.sky,
