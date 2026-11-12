@@ -481,7 +481,7 @@ pub(crate) fn housing_draws(
 ) -> anyhow::Result<Vec<Draw>> {
     // A library fixture is its own build, emitters dark.
     if let Some(built) = &def.built {
-        let worlds = luma_scene::library::worlds(built, pan_tilt);
+        let worlds = luma_scene::library::worlds(built, &[]);
         return Ok(crate::library_housing::draws(
             built,
             fixture_path,
@@ -997,8 +997,16 @@ pub fn build_at(
         if let Some(built) = &def.built {
             let cells = built.cells.len().max(1);
             let cell_state = |cell: usize| state(&fixture.id, cell.min(cells - 1)).unwrap_or(DARK);
-            let pan_tilt = cell_state(0).position;
-            let (back, worlds) = luma_scene::library::aimed(built, pan_tilt, fixture.aim);
+            // Each head turns by its own pan and tilt, which its lowest
+            // cell's primitive carries.
+            let heads: Vec<[f32; 2]> = (0..built.head_count())
+                .map(|head| {
+                    built
+                        .head_cell(head)
+                        .map_or([0.0; 2], |cell| cell_state(cell).position)
+                })
+                .collect();
+            let (back, worlds) = luma_scene::library::aimed(built, &heads, fixture.aim);
             let base = base * back;
             draws.extend(crate::library_housing::draws(
                 built,
@@ -1349,7 +1357,7 @@ pub fn build_at(
         }
         // The lamps' bodies hang there whether they are lit or not.
         if let Some(pendant) = lib.fixture(crate::house::PENDANT) {
-            let (back, worlds) = luma_scene::library::aimed(&pendant, [0.0; 2], [0.0; 2]);
+            let (back, worlds) = luma_scene::library::aimed(&pendant, &[], [0.0; 2]);
             let hung = to_world * three_pose_from_data([0.0; 3], [0.0; 3]) * back;
             if let Some((face, along)) = luminaire_face(&pendant, &worlds) {
                 let area = crate::library_housing::emitting_area(&pendant, &worlds, 0, along);

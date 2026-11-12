@@ -543,6 +543,109 @@ fn every_head_aims_where_its_cell_asks() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// The stage turns each cell where the wire turns it: asking every cell for
+/// the pan and tilt the stage shows one cell at sends the bytes the pan and
+/// tilt channels over that cell already carry. So a mode with one tilt
+/// channel shows every head at one tilt, and a mode with a tilt channel per
+/// head shows each at its own.
+#[test]
+fn the_stage_turns_a_head_where_the_wire_sends_it() {
+    use crate::stage_render::StageLights;
+    let mut failures = Vec::new();
+    for (id, def, mode, slots) in every_mode() {
+        let positions: Vec<&(usize, Lowered)> = slots
+            .iter()
+            .filter(|(_, l)| l.param.attr.is_position())
+            .collect();
+        let n = def.library.as_ref().unwrap().built.cells.len().max(1);
+        let at = |c: usize| PrimitiveState {
+            position: [3.0 * c as f32 - 20.0, 2.0 * c as f32 - 15.0],
+            ..lit(1.0, [1.0; 3])
+        };
+        let each: Vec<(String, PrimitiveState)> = if n > 1 {
+            cells((0..n).map(|c| (c, at(c))))
+        } else {
+            fixture_level(at(0))
+        };
+        let path = fixture_path(&id);
+        let fixture = PatchedFixture {
+            id: "fx".into(),
+            uid: None,
+            venue_id: "v".into(),
+            universe: 1,
+            address: 1,
+            num_channels: 0,
+            manufacturer: String::new(),
+            model: String::new(),
+            mode_name: mode.clone(),
+            fixture_path: path.clone(),
+            label: None,
+            address_pinned: false,
+        };
+        let lights = StageLights::new(&[fixture], &HashMap::from([(path, (*def).clone())]));
+        let state = UniverseState {
+            primitives: each
+                .iter()
+                .map(|(k, p)| (format!("fx{k}"), p.clone()))
+                .collect(),
+            lasers: Vec::new(),
+        };
+        let still = luma_scene::strobe::Slice {
+            open: 0.0,
+            length: 0.0,
+        };
+        let frame = lights.frame(Some(&state), still);
+        let shown: Vec<[f32; 2]> = (0..n)
+            .map(|c| frame.primitive("fx", c).unwrap().position)
+            .collect();
+        if positions.is_empty() {
+            if shown.iter().any(|at| *at != [0.0; 2]) {
+                failures.push(format!("{id} {mode}: turns with no channel to turn it"));
+            }
+            continue;
+        }
+        let sent = dmx(&id, &mode, &each);
+        let covers = |l: &Lowered, c: usize| {
+            l.param.cell.is_none_or(|cell| {
+                let [a, z] = cell.span();
+                (a as usize..=z as usize).contains(&c)
+            })
+        };
+        for (slot, lowered) in positions.iter().map(|p| (p.0, &p.1)) {
+            for c in (0..n).filter(|&c| covers(lowered, c)) {
+                // A head with a channel of its own does not follow the
+                // fixture's.
+                let own = positions.iter().any(|(_, other)| {
+                    other.param.attr == lowered.param.attr
+                        && other.param.cell.is_some()
+                        && covers(other, c)
+                });
+                if lowered.param.cell.is_none() && own {
+                    continue;
+                }
+                let as_shown = PrimitiveState {
+                    position: shown[c],
+                    ..lit(1.0, [1.0; 3])
+                };
+                let all: Vec<(String, PrimitiveState)> = if n > 1 {
+                    cells((0..n).map(|k| (k, as_shown.clone())))
+                } else {
+                    fixture_level(as_shown)
+                };
+                let want = dmx(&id, &mode, &all)[slot];
+                if sent[slot] != want {
+                    failures.push(format!(
+                        "{id} {mode} cell {c}: the stage shows {:?}, which sends {want} on slot \
+                         {slot}; the wire has {}",
+                        shown[c], sent[slot]
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Every shipped fixture's every mode, with its rank-0 channels as
 /// `(slot, lowered)`.
 fn every_mode() -> Vec<(

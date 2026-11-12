@@ -256,6 +256,43 @@ impl Built {
         out
     }
 
+    /// How many heads the fixture has. A head is a part that moves as one:
+    /// an array element, or the whole fixture when it has no elements. Its
+    /// motors turn it, and the cells on it ride along.
+    #[must_use]
+    pub fn head_count(&self) -> usize {
+        self.nodes
+            .iter()
+            .filter_map(|n| n.element)
+            .max()
+            .map_or(1, |last| last + 1)
+    }
+
+    /// The head `cell` rides. A cell no emitter draws, and one on the
+    /// fixture's own body, ride head 0.
+    #[must_use]
+    pub fn head_of(&self, cell: usize) -> usize {
+        self.cells
+            .get(cell)
+            .and_then(|c| c.node)
+            .and_then(|n| self.nodes[n].element)
+            .unwrap_or(0)
+    }
+
+    /// The lowest cell on `head`, the one whose primitive carries the head's
+    /// pan and tilt. `None` for a head with no cell.
+    #[must_use]
+    pub fn head_cell(&self, head: usize) -> Option<usize> {
+        (0..self.cells.len()).find(|&c| self.head_of(c) == head)
+    }
+
+    /// The head joint `index` turns: its array element's, or head 0 for a
+    /// joint of the fixture's own chain.
+    #[must_use]
+    pub fn joint_head(&self, index: usize) -> usize {
+        self.joints[index].element.unwrap_or(0)
+    }
+
     /// The box around every mesh, housing space, every joint at 0. Its `max.y`
     /// is where the clamp goes.
     #[must_use]
