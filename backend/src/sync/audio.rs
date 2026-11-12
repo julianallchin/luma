@@ -81,12 +81,6 @@ impl TrackAudio {
             .split_once('/')
             .filter(|(bucket, path)| !bucket.is_empty() && !path.is_empty())
             .ok_or_else(|| SyncError::Media("Invalid audio storage path".into()))?;
-        let auth = auth::get_current_auth(&self.state_pool)
-            .await?
-            .ok_or(SyncError::AuthRequired)?;
-        if principal != auth.principal.user_id {
-            return Err(SyncError::AuthRequired);
-        }
         // Synced metadata must stay a filename inside the managed tracks directory.
         if source.track_hash.is_empty()
             || !source
@@ -103,27 +97,42 @@ impl TrackAudio {
             .ok_or_else(|| SyncError::Media("Invalid audio file extension".into()))?;
         let directory = self.storage.tracks_dir();
         let dest = directory.join(format!("{}.{ext}", source.track_hash));
-        let bytes = self
-            .remote
-            .download_file(bucket, path, &auth.access_token)
-            .await
-            .map_err(|error| {
-                if !error.is_missing_object() {
-                    error
-                } else if source.uid.as_deref() == Some(auth.principal.user_id.as_str()) {
-                    SyncError::Media("This song's audio is missing from cloud storage. Import it again on a device that has the file.".into())
-                } else {
-                    SyncError::Media("This song was added by another member of this venue, and cloud storage isn't sharing its audio with you.".into())
-                }
-            })?;
-        if bytes.is_empty() {
-            return Err(SyncError::Media("Downloaded audio is empty".into()));
-        }
-        std::fs::create_dir_all(&directory).map_err(|e| SyncError::Media(e.to_string()))?;
-        let mut temp = tempfile::NamedTempFile::new_in(&directory)
-            .map_err(|e| SyncError::Media(e.to_string()))?;
-        temp.write_all(&bytes)
-            .map_err(|e| SyncError::Media(e.to_string()))?;
+        // The file is named by its content, so one this device already holds
+        // is this track's audio. A resync clears the path and not the file,
+        // and nothing is fetched again.
+        let held = std::fs::metadata(&dest).is_ok_and(|file| file.is_file() && file.len() > 0);
+        let downloaded = if held {
+            None
+        } else {
+            let auth = auth::get_current_auth(&self.state_pool)
+                .await?
+                .ok_or(SyncError::AuthRequired)?;
+            if principal != auth.principal.user_id {
+                return Err(SyncError::AuthRequired);
+            }
+            let bytes = self
+                .remote
+                .download_file(bucket, path, &auth.access_token)
+                .await
+                .map_err(|error| {
+                    if !error.is_missing_object() {
+                        error
+                    } else if source.uid.as_deref() == Some(auth.principal.user_id.as_str()) {
+                        SyncError::Media("This song's audio is missing from cloud storage. Import it again on a device that has the file.".into())
+                    } else {
+                        SyncError::Media("This song was added by another member of this venue, and cloud storage isn't sharing its audio with you.".into())
+                    }
+                })?;
+            if bytes.is_empty() {
+                return Err(SyncError::Media("Downloaded audio is empty".into()));
+            }
+            std::fs::create_dir_all(&directory).map_err(|e| SyncError::Media(e.to_string()))?;
+            let mut temp = tempfile::NamedTempFile::new_in(&directory)
+                .map_err(|e| SyncError::Media(e.to_string()))?;
+            temp.write_all(&bytes)
+                .map_err(|e| SyncError::Media(e.to_string()))?;
+            Some(temp)
+        };
 
         // Do not publish a download across a track edit, deletion or account switch.
         let mut access = VisibleTrackAccess::<Operate>::operate(&self.pool, track_id)
@@ -143,8 +152,10 @@ impl TrackAudio {
                 "Track changed while downloading audio; reopen it to retry".into(),
             ));
         }
-        temp.persist(&dest)
-            .map_err(|e| SyncError::Media(e.to_string()))?;
+        if let Some(temp) = downloaded {
+            temp.persist(&dest)
+                .map_err(|e| SyncError::Media(e.to_string()))?;
+        }
         // Shared tracks can belong to another account. This only updates the
         // device-local path, under the same admission used for downloaded stems.
         enter_remote_writes(access.connection())
@@ -288,6 +299,22 @@ mod tests {
             .await
             .unwrap();
         restarted.ensure("track").await.unwrap();
+    }
+
+    /// A resync resets a track's path and leaves its file. The file is the
+    /// track's audio by name, so it is used: nothing is asked of a server
+    /// that may no longer share it.
+    #[tokio::test]
+    async fn a_file_already_on_disk_is_used_without_a_download() {
+        let refusing = server(404).await;
+        let directory = tempfile::tempdir().unwrap();
+        let audio = fixture(directory.path(), &refusing).await;
+        let held = audio.storage.tracks_dir().join("hash.ogg");
+        std::fs::create_dir_all(audio.storage.tracks_dir()).unwrap();
+        std::fs::write(&held, b"kept").unwrap();
+        assert_eq!(audio.ensure("track").await.unwrap(), held);
+        assert_eq!(refusing.requests.load(Ordering::SeqCst), 0);
+        assert_eq!(std::fs::read(path(&audio).await).unwrap(), b"kept");
     }
 
     #[tokio::test]
