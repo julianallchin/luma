@@ -131,6 +131,7 @@ select pg_temp.reissue('venue_node_params', true);
 select pg_temp.reissue('venue_constraints', true);
 select pg_temp.reissue('venue_members', true);
 select pg_temp.reissue('laser_limits', true);
+select pg_temp.reissue('perform_layouts', true);
 select pg_temp.reissue('track_beats', true);
 select pg_temp.reissue('track_beat_validations', true);
 select pg_temp.reissue('agent_thread_transcript_heads', true);
@@ -245,6 +246,10 @@ create unique index agent_thread_transcript_heads_live_thread
 
 create unique index laser_limits_live_fixture
     on public.laser_limits (fixture_id) where deleted_at is null;
+
+-- A venue's Perform layout was keyed by its venue's id.
+create unique index perform_layouts_live_venue
+    on public.perform_layouts (venue_id) where deleted_at is null;
 
 create unique index clips_live_label
     on public.clips (score_id, label) where label is not null and deleted_at is null;
