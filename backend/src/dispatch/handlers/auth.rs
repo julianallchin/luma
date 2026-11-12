@@ -679,7 +679,7 @@ mod tests {
         }
         for statement in [
             "INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('loose', 'alice', 'l', '/l')",
-            "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json) VALUES ('loose', 'alice', '[]', '[]')",
+            "INSERT INTO track_beats (id, track_id, uid, beats_json, downbeats_json) VALUES ('grid', 'loose', 'alice', '[]', '[]')",
         ] {
             sqlx::query(statement).execute(&pool).await.unwrap();
         }

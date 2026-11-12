@@ -98,7 +98,7 @@ pub async fn build_score_scene(
         resource_root,
         storage,
         controls,
-        &track_id,
+        crate::database::local::tracks::Grid::of_score(&track_id, score_id),
         &score,
     )
     .await

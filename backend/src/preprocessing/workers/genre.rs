@@ -125,13 +125,15 @@ mod tests {
                 active_uid TEXT
             )",
             "CREATE TABLE track_beats (
-                track_id TEXT PRIMARY KEY,
+                id TEXT PRIMARY KEY NOT NULL,
+                track_id TEXT NOT NULL,
                 beats_json TEXT NOT NULL,
                 downbeats_json TEXT NOT NULL,
                 bpm REAL,
                 downbeat_offset REAL,
                 beats_per_bar INTEGER,
-                processor_version INTEGER NOT NULL DEFAULT 1
+                processor_version INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             )",
             "CREATE TABLE track_genres (
                 track_id TEXT PRIMARY KEY,
@@ -160,8 +162,9 @@ mod tests {
     /// not the tempo's length.
     async fn insert_grid(pool: &SqlitePool, track_id: &str, first_bar: (f64, f64)) {
         sqlx::query(
-            "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
-             VALUES (?, '[]', ?, 128.0, 4)",
+            "INSERT INTO track_beats
+                (id, track_id, beats_json, downbeats_json, bpm, beats_per_bar)
+             VALUES (lower(hex(randomblob(16))), ?, '[]', ?, 128.0, 4)",
         )
         .bind(track_id)
         .bind(format!(

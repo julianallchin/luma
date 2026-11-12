@@ -4,13 +4,17 @@ use crate::models::beat_grid::BeatGrid;
 use crate::models::tracks::{TrackBrowserRow, TrackImportResult};
 use crate::services::tracks::{self as track_service, ImportRequest};
 
-/// `None` when beat detection has not run for this track.
+/// The beat grid `score_id` was written against, or with no score the
+/// track's current one. `None` when beat detection has not run for this track.
 pub async fn get_track_beats(
     services: &AppServices,
     track_id: String,
+    score_id: Option<String>,
 ) -> Result<Option<BeatGrid>, CommandError> {
+    use crate::database::local::tracks::{get_track_beats, Grid};
     services.require_session().await?;
-    Ok(crate::database::local::tracks::get_track_beats(&services.db.0, &track_id).await?)
+    let grid = Grid::in_scope(&track_id, score_id.as_deref());
+    Ok(get_track_beats(&services.db.0, grid).await?)
 }
 
 use crate::models::tracks::{BeatValidation, BeatValidationReason, BeatValidationVerdict};

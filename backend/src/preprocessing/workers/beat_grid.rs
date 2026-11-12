@@ -10,6 +10,7 @@ use std::path::Path;
 use async_trait::async_trait;
 
 use crate::database::local::tracks as tracks_db;
+use crate::models::beat_grid::BeatGrid;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
 
@@ -44,21 +45,13 @@ impl Preprocessor for BeatGridPreprocessor {
                 .map_err(|e| format!("Beat worker task failed: {e}"))??;
         ctx.checkpoint()?;
 
-        let beats_json = serde_json::to_string(&beat_data.beats)
-            .map_err(|e| format!("Failed to serialize beats: {e}"))?;
-        let downbeats_json = serde_json::to_string(&beat_data.downbeats)
-            .map_err(|e| format!("Failed to serialize downbeats: {e}"))?;
-
-        tracks_db::upsert_track_beats(
-            ctx.pool(),
-            track_id,
-            &beats_json,
-            &downbeats_json,
-            Some(beat_data.bpm as f64),
-            Some(beat_data.downbeat_offset as f64),
-            Some(beat_data.beats_per_bar as i64),
-            self.version(),
-        )
-        .await
+        let grid = BeatGrid {
+            beats: beat_data.beats,
+            downbeats: beat_data.downbeats,
+            bpm: beat_data.bpm,
+            downbeat_offset: beat_data.downbeat_offset,
+            beats_per_bar: beat_data.beats_per_bar,
+        };
+        tracks_db::record_track_beats(ctx.pool(), track_id, &grid, self.version()).await
     }
 }

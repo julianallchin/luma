@@ -6,14 +6,17 @@
 //! read.
 use luma_patterns::{standard_library, Score};
 
+use crate::database::local::tracks::Grid;
+
 /// Compile the canonical score directly into the existing compositor's plans.
 /// Geometry, group selections and the beat grid come from one authorized read.
+/// `timing` is the score's track and the grid its clips are placed on.
 pub(crate) async fn prepare_scene(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
     controls: &crate::controls::ControlBanks,
-    track_id: &str,
+    timing: Grid<'_>,
     score: &Score,
 ) -> Result<crate::eval::Scene, String> {
     Ok(prepare_scene_data(
@@ -21,7 +24,7 @@ pub(crate) async fn prepare_scene(
         fixtures_root,
         storage,
         controls,
-        track_id,
+        timing,
         score,
         false,
     )
@@ -44,7 +47,7 @@ async fn prepare_scene_data(
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
     controls: &crate::controls::ControlBanks,
-    track_id: &str,
+    timing: Grid<'_>,
     score: &Score,
     single: bool,
 ) -> Result<SceneData, String> {
@@ -84,12 +87,10 @@ async fn prepare_scene_data(
             cells: Default::default(),
         });
     }
-    let grid = crate::database::local::tracks::get_track_beats_for_connection(
-        access.connection(),
-        track_id,
-    )
-    .await?
-    .ok_or("analyze the track before placing effects on its musical grid")?;
+    let grid =
+        crate::database::local::tracks::get_track_beats_for_connection(access.connection(), timing)
+            .await?
+            .ok_or("analyze the track before placing effects on its musical grid")?;
     let clock = grid.timeline().map_err(|error| error.to_string())?;
     let mut compiled = Vec::new();
     let mut clip_cells = std::collections::BTreeMap::new();
@@ -147,8 +148,14 @@ async fn prepare_scene_data(
         None
     } else {
         Some(
-            crate::eval::track_features::prepare(access, storage, track_id, &grid, &requests)
-                .await?,
+            crate::eval::track_features::prepare(
+                access,
+                storage,
+                timing.track_id(),
+                &grid,
+                &requests,
+            )
+            .await?,
         )
     };
     let controls = controls.venue(access.venue_id());
@@ -210,7 +217,7 @@ pub(crate) async fn prepare_clip_preview(
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
     controls: &crate::controls::ControlBanks,
-    track_id: &str,
+    timing: Grid<'_>,
     score: &Score,
     clip_id: &str,
 ) -> Result<ClipPreview, String> {
@@ -219,7 +226,7 @@ pub(crate) async fn prepare_clip_preview(
         fixtures_root,
         storage,
         controls,
-        track_id,
+        timing,
         score,
         clip_id,
     )
@@ -233,7 +240,7 @@ async fn prepare_single_clip(
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
     controls: &crate::controls::ControlBanks,
-    track_id: &str,
+    timing: Grid<'_>,
     score: &Score,
     clip_id: &str,
 ) -> Result<(ClipPreview, Vec<luma_patterns::Cell>), String> {
@@ -248,7 +255,7 @@ async fn prepare_single_clip(
         fixtures_root,
         storage,
         controls,
-        track_id,
+        timing,
         &single,
         true,
     )
@@ -260,7 +267,7 @@ async fn prepare_single_clip(
         // Empty selections still have a real clip clock and can be scrubbed.
         let grid = crate::database::local::tracks::get_track_beats_for_connection(
             access.connection(),
-            track_id,
+            timing,
         )
         .await?
         .ok_or("analyze the track before previewing its musical grid")?;
@@ -294,18 +301,16 @@ pub(crate) async fn preview_clips(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
     storage: &crate::storage::StorageRoot,
-    track_id: &str,
+    timing: Grid<'_>,
     score: &Score,
     clip_ids: &[String],
 ) -> Result<Vec<ClipStrip>, String> {
     use rayon::prelude::*;
     let library = standard_library();
-    let grid = crate::database::local::tracks::get_track_beats_for_connection(
-        access.connection(),
-        track_id,
-    )
-    .await?
-    .ok_or("analyze the track before previewing its musical grid")?;
+    let grid =
+        crate::database::local::tracks::get_track_beats_for_connection(access.connection(), timing)
+            .await?
+            .ok_or("analyze the track before previewing its musical grid")?;
     let clock = grid.timeline().map_err(|error| error.to_string())?;
     let mut failed = Vec::new();
     let mut domains = std::collections::BTreeMap::new();
@@ -380,8 +385,14 @@ pub(crate) async fn preview_clips(
         None
     } else {
         Some(
-            crate::eval::track_features::prepare(access, storage, track_id, &grid, &requests)
-                .await?,
+            crate::eval::track_features::prepare(
+                access,
+                storage,
+                timing.track_id(),
+                &grid,
+                &requests,
+            )
+            .await?,
         )
     };
     let mut compiled = Vec::new();

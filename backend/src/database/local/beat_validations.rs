@@ -53,30 +53,27 @@ pub async fn set(
     if !owns {
         return Err("Only the track owner can validate its beat grid".into());
     }
-    let current = crate::database::local::tracks::get_track_beats_for_connection(
+    // The grid a person reviews is the one on their screen: their score's,
+    // which stays one of the track's grids after the song is analysed again.
+    let processor_version = crate::database::local::tracks::grid_version_for_connection(
         access.connection(),
         track_id,
+        reviewed,
     )
     .await?
-    .ok_or("This track has no beat grid to validate")?;
-    if &current != reviewed {
-        return Err("The beat grid changed. Reopen the track before validating it.".into());
-    }
-    if current.beats.is_empty() || current.downbeats.is_empty() {
+    .ok_or("The beat grid changed. Reopen the track before validating it.")?;
+    if reviewed.beats.is_empty() || reviewed.downbeats.is_empty() {
         return Err("This track has no beat grid to validate".into());
     }
     let json = serde_json::to_string(reviewed).map_err(|e| format!("Invalid beat grid: {e}"))?;
     // A track has one validation, found by its track: a second review changes
     // that row, and only the first one makes a row, under its own id. The
-    // processor is the current grid's, the track's newest.
+    // processor is the reviewed grid's.
     sqlx::query(
         "INSERT INTO track_beat_validations
          (id, track_id, uid, track_hash, grid_json, processor_version, verdict, reason)
-         SELECT ?, t.id, t.uid, t.track_hash, ?, b.processor_version, ?, ?
-         FROM tracks t JOIN track_beats b ON b.id = (
-             SELECT id FROM track_beats WHERE track_id = t.id
-             ORDER BY created_at DESC, id DESC LIMIT 1)
-         WHERE t.id = ?
+         SELECT ?, t.id, t.uid, t.track_hash, ?, ?, ?, ?
+         FROM tracks t WHERE t.id = ?
          ON CONFLICT(track_id) DO UPDATE SET
          uid = excluded.uid, track_hash = excluded.track_hash,
          grid_json = excluded.grid_json, processor_version = excluded.processor_version,
@@ -84,6 +81,7 @@ pub async fn set(
     )
     .bind(uuid::Uuid::new_v4().to_string())
     .bind(json)
+    .bind(processor_version)
     .bind(verdict)
     .bind(reason)
     .bind(track_id)

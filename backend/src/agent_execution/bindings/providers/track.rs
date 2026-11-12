@@ -31,7 +31,7 @@ pub async fn provide(b: &mut BindingBuilder, ctx: &ProviderCtx<'_>) -> Result<()
     inline(b, "track.duration_s", track.duration_seconds)?;
 
     // The tracks table has no bpm column — the beat grid owns it.
-    let bpm = local::tracks::get_track_beats_raw(ctx.pool, &track.id)
+    let bpm = local::tracks::get_track_beats_raw(ctx.pool, ctx.grid(&track.id))
         .await
         .ok()
         .flatten()
@@ -77,7 +77,9 @@ async fn provide_timeline(
                 None => SpokenGroups::default(),
             };
             inline(b, "track.document", groups.spoken(serde_json::json!(score)))?;
-            let grid = crate::database::local::tracks::get_track_beats(ctx.pool, track_id).await?;
+            let grid =
+                crate::database::local::tracks::get_track_beats(ctx.pool, ctx.grid(track_id))
+                    .await?;
             inline(
                 b,
                 "track.beat_origin_s",

@@ -146,6 +146,7 @@ pub enum StageOutcome {
 #[derive(Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackBeats {
+    pub id: String,
     #[sqlx(rename = "track_id")]
     pub track_id: String,
     pub uid: Option<String>,
@@ -158,6 +159,9 @@ pub struct TrackBeats {
     pub downbeat_offset: Option<f64>,
     #[sqlx(rename = "beats_per_bar")]
     pub beats_per_bar: Option<i64>,
+    /// The version of the detector that found this grid.
+    #[sqlx(rename = "processor_version")]
+    pub processor_version: i64,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
     #[sqlx(rename = "updated_at")]

@@ -43,6 +43,13 @@ pub struct TrackEditScope {
     pub venue_id: String,
 }
 
+impl TrackScope {
+    /// The beat grid this scope's score was written against.
+    pub(crate) fn grid(&self) -> crate::database::local::tracks::Grid<'_> {
+        crate::database::local::tracks::Grid::of_score(&self.track_id, &self.score_id)
+    }
+}
+
 impl From<&TrackEditScope> for TrackScope {
     fn from(scope: &TrackEditScope) -> Self {
         Self {
@@ -123,7 +130,7 @@ impl TrackHost {
         }
 
         let beat_grid =
-            crate::database::local::tracks::get_track_beats(&self.pool, &self.scope.track_id)
+            crate::database::local::tracks::get_track_beats(&self.pool, self.scope.grid())
                 .await
                 .map_err(|e| {
                     HostCallError::new("internal", format!("Failed to load beat grid: {e}"))

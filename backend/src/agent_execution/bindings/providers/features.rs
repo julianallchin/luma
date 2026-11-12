@@ -87,7 +87,7 @@ async fn beats(
     store: &mut ArtifactStore,
     track_id: &str,
 ) -> Result<(), String> {
-    let row = local::tracks::get_track_beats_raw(ctx.pool, track_id).await?;
+    let row = local::tracks::get_track_beats_raw(ctx.pool, ctx.grid(track_id)).await?;
     let Some(row) = row else {
         let reason = missing_reason(ctx.pool, track_id, "beat_grid", "beat detection").await;
         for path in [

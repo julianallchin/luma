@@ -153,8 +153,9 @@ impl Fixture {
         .unwrap();
 
         sqlx::query(
-            "INSERT INTO track_beats (track_id, beats_json, downbeats_json, bpm, beats_per_bar)
-             VALUES (?, '[0.5,1.0,1.5,2.0]', '[0.5,2.5]', 128.0, 4)",
+            "INSERT INTO track_beats
+                (id, track_id, beats_json, downbeats_json, bpm, beats_per_bar)
+             VALUES (lower(hex(randomblob(16))), ?, '[0.5,1.0,1.5,2.0]', '[0.5,2.5]', 128.0, 4)",
         )
         .bind(TRACK_ID)
         .execute(&self.pool)

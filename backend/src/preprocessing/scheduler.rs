@@ -817,6 +817,7 @@ pub async fn reconcile_on_startup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::beat_grid::BeatGrid;
     use async_trait::async_trait;
 
     /// Test-only preprocessor stub used to exercise topo + planning.
@@ -1047,15 +1048,16 @@ mod tests {
                 .unwrap()
                 .version()
         };
-        sqlx::query(
-            "INSERT INTO track_beats
-                (track_id, beats_json, downbeats_json, bpm, beats_per_bar, processor_version)
-             VALUES ('t1', '[0.5,1.0,1.5,2.0]', '[0.5,2.5]', 128.0, 4, ?)",
-        )
-        .bind(i64::from(version("beat_grid")))
-        .execute(pool)
-        .await
-        .unwrap();
+        let grid = BeatGrid {
+            beats: vec![0.5, 1.0, 1.5, 2.0],
+            downbeats: vec![0.5, 2.5],
+            bpm: 128.0,
+            downbeat_offset: 0.5,
+            beats_per_bar: 4,
+        };
+        tracks_db::record_track_beats(pool, "t1", &grid, version("beat_grid"))
+            .await
+            .unwrap();
         let stems = services.storage.stems_root().join("hash");
         std::fs::create_dir_all(&stems).unwrap();
         for stem in ["bass", "drums", "other", "vocals"] {
@@ -1099,14 +1101,16 @@ mod tests {
             .unwrap();
         // The grid's first bar is longer than its tempo's, as a detected
         // grid's often is.
-        sqlx::query(
-            "INSERT INTO track_beats
-                (track_id, beats_json, downbeats_json, bpm, beats_per_bar, processor_version)
-             VALUES ('t1', '[]', '[0.5,2.5,4.5]', 128.0, 4, 1)",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
+        let grid = |downbeats: [f32; 3]| BeatGrid {
+            beats: Vec::new(),
+            downbeats: downbeats.to_vec(),
+            bpm: 128.0,
+            downbeat_offset: downbeats[0],
+            beats_per_bar: 4,
+        };
+        tracks_db::record_track_beats(pool, "t1", &grid([0.5, 2.5, 4.5]), 1)
+            .await
+            .unwrap();
         sqlx::query(
             r#"INSERT INTO track_bar_classifications
                 (track_id, classifications_json, tag_order_json, processor_version)
@@ -1142,18 +1146,30 @@ mod tests {
         assert!(classifier.is_complete(&ctx, "t1").await.unwrap());
         assert!(!queued().await, "a row from the current grid was queued");
 
-        // Another device's grid syncs in.
-        sqlx::query(
-            "UPDATE track_beats SET downbeats_json = '[0.0,2.0,4.0]' WHERE track_id = 't1'",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
+        // The song is analysed again, or another device's grid syncs in:
+        // a second grid, beside the one the row was computed against.
+        tracks_db::record_track_beats(pool, "t1", &grid([0.0, 2.0, 4.0]), 1)
+            .await
+            .unwrap();
         assert!(queued().await, "reconcile would not queue the track");
         assert!(
             !classifier.is_complete(&ctx, "t1").await.unwrap(),
             "the run would pass by a row from an earlier grid as done"
         );
+
+        // The step runs again against the current grid. The earlier grid is
+        // still there for the scores written against it, and is no evidence
+        // against the new row.
+        sqlx::query(
+            r#"UPDATE track_bar_classifications SET classifications_json =
+                '{"first_bar":[0.0,2.0],"intensity":[1.0],"scores":[[0.1]]}'
+               WHERE track_id = 't1'"#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        assert!(classifier.is_complete(&ctx, "t1").await.unwrap());
+        assert!(!queued().await, "an earlier grid kept the track queued");
     }
 
     #[tokio::test]

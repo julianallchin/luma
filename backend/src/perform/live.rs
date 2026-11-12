@@ -476,9 +476,10 @@ pub(crate) async fn compile(
 ) -> Result<(LiveClock, (LiveSet, Build)), String> {
     let grid = match track {
         Some((_, track_id)) => {
+            // A deck plays a song, not a score: the song's current grid.
             crate::database::local::tracks::get_track_beats_for_connection(
                 access.connection(),
-                track_id,
+                crate::database::local::tracks::Grid::current(track_id),
             )
             .await?
         }

@@ -127,13 +127,13 @@ impl Library {
             .notify_waiters();
         let (score_id, track_id) = (score_id.to_owned(), track_id.to_owned());
         self.task("get_score_document", |services| async move {
-            let score = handlers::scores::get_score_document(&services, score_id)
+            let score = handlers::scores::get_score_document(&services, score_id.clone())
                 .await
                 .and_then(|score| {
                     score.ok_or_else(|| CommandError::NotFound("score does not exist".into()))
                 })
                 .map_err(refused("get_score_document"))?;
-            let beats = handlers::tracks::get_track_beats(&services, track_id)
+            let beats = handlers::tracks::get_track_beats(&services, track_id, Some(score_id))
                 .await
                 .map_err(refused("get_track_beats"))?;
             Ok(ScoreContents { score, beats })

@@ -53,11 +53,11 @@ use luma_lib::controls::{perform as names, Control, Look, Played, UNSET_COLOR, U
 use luma_lib::dispatch::handlers::inputs::{Address, Binding, ControllerState, InputState, Mode};
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::groups::FixtureGroup;
-use luma_lib::services::groups::GroupNames;
 use luma_lib::models::perform::{
     Cell, CellContent, ListValue, PerformClock, PerformLayout, PerformPattern, PerformSource,
     PerformState,
 };
+use luma_lib::services::groups::GroupNames;
 use luma_patterns::press::Button;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::text_input::{self, TextInput};
@@ -864,7 +864,7 @@ impl Luma {
     /// Read a matched deck's waveform and beats for its strip.
     fn load_deck_track(&mut self, target: &Target, track_id: String, cx: &mut Context<Self>) {
         let waveform = self.library.track_waveform(&track_id);
-        let beats = self.library.track_beats(&track_id);
+        let beats = self.library.track_beats(&track_id, None);
         let target = target.clone();
         cx.spawn(async move |this, cx| {
             let view = deck_strip::TrackView::new(waveform.await.ok(), beats.await.ok().flatten());

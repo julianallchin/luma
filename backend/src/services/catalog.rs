@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::database::local::auth::principal_key;
 use crate::database::local::scores::{get_score, rows};
+use crate::database::local::tracks::current_grid_id;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, VenueResource, Write};
 use crate::models::scores::Score;
 
@@ -80,22 +81,30 @@ async fn insert_score(
     if visible.is_none() {
         return Err("track does not exist".into());
     }
-    sqlx::query("INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, ?)")
-        .bind(&score_id)
-        .bind(&owner)
-        .bind(track_id)
-        .bind(venue_id)
-        .bind(name)
-        .execute(access.connection())
-        .await
-        .map_err(|error| format!("insert score: {error}"))?;
+    // Written against the track's current grid, and read on it from then
+    // on: a later analysis of the song does not move this score's clips.
+    let grid_id = current_grid_id(access.connection(), track_id).await?;
+    sqlx::query(
+        "INSERT INTO scores (id, uid, track_id, venue_id, name, grid_id)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&score_id)
+    .bind(&owner)
+    .bind(track_id)
+    .bind(venue_id)
+    .bind(name)
+    .bind(grid_id)
+    .execute(access.connection())
+    .await
+    .map_err(|error| format!("insert score: {error}"))?;
     let score = crate::database::local::scores::get_score(&mut access, &score_id).await?;
     access.commit().await?;
     Ok(score)
 }
 
-/// Copy `score_id` — the row and every clip on it — into a new score of the
-/// same track in the same venue, named `name`, in one transaction. The copy is
+/// Copy `score_id` — the row, the beat grid it names and every clip on it —
+/// into a new score of the same track in the same venue, named `name`, in one
+/// transaction. The copy is
 /// the caller's, as a score they created would be; a member may copy a score
 /// they can write. Idempotent on `request_id`, like [`create_score`].
 pub async fn duplicate_score(
@@ -112,15 +121,21 @@ pub async fn duplicate_score(
         return Ok(existing);
     }
     let source = get_score(&mut access, score_id).await?;
-    sqlx::query("INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, ?)")
-        .bind(&copy_id)
-        .bind(&owner)
-        .bind(&source.track_id)
-        .bind(&source.venue_id)
-        .bind(name)
-        .execute(access.connection())
-        .await
-        .map_err(|error| format!("insert the copy: {error}"))?;
+    // The copied clips are in the beats of the source's grid, so the copy
+    // names the same one.
+    sqlx::query(
+        "INSERT INTO scores (id, uid, track_id, venue_id, name, grid_id)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&copy_id)
+    .bind(&owner)
+    .bind(&source.track_id)
+    .bind(&source.venue_id)
+    .bind(name)
+    .bind(&source.grid_id)
+    .execute(access.connection())
+    .await
+    .map_err(|error| format!("insert the copy: {error}"))?;
     let clips = rows::load_score(access.connection(), score_id).await?;
     rows::save_score(access.connection(), &copy_id, &clips).await?;
     let copy = get_score(&mut access, &copy_id).await?;
