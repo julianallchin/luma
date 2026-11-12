@@ -903,6 +903,100 @@ mod tests {
         );
     }
 
+    /// A parameter is found by its node and key, never by an id spelled from
+    /// them: setting one again changes its row, and one cleared and set again
+    /// is a new row. The root is the same, found by its kind.
+    #[tokio::test]
+    async fn a_parameter_and_the_root_are_found_by_their_columns() {
+        let (_dir, services, venue) = room().await;
+        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
+            .await
+            .unwrap();
+        let set = |u: f64| {
+            let (services, venue, deck) = (&services, venue.clone(), deck.clone());
+            async move {
+                dispatch(
+                    services,
+                    "set_params",
+                    &json!({"venueId": venue, "nodeId": deck, "params": {"u": u}, "label": null}),
+                )
+                .await
+                .unwrap();
+                sqlx::query_as::<_, (String, f64)>(
+                    "SELECT id, value FROM venue_node_params WHERE node_id = ? AND key = 'u'",
+                )
+                .bind(&deck)
+                .fetch_all(&services.db.0)
+                .await
+                .unwrap()
+            }
+        };
+
+        let first = set(1.0).await;
+        let second = set(2.0).await;
+        assert_eq!(second.len(), 1, "one row a key");
+        assert_ne!(first[0].1, second[0].1, "the value moved");
+        assert_eq!(first[0].0, second[0].0, "in the same row");
+        assert!(
+            !second[0].0.contains(&deck),
+            "the row's id does not name its node"
+        );
+
+        // No command clears a key outright; a restore does, through this.
+        {
+            use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
+            let mut access =
+                VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
+                    .await
+                    .unwrap();
+            crate::database::local::venue_graph::set_params(
+                &mut access,
+                &deck,
+                &[("u".to_string(), None)].into(),
+            )
+            .await
+            .unwrap();
+            crate::venue_graph::commit_graph(access).await.unwrap();
+        }
+        let cleared: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM venue_node_params WHERE node_id = ? AND key = 'u'",
+        )
+        .bind(&deck)
+        .fetch_one(&services.db.0)
+        .await
+        .unwrap();
+        assert_eq!(cleared, 0, "clearing a key deletes its row");
+        let again = set(3.0).await;
+        assert_ne!(again[0].0, first[0].0, "an id is never used twice");
+
+        let roots: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM venue_nodes WHERE venue_id = ? AND kind = 'venue'")
+                .bind(&venue)
+                .fetch_all(&services.db.0)
+                .await
+                .unwrap();
+        assert_eq!(roots.len(), 1);
+        assert!(
+            !roots[0].contains(&venue),
+            "the root's id does not name its venue"
+        );
+        let graph = dispatch(&services, "get_venue_graph", &json!({"venueId": venue}))
+            .await
+            .unwrap();
+        let parent = graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == deck.as_str())
+            .unwrap()["placement"]["parent"]
+            .clone();
+        assert_eq!(
+            parent,
+            roots[0].as_str(),
+            "a piece on the floor hangs off it"
+        );
+    }
+
     async fn room() -> (tempfile::TempDir, AppServices, String) {
         let directory = tempfile::tempdir().unwrap();
         let services = seed(directory.path()).await;

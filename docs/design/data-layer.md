@@ -20,8 +20,9 @@ transport underneath.
 - **`id` is random and opaque**: a UUID the writer generates. It names no
   parent and no handle, and is never used twice. That includes link and slot
   rows (`folder_tracks`, `venue_node_params`, `venue_constraints`,
-  `venue_members`, `laser_limits`, `track_beat_validations`,
-  `agent_thread_transcript_heads`), a venue's root node, and clips. A row that
+  `venue_members`, `laser_limits`, `perform_layouts`,
+  `track_beat_validations`, `agent_thread_transcript_heads`), a venue's root
+  node, and clips. A row that
   is "the one for this parent and key" is found by those columns, which are
   unique among live rows, not by building its id.
 - **`uid` is the owner.** There is no `created_by`: the log's first entry for

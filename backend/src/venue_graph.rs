@@ -136,19 +136,22 @@ pub async fn commit_graph(access: VenueAccess<'_, Write>) -> Result<(), String> 
 /// # Errors
 /// As [`resolved`].
 pub async fn graph(access: &mut impl AuthorizedVenue) -> Result<VenueGraph, String> {
-    let venue_id = access.venue_id().to_string();
-    graph_of(&venue_id, &local::venue_graph::get_graph(access).await?)
+    graph_of(&local::venue_graph::get_graph(access).await?)
 }
 
 /// The rows as a graph; a venue whose root has not synced yet is empty.
-fn graph_of(venue_id: &str, rows: &VenueGraphRows) -> Result<VenueGraph, String> {
+///
+/// The empty graph still needs a root to be a graph. Its id is the nil UUID,
+/// which is no row's: the real root's id is random and unknown until it
+/// arrives, so nothing can be written under this one.
+fn graph_of(rows: &VenueGraphRows) -> Result<VenueGraph, String> {
     if !rows
         .nodes
         .iter()
         .any(|node| node.kind == NodeKind::Venue.as_str())
     {
         return Ok(VenueGraph::new(Node {
-            id: root_id(venue_id),
+            id: uuid::Uuid::nil().to_string(),
             kind: NodeKind::Venue,
             catalog_ref: None,
             label: None,
@@ -157,12 +160,6 @@ fn graph_of(venue_id: &str, rows: &VenueGraphRows) -> Result<VenueGraph, String>
     }
     rows.to_graph()
         .ok_or_else(|| "this venue's graph does not have exactly one root".to_string())
-}
-
-/// The id of a venue's root node.
-#[must_use]
-pub fn root_id(venue_id: &str) -> String {
-    format!("{venue_id}:venue")
 }
 
 #[cfg(test)]

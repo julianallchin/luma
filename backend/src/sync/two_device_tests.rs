@@ -697,7 +697,7 @@ async fn the_sharing_service_admits_with_a_code_and_revoking_it_admits_nobody() 
     seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
     // A join waits for the venue's root, as every venue written today has.
     sqlx::query("INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, ?, ?, 'venue')")
-        .bind(crate::venue_graph::root_id(&venue))
+        .bind(unique("root"))
         .bind(USER)
         .bind(&venue)
         .execute(&a.sql)

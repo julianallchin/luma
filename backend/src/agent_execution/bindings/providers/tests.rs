@@ -309,7 +309,7 @@ impl Fixture {
             .execute(&self.pool)
             .await
             .unwrap();
-        let root = crate::venue_graph::root_id(&self.venue_id);
+        let root = uuid::Uuid::new_v4().to_string();
         self.seed_node(&root, "venue", None, None, None, &[]).await;
         for (i, id) in ["fix-a", "fix-b"].iter().enumerate() {
             sqlx::query(
@@ -404,9 +404,10 @@ impl Fixture {
         .unwrap();
         for (key, value) in params {
             sqlx::query(
-                "INSERT INTO venue_node_params (node_id, uid, venue_id, key, value)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO venue_node_params (id, node_id, uid, venue_id, key, value)
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
+            .bind(uuid::Uuid::new_v4().to_string())
             .bind(id)
             .bind(TEST_OWNER)
             .bind(&self.venue_id)

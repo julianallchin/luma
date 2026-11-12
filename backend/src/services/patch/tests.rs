@@ -114,7 +114,7 @@ const MOVERS: [&str; 8] = [
 const BARS: [&str; 6] = ["bar-0", "bar-1", "bar-2", "bar-3", "bar-4", "bar-5"];
 
 async fn seed(pool: &SqlitePool) {
-    let root = format!("{VENUE}:venue");
+    let root = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO venue_nodes (id, uid, venue_id, kind) VALUES (?, 'alice', ?, 'venue')",
     )
@@ -138,11 +138,14 @@ async fn seed(pool: &SqlitePool) {
         .execute(pool)
         .await
         .expect("run node");
-        sqlx::query("INSERT INTO venue_node_params (node_id, key, value) VALUES (?, 'span', 8.0)")
-            .bind(run)
-            .execute(pool)
-            .await
-            .expect("span");
+        sqlx::query(
+            "INSERT INTO venue_node_params (id, node_id, key, value) VALUES (?, ?, 'span', 8.0)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(run)
+        .execute(pool)
+        .await
+        .expect("span");
     }
 
     for fixture in rig() {
@@ -178,12 +181,15 @@ async fn seed(pool: &SqlitePool) {
         .execute(pool)
         .await
         .expect("fixture node");
-        sqlx::query("INSERT INTO venue_node_params (node_id, key, value) VALUES (?, 'u', ?)")
-            .bind(fixture.id)
-            .bind(fixture.along)
-            .execute(pool)
-            .await
-            .expect("u");
+        sqlx::query(
+            "INSERT INTO venue_node_params (id, node_id, key, value) VALUES (?, ?, 'u', ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(fixture.id)
+        .bind(fixture.along)
+        .execute(pool)
+        .await
+        .expect("u");
     }
 }
 

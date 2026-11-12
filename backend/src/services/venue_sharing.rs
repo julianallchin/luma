@@ -15,9 +15,7 @@
 use rand::Rng;
 use sqlx::SqlitePool;
 
-use crate::database::local::venue_access::{
-    AuthorizedVenue, Owner, Read, VenueAccess, VenueResource,
-};
+use crate::database::local::venue_access::{Owner, Read, VenueAccess, VenueResource};
 use crate::database::local::venues as venues_db;
 use crate::error::CommandError;
 use crate::models::venues::{
@@ -173,7 +171,7 @@ impl ShareCodeServer for LocalShareCodes {
             "INSERT INTO venue_members (id, uid, venue_id, role) VALUES (?, ?, ?, 'member')
              ON CONFLICT DO NOTHING",
         )
-        .bind(format!("{venue}:{principal}"))
+        .bind(uuid::Uuid::new_v4().to_string())
         .bind(&principal)
         .bind(&venue)
         .execute(&mut *transaction)
@@ -343,12 +341,10 @@ pub async fn arrived(pool: &SqlitePool, venue_id: &str) -> Option<Venue> {
         .await
         .ok()?;
     let venue = venues_db::get_venue(&mut access).await.ok()?;
-    let rooted: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM venue_nodes WHERE id = ?)")
-        .bind(crate::venue_graph::root_id(venue_id))
-        .fetch_one(&mut *access.connection())
+    let root = crate::database::local::venue_graph::root_id(&mut access)
         .await
         .ok()?;
-    rooted.then_some(venue)
+    root.is_some().then_some(venue)
 }
 
 fn already_open(venue: &Venue) -> CommandError {
@@ -414,7 +410,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO venues (id, uid, name) VALUES ('shared', 'alice', 'Warehouse');
              INSERT INTO venue_nodes (id, uid, venue_id, kind)
-                 VALUES ('shared:venue', 'alice', 'shared', 'venue')",
+                 VALUES ('root', 'alice', 'shared', 'venue')",
         )
         .execute(&pool)
         .await

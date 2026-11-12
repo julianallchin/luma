@@ -42,7 +42,7 @@ fixture({
        VALUES ('${FRONT}', '$PRINCIPAL', 'venue-main', 'Front wash',
                '{"all":true}', 0, 'replace', '7', '${JSON.stringify(graph)}')`,
     `INSERT INTO perform_layouts (id, uid, venue_id, layout_json)
-       VALUES ('venue-main', '$PRINCIPAL', 'venue-main', '${JSON.stringify(page(seeded))}')`,
+       VALUES ('layout-main', '$PRINCIPAL', 'venue-main', '${JSON.stringify(page(seeded))}')`,
   ],
   model: [
     [

@@ -508,7 +508,8 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at"
         ]
-    ),
+    )
+    .slot(&["venue_id"]),
     table!(
         "perform_controllers",
         Source,

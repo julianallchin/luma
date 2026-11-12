@@ -174,7 +174,7 @@ impl Document {
                     "SELECT (SELECT count(*) || ' ' || coalesce(max(updated_at), '')
                              FROM perform_patterns WHERE venue_id = ?1)
                          || ' ' || coalesce(
-                             (SELECT updated_at FROM perform_layouts WHERE id = ?1), '')",
+                             (SELECT updated_at FROM perform_layouts WHERE venue_id = ?1), '')",
                 )
                 .bind(venue_id)
                 .fetch_optional(pool)

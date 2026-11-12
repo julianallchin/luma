@@ -129,9 +129,11 @@ pub async fn set_folder_track(
     }
     let uid = access.principal().to_owned();
     sqlx::query(
-        "INSERT INTO folder_tracks (folder_id, track_id, uid, venue_id) VALUES (?, ?, ?, ?)
+        "INSERT INTO folder_tracks (id, folder_id, track_id, uid, venue_id)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (folder_id, track_id) DO NOTHING",
     )
+    .bind(Uuid::new_v4().to_string())
     .bind(folder_id)
     .bind(track_id)
     .bind(uid)

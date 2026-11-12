@@ -20,7 +20,7 @@ fixture({
     `INSERT INTO scores (id, uid, track_id, venue_id, name)
        VALUES ('score-borealis', '$PRINCIPAL', 'track-borealis', 'venue-main', 'Borealis cut')`,
     "INSERT INTO folders (id, uid, venue_id, name) VALUES ('folder-openers', '$PRINCIPAL', 'venue-main', 'Openers')",
-    "INSERT INTO folder_tracks (folder_id, track_id, uid, venue_id) VALUES ('folder-openers', 'track-borealis', '$PRINCIPAL', 'venue-main')",
+    "INSERT INTO folder_tracks (id, folder_id, track_id, uid, venue_id) VALUES ('link-openers-borealis', 'folder-openers', 'track-borealis', '$PRINCIPAL', 'venue-main')",
     "INSERT INTO venues (id, uid, name) VALUES ('venue-warehouse', '$PRINCIPAL', 'Warehouse')",
     `INSERT INTO scores (id, uid, track_id, venue_id, name)
        VALUES ('score-warehouse', '$PRINCIPAL', 'track-aurora', 'venue-warehouse', 'Warehouse cut')`,
