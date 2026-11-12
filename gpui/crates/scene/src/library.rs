@@ -47,10 +47,11 @@ fn sign(built: &Built, index: usize) -> f32 {
     }
 }
 
-/// One angle per joint that poses the build at Luma's `[pan, tilt]` degrees.
+/// One angle per joint that poses the build with each head at its own
+/// `[pan, tilt]` degrees: `heads[h]` is head `h`'s ([`Built::joint_head`]),
+/// and a head `heads` leaves out sits at `[0, 0]`.
 ///
-/// Pan and tilt joints the DMX drives take Luma's angle (an array element's
-/// as well as the fixture's own: Luma has one position per fixture).
+/// A pan or tilt joint the DMX drives takes the angle of the head it turns.
 ///
 /// A hand-set tilt (a bracket or yoke you lock with a knob) sits at 0, which
 /// is beam straight out of the clamp: Luma's rule is that a fixture shines
@@ -61,16 +62,19 @@ fn sign(built: &Built, index: usize) -> f32 {
 /// tilt is how the head is built, and it and every other joint stay at
 /// their `rest`.
 #[must_use]
-pub fn angles(built: &Built, [pan, tilt]: [f32; 2]) -> Vec<f32> {
+pub fn angles(built: &Built, heads: &[[f32; 2]]) -> Vec<f32> {
     built
         .joints
         .iter()
         .enumerate()
-        .map(|(i, j)| match (j.kind, j.drive) {
-            (JointKind::Pan, Drive::Dmx) => sign(built, i) * pan,
-            (JointKind::Tilt, Drive::Dmx) => sign(built, i) * tilt,
-            (JointKind::Tilt, Drive::Manual) => 0.0,
-            _ => j.rest,
+        .map(|(i, j)| {
+            let [pan, tilt] = heads.get(built.joint_head(i)).copied().unwrap_or([0.0; 2]);
+            match (j.kind, j.drive) {
+                (JointKind::Pan, Drive::Dmx) => sign(built, i) * pan,
+                (JointKind::Tilt, Drive::Dmx) => sign(built, i) * tilt,
+                (JointKind::Tilt, Drive::Manual) => 0.0,
+                _ => j.rest,
+            }
         })
         .collect()
 }
@@ -96,8 +100,8 @@ fn bracket(built: &Built) -> Option<usize> {
 ///
 /// Returns what to post-multiply the pose by, and every node's frame.
 #[must_use]
-pub fn aimed(built: &Built, pan_tilt: [f32; 2], aim: [f32; 2]) -> (Mat4, Vec<Mat4>) {
-    let mut angles = angles(built, pan_tilt);
+pub fn aimed(built: &Built, heads: &[[f32; 2]], aim: [f32; 2]) -> (Mat4, Vec<Mat4>) {
+    let mut angles = angles(built, heads);
     let Some(i) = bracket(built).filter(|_| aim[1] != 0.0) else {
         return (Mat4::IDENTITY, built.world_matrices(&angles));
     };
@@ -118,17 +122,18 @@ pub fn aimed(built: &Built, pan_tilt: [f32; 2], aim: [f32; 2]) -> (Mat4, Vec<Mat
     )
 }
 
-/// Every node's housing-space frame at Luma's `[pan, tilt]`.
+/// Every node's housing-space frame with each head at its own `[pan, tilt]`
+/// (see [`angles`]).
 #[must_use]
-pub fn worlds(built: &Built, pan_tilt: [f32; 2]) -> Vec<Mat4> {
-    built.world_matrices(&angles(built, pan_tilt))
+pub fn worlds(built: &Built, heads: &[[f32; 2]]) -> Vec<Mat4> {
+    built.world_matrices(&angles(built, heads))
 }
 
 /// Each canonical cell's centre at rest, in housing space. A cell no emitter
 /// draws sits at the pivot.
 #[must_use]
 pub fn cell_centres(built: &Built) -> Vec<Vec3> {
-    let worlds = worlds(built, [0.0, 0.0]);
+    let worlds = worlds(built, &[]);
     built
         .cells
         .iter()
@@ -212,13 +217,67 @@ pub fn clamp_height(built: &Built) -> f32 {
 mod tests {
     use super::*;
 
-    fn sharpy() -> Built {
+    fn spec(id: &str) -> Built {
         let text = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../harness/fixture-specs/claypaky/sharpy.luma.json"),
+                .join(format!("../../../harness/fixture-specs/{id}.luma.json")),
         )
         .unwrap();
         luma_fixture::build(&luma_fixture::Fixture::from_json(&text).unwrap()).unwrap()
+    }
+
+    fn sharpy() -> Built {
+        spec("claypaky/sharpy")
+    }
+
+    /// Each cell's centre under `worlds`, in housing space.
+    fn centres(b: &Built, worlds: &[Mat4]) -> Vec<Vec3> {
+        b.cells
+            .iter()
+            .map(|c| worlds[c.node.unwrap()].transform_point3(c.centre))
+            .collect()
+    }
+
+    /// A bar of tilting heads, each given its own tilt: every lens points
+    /// where it would with the whole bar at that head's tilt, and no two
+    /// point the same way.
+    #[test]
+    fn each_head_of_a_bar_tilts_by_its_own_angle() {
+        let b = spec("claypaky/volero-wave-plus-pixel-engine");
+        let count = b.head_count();
+        assert_eq!(count, 8);
+        let tilts: Vec<[f32; 2]> = (0..count).map(|h| [0.0, 10.0 * h as f32]).collect();
+        let posed = worlds(&b, &tilts);
+        let mut beams: Vec<Vec3> = Vec::new();
+        for (lens, head) in b.heads.iter().enumerate() {
+            let rides = b.nodes[head.node].element.unwrap();
+            let (_, got) = beam(&b, &posed, lens).unwrap();
+            let together = worlds(&b, &vec![tilts[rides]; count]);
+            let (_, want) = beam(&b, &together, lens).unwrap();
+            assert!(got.dot(want) > 0.9999, "head {rides}: {got} for {want}");
+            assert!(
+                beams.iter().all(|other| other.dot(got) < 0.999),
+                "head {rides} points where another does: {got}"
+            );
+            beams.push(got);
+        }
+    }
+
+    /// Two heads of four cells each: tilting one head carries its own cells
+    /// and leaves the other head's where they were.
+    #[test]
+    fn the_cells_on_a_head_ride_it_and_the_rest_stay() {
+        let b = spec("adj/crazy-pocket-8");
+        assert_eq!(b.head_count(), 2);
+        let rest = centres(&b, &worlds(&b, &[]));
+        let tilted = centres(&b, &worlds(&b, &[[0.0, 0.0], [0.0, 40.0]]));
+        let moved: Vec<usize> = (0..b.cells.len())
+            .filter(|&c| rest[c].distance(tilted[c]) > 1e-4)
+            .collect();
+        let riders: Vec<usize> = (0..b.cells.len()).filter(|&c| b.head_of(c) == 1).collect();
+        assert_eq!(riders.len(), 4);
+        assert_eq!(moved, riders);
+        assert_eq!(b.head_cell(1), riders.first().copied());
     }
 
     /// The beam of the build at Luma's angles, against the arm-and-head
@@ -234,7 +293,7 @@ mod tests {
             [75.0, -60.0],
         ] {
             let [pan, tilt] = pan_tilt;
-            let (_, beam) = beam(&b, &worlds(&b, pan_tilt), 0).unwrap();
+            let (_, beam) = beam(&b, &worlds(&b, &[pan_tilt]), 0).unwrap();
             let bundled = (Mat4::from_rotation_y(pan.to_radians())
                 * Mat4::from_rotation_x(-tilt.to_radians()))
             .transform_vector3(Vec3::NEG_Y);
@@ -263,7 +322,7 @@ mod tests {
             .joints
             .iter()
             .any(|j| j.kind == JointKind::Tilt && j.drive == Drive::Manual && j.rest != 0.0));
-        let (_, dir) = beam(&b, &worlds(&b, [0.0, 0.0]), 0).unwrap();
+        let (_, dir) = beam(&b, &worlds(&b, &[]), 0).unwrap();
         assert!(dir.y < -0.99, "beam {dir}");
     }
 
@@ -281,15 +340,15 @@ mod tests {
             ))
             .as_mat3(),
         );
-        let (_, plain) = beam(&b, &worlds(&b, [0.0, 0.0]), 0).unwrap();
-        let (back, frames) = aimed(&b, [0.0, 0.0], [0.0, tilt]);
+        let (_, plain) = beam(&b, &worlds(&b, &[]), 0).unwrap();
+        let (back, frames) = aimed(&b, &[], [0.0, tilt]);
         let (_, leaned) = beam(&b, &frames, 0).unwrap();
         let drawn = (whole * back).transform_vector3(leaned);
         let wanted = whole.transform_vector3(plain);
         assert!(drawn.dot(wanted) > 0.999, "drawn {drawn}, wanted {wanted}");
         let mount = b.joints[bracket(&b).unwrap()].node;
         let parent = b.nodes[mount].parent.unwrap();
-        let rest = worlds(&b, [0.0, 0.0]);
+        let rest = worlds(&b, &[]);
         assert!((whole * back * frames[parent]).abs_diff_eq(rest[parent], 1e-5));
     }
 
@@ -323,7 +382,7 @@ mod tests {
     #[test]
     fn the_clamp_sits_above_the_pivot_and_the_lens_below_it() {
         let b = sharpy();
-        let (lens, dir) = beam(&b, &worlds(&b, [0.0, 0.0]), 0).unwrap();
+        let (lens, dir) = beam(&b, &worlds(&b, &[]), 0).unwrap();
         assert!(clamp_height(&b) > 0.0);
         assert!(lens.y < 0.0 && dir.y < -0.99);
     }

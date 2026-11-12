@@ -296,7 +296,7 @@ mod tests {
     fn a_diffuser_over_a_cells_emitters_is_its_lit_face() {
         let mut library = Library::new(luma_scene::meshes_root());
         let pendant = library.fixture(crate::house::PENDANT).expect("the pendant");
-        let worlds = luma_scene::library::worlds(&pendant, [0.0; 2]);
+        let worlds = luma_scene::library::worlds(&pendant, &[]);
         let lit: Vec<MaterialSlot> = pendant
             .nodes
             .iter()

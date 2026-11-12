@@ -385,7 +385,10 @@ impl StageLights {
                             return None;
                         }
                         let realized = light.realize(&requests, 1.0, slice);
-                        Some((id.clone(), light.emit(&realized)))
+                        let positions = (0..light.cells())
+                            .map(|cell| light.position(cell, &requests))
+                            .collect();
+                        Some((id.clone(), (light.emit(&realized), positions)))
                     })
                     .collect()
             })
@@ -397,25 +400,23 @@ impl StageLights {
 /// One frame of a rig's light, as the renderer asks for it: `(fixture, head)`.
 pub struct FrameLights<'a> {
     state: Option<&'a UniverseState>,
-    /// The library fixtures' cells, by fixture id.
-    cells: HashMap<String, Vec<CellLight>>,
+    /// The library fixtures' cells, by fixture id: the light each gives and
+    /// where its mode's motors put it, `[pan, tilt]` degrees.
+    cells: HashMap<String, (Vec<CellLight>, Vec<[f32; 2]>)>,
 }
 
 impl FrameLights<'_> {
     /// One head's state. A library fixture's cell is the light it gives,
     /// strobing only where its own shutter flashes it (a strobe the engine
-    /// gates is already in its brightness). Any other head is its primitive
+    /// gates is already in its brightness), turned where its mode's motors
+    /// put it. Any other head is its primitive
     /// as asked: the eval engine keys a single-head fixture by its bare id
     /// and a multi-head one by `"<id>:<head>"`, and both answer here, so the
     /// renderer need not know which it has.
     #[must_use]
     pub fn primitive(&self, id: &str, head: usize) -> Option<scene_desc::PrimitiveState> {
         let state = self.state?;
-        let p = state
-            .primitives
-            .get(&format!("{id}:{head}"))
-            .or_else(|| state.primitives.get(id));
-        if let Some(cells) = self.cells.get(id) {
+        if let Some((cells, positions)) = self.cells.get(id) {
             let cell = cells.get(head)?;
             let peak = cell.rgb.iter().copied().fold(0.0_f32, f32::max);
             return Some(scene_desc::PrimitiveState {
@@ -426,12 +427,15 @@ impl FrameLights<'_> {
                     [0.0; 3]
                 },
                 strobe: cell.own_strobe,
-                position: p.map_or([0.0, 0.0], |p| p.position),
+                position: positions[head],
                 gobo: 0,
                 gobo_rotation: 0.0,
             });
         }
-        let p = p?;
+        let p = state
+            .primitives
+            .get(&format!("{id}:{head}"))
+            .or_else(|| state.primitives.get(id))?;
         // The renderer works in linear light with sRGB primaries and presents
         // it in sRGB, SDR or HDR alike; a wider color is mapped into sRGB by
         // the same rule a fixture's emitters use.

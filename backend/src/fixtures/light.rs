@@ -124,6 +124,17 @@ pub struct ModeLight {
     /// dimmers). A copy is a second control of the same light, so it takes
     /// its original's value and adds nothing to the light.
     copies: Vec<(usize, usize)>,
+    /// Per cell, for pan and for tilt: the cell whose asked position the
+    /// motor under this cell follows ([`asked`]), or `None` where the mode
+    /// has no channel that turns it that way.
+    motors: Vec<[Option<usize>; 2]>,
+}
+
+/// The cell whose asked pan or tilt a position param sends: the first cell
+/// it covers, or cell 0 for the fixture's own.
+#[must_use]
+pub fn asked(param: &Param) -> usize {
+    param.cell.map_or(0, |cell| cell.span()[0] as usize)
 }
 
 /// What `realize` decided for one param.
@@ -308,11 +319,46 @@ impl ModeLight {
                 }
             })
             .collect();
+        // A channel scoped to a cell turns that cell's head; the fixture's
+        // own turns every head no scoped channel does.
+        let motors = (0..n)
+            .map(|c| {
+                [Attr::Pan, Attr::Tilt].map(|axis| {
+                    let turns = |scoped: bool| {
+                        params.iter().find(|p| {
+                            p.attr == axis
+                                && p.cell.is_some() == scoped
+                                && covered(p, n).contains(&c)
+                        })
+                    };
+                    turns(true).or_else(|| turns(false)).map(|p| asked(p))
+                })
+            })
+            .collect();
         Self {
             cells,
             roles,
             copies,
+            motors,
         }
+    }
+
+    /// Where the mode's motors put `cell`, `[pan, tilt]` degrees, for
+    /// `requests` (one per cell): the position asked of the cell its motor
+    /// follows. An axis no channel turns, or whose cell asks nothing, rests
+    /// at 0.
+    #[must_use]
+    pub fn position(&self, cell: usize, requests: &[PrimitiveState]) -> [f32; 2] {
+        let Some(motors) = self.motors.get(cell) else {
+            return [0.0; 2];
+        };
+        std::array::from_fn(|axis| {
+            motors[axis]
+                .and_then(|from| requests.get(from))
+                .map(|request| request.position[axis])
+                .filter(|degrees| !degrees.is_nan())
+                .unwrap_or(0.0)
+        })
     }
 
     /// How many cells the fixture has (at least one).

@@ -618,11 +618,11 @@ fn write_library(
             Some(Value::Open) => Some(lowered.open()),
             Some(Value::Slot(b)) => Some(if lowered.rank == 0 { b } else { lowered.home() }),
             Some(Value::Hold) => None,
-            // Pan and tilt read the first cell they cover (the fixture's
-            // own pan reads cell 0); the rest of the light is in `realized`,
-            // and anything else rests at home.
+            // Pan and tilt send the position asked of the cell they follow;
+            // the rest of the light is in `realized`, and anything else
+            // rests at home.
             Some(Value::Other) | None if p.attr.is_position() => {
-                let cell = p.cell.map_or(0, |c| c.span()[0] as usize);
+                let cell = crate::fixtures::light::asked(p);
                 let degrees = requests.get(cell).unwrap_or(&requests[0]).position
                     [usize::from(p.attr == Attr::Tilt)];
                 (!degrees.is_nan()).then(|| lowered.position(degrees))
