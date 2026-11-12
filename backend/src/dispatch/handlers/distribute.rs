@@ -8,6 +8,7 @@
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::models::distribute::{DistributeLayout, DistributeReport};
+use crate::models::venue_graph::PlacementReport;
 use crate::services::stage_ops::Stage;
 
 /// Patch, name and place `count` fixtures along one host face.
@@ -76,6 +77,32 @@ pub async fn redistribute(
         output.update_patch(distributed.patch);
     }
     Ok(distributed.report)
+}
+
+/// Move one placed light to a place on `host_node_id`'s face.
+///
+/// The light stays the light it was: its id, its address and its groups. On
+/// a new face its turn and aim return to rest.
+///
+/// # Errors
+/// A node that is not a placed light, and any place a new light would be
+/// refused at.
+pub async fn move_light(
+    services: &AppServices,
+    venue_id: String,
+    node_id: String,
+    host_node_id: Option<String>,
+    host_socket: String,
+    layout: DistributeLayout,
+) -> Result<PlacementReport, CommandError> {
+    let moved = Stage::new(&services.db.0, &services.fixtures_root, &venue_id)
+        .move_light(
+            &node_id,
+            Some((host_node_id.as_deref(), &host_socket)),
+            layout,
+        )
+        .await?;
+    Ok(moved.report)
 }
 
 #[cfg(test)]
@@ -444,9 +471,10 @@ mod tests {
         );
     }
 
-    /// Redistribute re-lays the row the member belongs to: the old fixtures
-    /// leave, the new count arrives, and a count that does not fit rolls the
-    /// whole thing back to the row that did.
+    /// Redistribute re-lays the row the member belongs to. The lights it had
+    /// are the lights it keeps, so a group that held them still does; a
+    /// smaller count takes lights from the end, and a count that does not fit
+    /// changes nothing.
     #[tokio::test]
     async fn redistribute_relays_the_row_and_a_misfit_rolls_back() {
         let (_dir, services, venue) = room().await;
@@ -481,27 +509,108 @@ mod tests {
             .map(|f| f["id"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(new.len(), 5, "{relaid}");
-        assert!(
-            new.iter().all(|id| !old.contains(id)),
-            "the old rows were re-laid, not kept"
-        );
+        assert_eq!(new[..3], old[..], "the row's own lights lead it: {relaid}");
         assert_eq!(patch(&services, &venue).await.len(), 5);
 
+        let fewer = dispatch(
+            &services,
+            "redistribute",
+            &json!({
+                "venueId": venue,
+                "memberNodeId": old[2],
+                "count": 2,
+                "layout": even(),
+            }),
+        )
+        .await
+        .unwrap();
+        let left: Vec<&str> = fewer["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(left, old[..2], "the first two stay: {fewer}");
+        assert_eq!(patch(&services, &venue).await.len(), 2);
+
         // Forty movers do not fit a four-metre stick: the verb refuses and
-        // the five that fit are still there.
+        // the two that fit are still there.
         let refused = dispatch(
             &services,
             "redistribute",
             &json!({
                 "venueId": venue,
-                "memberNodeId": new[0],
+                "memberNodeId": old[0],
                 "count": 40,
                 "layout": even(),
             }),
         )
         .await;
         assert!(refused.is_err(), "{refused:?}");
-        assert_eq!(patch(&services, &venue).await.len(), 5);
+        assert_eq!(patch(&services, &venue).await.len(), 2);
+    }
+
+    /// A light flown over the floor and moved across it is the same light at
+    /// the same height: the patch row it had, at the address it had. Hung on
+    /// a truss it is still that light, and the height it flew at is left
+    /// behind with the floor.
+    #[tokio::test]
+    async fn a_moved_light_keeps_its_row_and_its_height_on_its_own_face() {
+        let (_dir, services, venue) = room().await;
+        let placed = dispatch(
+            &services,
+            "distribute",
+            &json!({
+                "venueId": venue,
+                "hostNodeId": null,
+                "hostSocket": null,
+                "fixturePath": MOVER,
+                "modeName": MOVER_MODE,
+                "count": 1,
+                "layout": { "kind": "point", "u": 1.0, "v": 1.0, "trim": 2.0 },
+                "labelPrefix": null,
+            }),
+        )
+        .await
+        .unwrap();
+        let light = placed["fixtures"][0]["id"].as_str().unwrap().to_string();
+        let before = patch(&services, &venue).await;
+        let trim = || async {
+            sqlx::query_scalar::<_, f64>(
+                "SELECT value FROM venue_node_params WHERE node_id = ? AND key = 'trim'",
+            )
+            .bind(&light)
+            .fetch_optional(&services.db.0)
+            .await
+            .unwrap()
+            .unwrap_or(0.0)
+        };
+        let flown = trim().await;
+        assert!(flown > 0.0, "the light was placed in the air");
+
+        let to = |host: Value, socket: &str, metres: f64, across: f64| {
+            json!({
+                "venueId": venue, "nodeId": light,
+                "hostNodeId": host, "hostSocket": socket,
+                "layout": { "kind": "at", "metres": metres, "across": across },
+            })
+        };
+        dispatch(&services, "move_light", &to(json!(null), "floor", 3.0, 0.5))
+            .await
+            .unwrap();
+        assert_eq!(trim().await, flown);
+        assert_eq!(patch(&services, &venue).await, before);
+
+        let run = truss(&services, &venue, 4.0).await;
+        dispatch(
+            &services,
+            "move_light",
+            &to(json!(run), "face_-y", 0.0, 0.0),
+        )
+        .await
+        .unwrap();
+        assert_eq!(trim().await, 0.0);
+        assert_eq!(patch(&services, &venue).await, before);
     }
 
     /// The floor is a plane: no ends, so nothing overruns it however many are

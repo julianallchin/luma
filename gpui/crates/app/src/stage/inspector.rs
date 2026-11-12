@@ -66,10 +66,23 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
                 .agent_node(Role::Text, selected.label.clone()),
         ),
     );
+    let is_light = build
+        .graph
+        .node(&selected.node)
+        .is_some_and(|node| node.kind == luma_scene::venue::NodeKind::Fixture);
     let actions = div()
         .flex()
         .items_center()
         .gap(px(8.0))
+        .when(is_light, |actions| {
+            let pick_up = app.clone();
+            actions.child(
+                float::btn("Move", "selection-move")
+                    .id("selection-move")
+                    .on_click(move |_, _, cx| pick_up.update(cx, |this, cx| this.stage_move(cx)))
+                    .agent_node(Role::Button, "Move light"),
+            )
+        })
         .child(
             float::btn("Duplicate", "selection-duplicate")
                 .id("selection-duplicate")

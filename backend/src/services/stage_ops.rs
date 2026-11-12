@@ -452,12 +452,13 @@ impl<'a> Stage<'a> {
         node_id: &str,
         mut params: BTreeMap<String, f64>,
         label: Option<&str>,
+        frame: Frame,
     ) -> Result<PlacementReport> {
         let mut access = self.write().await?;
         require_in_venue(&mut access, &[node_id]).await?;
         let graph = venue_graph::graph(&mut access).await?;
         parameter_edit(&graph, node_id, &params)?;
-        if params.contains_key("u") || params.contains_key("v") {
+        if frame == Frame::Plan && (params.contains_key("u") || params.contains_key("v")) {
             let supply = venue_graph::sockets(self.fixtures_root)?;
             let (u, v) = surface_offset(
                 &graph,
@@ -729,6 +730,7 @@ impl<'a> Stage<'a> {
                 across_m: place.across_m,
                 trim_m,
                 label_prefix,
+                relay: &[],
             },
         )
         .await
@@ -785,8 +787,10 @@ impl<'a> Stage<'a> {
     /// group it is in.
     ///
     /// `to` is the host and face to hang it on (`None` for the room); leave
-    /// `to` out and it stays on the face it has and moves along it. On a new
-    /// face the light's turn and aim return to rest, and the answer says so.
+    /// `to` out and it stays on the face it has and moves along it, at the
+    /// depth it had. A place that names no height keeps the light's own while
+    /// it stays on its face. On a new face the light's turn and aim return to
+    /// rest, and the answer says so.
     ///
     /// # Errors
     /// [`StageError::Refused`] for anything but one light at one place, and
@@ -805,17 +809,32 @@ impl<'a> Stage<'a> {
                 "`{node_id}` is not a placed light"
             )));
         };
+        let own = |key: &str| {
+            graph
+                .node(node_id)
+                .map_or(0.0, |node| node.params.get(key, 0.0))
+        };
+        let (across, trim) = (own("v"), own("trim"));
         let (host, socket) = match to {
             Some((host, socket)) => (host.map(str::to_string), socket.to_string()),
             None => (
-                (edge.parent != graph.root()).then_some(edge.parent),
-                edge.their_socket,
+                (edge.parent != graph.root()).then_some(edge.parent.clone()),
+                edge.their_socket.clone(),
             ),
         };
+        let stays =
+            host.as_deref().unwrap_or(graph.root()) == edge.parent && socket == edge.their_socket;
         drop(graph);
-        let (place, trim_m) = self
+        let along_only = layout.on_face().is_ok();
+        let (mut place, mut trim_m) = self
             .place_on_face(&mut access, host.as_deref(), Some(&socket), layout)
             .await?;
+        if along_only && stays {
+            trim_m = trim;
+            if to.is_none() {
+                place.across_m = across;
+            }
+        }
         if !matches!(place.layout, luma_scene::distribute::Layout::At(_)) {
             return Err(StageError::Refused(
                 "a move puts one light in one place: give at=".into(),
@@ -835,10 +854,11 @@ impl<'a> Stage<'a> {
     ///
     /// `member_node_id` names *any* fixture of the row; the row is derived —
     /// every fixture of the same model chained on the same host face — never
-    /// stored, so there is no row id to go stale. One transaction: the old
-    /// fixtures leave, [`distribute_service::distribute`] lays the new ones,
-    /// and a count that no longer fits rolls the whole thing back — the row
-    /// you had is the row you keep.
+    /// stored, so there is no row id to go stale. The lights of the row stay
+    /// the lights they were, in order along the face, so their groups, names,
+    /// aim and addresses stay too: a larger count adds lights at the end and
+    /// a smaller one takes them from it. A count that does not fit changes
+    /// nothing.
     ///
     /// # Errors
     /// [`StageError::Refused`] if the member is not a placed fixture, or the
@@ -872,22 +892,17 @@ impl<'a> Stage<'a> {
         let (across_m, trim_m) = graph.node(member_node_id).map_or((0.0, 0.0), |node| {
             (node.params.get("v", 0.0), node.params.get("trim", 0.0))
         });
-        let siblings: Vec<String> = graph
-            .row_of(member_node_id, |node| {
-                rows.iter()
-                    .any(|row| row.id == node.id && row.fixture_path == path)
-            })
-            .into_iter()
-            .map(|node| node.id.clone())
-            .collect();
+        let mut siblings = graph.row_of(member_node_id, |node| {
+            rows.iter()
+                .any(|row| row.id == node.id && row.fixture_path == path)
+        });
+        siblings.sort_by(|a, b| a.params.get("u", 0.0).total_cmp(&b.params.get("u", 0.0)));
+        let siblings: Vec<String> = siblings.into_iter().map(|node| node.id.clone()).collect();
         let (layout, _) = layout.on_face().map_err(|_| {
             StageError::Refused("a row is re-laid along its face, not at a point".into())
         })?;
         let host_node = (edge.parent != graph.root()).then_some(edge.parent.clone());
         drop(graph);
-        for id in &siblings {
-            fixture_create::delete(&mut access, id).await?;
-        }
         let report = distribute_service::distribute(
             &mut access,
             self.fixtures_root,
@@ -901,12 +916,11 @@ impl<'a> Stage<'a> {
                 across_m,
                 trim_m,
                 label_prefix: None,
+                relay: &siblings,
             },
         )
         .await
         .map_err(StageError::Refused)?;
-        // A refusal after the deletes must not commit them: erroring here is
-        // what rolls the transaction back to the row that fit.
         if let Some(refusal) = &report.refusal {
             return Err(StageError::Refused(match refusal {
                 DistributeRefusal::TooLong {
@@ -1348,6 +1362,18 @@ impl<'a> Stage<'a> {
 // The authoring surface: chains, queries, drafts
 // ---------------------------------------------------------------------------
 
+/// Which way an edit's `u` and `v` are read. They are one pair of numbers
+/// with two honest readings, so every writer says which it means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Frame {
+    /// As stored: metres along and across the host face, in the face's own
+    /// directions. What a joint solved from a pose hands back.
+    Stored,
+    /// Stage metres from the host's footprint centre, in the room's
+    /// directions: what `place`'s `at=` means.
+    Plan,
+}
+
 /// What a move did.
 pub struct Moved {
     /// The light now hangs on a different face, so its turn and aim are back
@@ -1702,7 +1728,19 @@ impl Draft {
         node_id: &str,
         params: &BTreeMap<String, f64>,
     ) -> Result<()> {
-        let (updated, edge) = parameter_edit(&self.graph, node_id, params)?;
+        let mut params = params.clone();
+        if params.contains_key("u") || params.contains_key("v") {
+            let (u, v) = surface_offset(
+                &self.graph,
+                supply,
+                node_id,
+                params.get("u").copied(),
+                params.get("v").copied(),
+            )?;
+            params.insert("u".into(), u);
+            params.insert("v".into(), v);
+        }
+        let (updated, edge) = parameter_edit(&self.graph, node_id, &params)?;
         match edge {
             Some(edge) => self.graph.insert_placed(updated, edge),
             None => self.graph.insert(updated),

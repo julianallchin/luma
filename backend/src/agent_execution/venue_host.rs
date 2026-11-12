@@ -779,7 +779,12 @@ impl VenueHost {
     async fn params(&self, request: ParamsRequest) -> Result<Value, HostCallError> {
         let report = self
             .stage()
-            .set_params(&request.node_id, request.params, request.label.as_deref())
+            .set_params(
+                &request.node_id,
+                request.params,
+                request.label.as_deref(),
+                crate::services::stage_ops::Frame::Plan,
+            )
             .await?;
         self.placed(report).await
     }

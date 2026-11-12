@@ -97,9 +97,8 @@ impl Luma {
     /// Re-lay the selected fixture's row at a new count or layout.
     ///
     /// The verb derives the row from the member server-side and answers with
-    /// the new fixtures; the selection moves onto them, because the old ids
-    /// no longer exist. A count that does not fit is an `Err` and rolls back
-    /// to the row that did — the report line says why.
+    /// the row as it now is; the selection follows it. A count that does not
+    /// fit is an `Err` and changes nothing — the report line says why.
     pub(crate) fn stage_redistribute(
         &mut self,
         member: String,

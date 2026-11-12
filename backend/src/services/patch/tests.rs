@@ -614,6 +614,7 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
                 across_m: 0.0,
                 trim_m: 0.0,
                 label_prefix: None,
+                relay: &[],
             };
             let report = distribute(&mut access, &fixtures_root(), request.clone())
                 .await
@@ -960,6 +961,7 @@ async fn lights_on_the_floor_land_where_asked_and_only_collide_in_place() {
         across_m,
         trim_m: 0.0,
         label_prefix: None,
+        relay: &[],
     };
     let mut placed = Vec::new();
     for across in [2.0, -3.0] {

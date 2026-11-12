@@ -260,6 +260,13 @@ commands! {
         count: usize,
         layout: DistributeLayout,
     ) -> DistributeReport;
+    distribute::move_light(
+        venue_id: String,
+        node_id: String,
+        host_node_id: Option<String>,
+        host_socket: String,
+        layout: DistributeLayout,
+    ) -> PlacementReport;
     stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
     stage::restore_graph(
         venue_id: String,

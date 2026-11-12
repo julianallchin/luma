@@ -352,10 +352,10 @@ pub(crate) enum Holding {
         /// Inverts the copy's handedness about its root socket.
         flip: bool,
     },
-    /// A fixture from the library that has no row anywhere yet — `distribute`,
-    /// which is how *every* new fixture is created, a single one being a row
-    /// of one. It carries what the fit needs so the preview and the commit
-    /// measure the same body.
+    /// A fixture: one from the library that has no row anywhere yet —
+    /// `distribute`, which is how *every* new fixture is created, a single
+    /// one being a row of one — or a placed one being moved. It carries what
+    /// the fit needs so the preview and the commit measure the same body.
     Fixture {
         path: String,
         label: String,
@@ -371,6 +371,9 @@ pub(crate) enum Holding {
         /// which is also "no box yet": a refusal invented from a guessed size
         /// would block placements the real body allows.
         dims: Option<[f64; 3]>,
+        /// The placed light this is, when it was picked up to be moved: the
+        /// drop moves that light and makes no new one.
+        moving: Option<String>,
     },
 }
 

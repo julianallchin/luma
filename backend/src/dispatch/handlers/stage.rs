@@ -22,7 +22,7 @@ use crate::dispatch::AppServices;
 use crate::error::CommandError;
 use crate::models::fixtures::PatchedFixture;
 use crate::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
-use crate::services::stage_ops::{Stage, StageError};
+use crate::services::stage_ops::{Frame, Stage, StageError};
 
 /// One venue's verbs, bound to this host's database and catalog.
 fn stage<'a>(services: &'a AppServices, venue_id: &'a str) -> Stage<'a> {
@@ -187,7 +187,9 @@ pub async fn constrain(
 /// Merge parameters into a node, and optionally rename it.
 ///
 /// `yaw` is spelled as itself and lands on the edge, which is where the mate's
-/// turn about the shared normal lives; every other key is a param.
+/// turn about the shared normal lives; every other key is a param. `u` and `v`
+/// are the stored ones, along and across the host face: the page solves them
+/// from the pose it previewed.
 ///
 /// # Errors
 /// Fails if the venue is not writable or the node is not in it.
@@ -199,7 +201,7 @@ pub async fn set_params(
     label: Option<String>,
 ) -> Result<PlacementReport, CommandError> {
     Ok(stage(services, &venue_id)
-        .set_params(&node_id, params, label.as_deref())
+        .set_params(&node_id, params, label.as_deref(), Frame::Stored)
         .await?)
 }
 
@@ -798,6 +800,51 @@ mod tests {
             .map(|d| d["socket"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(open, ["end_b"], "the bolted end is not open: {open:?}");
+    }
+
+    /// The page solves a dragged piece's stored `u` and `v` from the pose it
+    /// previewed and writes them back. Writing a piece's own stored values is
+    /// therefore no move at all, on a host whose own axes are not the
+    /// room's: a deck's top runs the other way and is measured from the deck.
+    #[tokio::test]
+    async fn writing_a_pieces_stored_place_back_leaves_it_where_it_stands() {
+        let (_dir, services, venue) = room().await;
+        let deck = place(&services, &venue, "stage", DECK, "bottom", 2.0, 1.0)
+            .await
+            .unwrap();
+        let speaker = attach(
+            &services,
+            &venue,
+            "stage",
+            SPEAKER,
+            &deck,
+            "mount",
+            "top",
+            Some(json!({ "u": 0.3, "v": 0.2 })),
+        )
+        .await
+        .unwrap();
+        let position = |venue: Value| {
+            venue["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["id"] == json!(speaker))
+                .map(|node| node["position"].clone())
+                .unwrap()
+        };
+        let before = position(resolved(&services, &venue).await);
+        dispatch(
+            &services,
+            "set_params",
+            &json!({
+                "venueId": venue, "nodeId": speaker,
+                "params": { "u": 0.3, "v": 0.2 }, "label": null,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(position(resolved(&services, &venue).await), before);
     }
 
     /// A light is its node and its patch row. `attach` and `place_free` write

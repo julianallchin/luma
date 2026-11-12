@@ -94,6 +94,10 @@ pub struct Request<'a> {
     pub trim_m: f64,
     /// The naming term, if the row should not be named after the model.
     pub label_prefix: Option<&'a str>,
+    /// Lights already on this face that the row is made of, in order along
+    /// it. They take the first seats and stay the lights they were; any past
+    /// `count` leave, and only the seats beyond them get a new light.
+    pub relay: &'a [String],
 }
 
 /// A refusal: the reason, and nothing written.
@@ -137,8 +141,8 @@ struct Seats {
     stations: Vec<f64>,
 }
 
-/// Seat `count` bodies `width` metres wide at `place`. `moving` is a light
-/// that is being moved, and so is not in its own way.
+/// Seat `count` bodies `width` metres wide at `place`. `moving` are lights
+/// that are being moved, and so are not in their own way.
 ///
 /// The one set of placement rules: a new row and a moved light both pass
 /// through here, so neither can land where the other would be refused.
@@ -149,7 +153,7 @@ async fn seats(
     place: Place<'_>,
     count: usize,
     width: f64,
-    moving: Option<&str>,
+    moving: &[String],
 ) -> Result<Result<Seats, DistributeReport>, String> {
     let sockets = crate::venue_graph::sockets(fixtures_root)?;
     let host_id = match place.host_node {
@@ -205,7 +209,7 @@ async fn seats(
             available_m,
         }) => {
             let suggestion = format!(
-                "needs {needed_m:.2} m, the face is {available_m:.2} m — extend({}, to={needed_m:.2})",
+                "needs {needed_m:.2} m, the face is {available_m:.2} m — trim({}, span={needed_m:.2})",
                 host.id
             );
             return Ok(Err(refused(
@@ -305,7 +309,7 @@ pub async fn relocate(
         place,
         1,
         width,
-        Some(node_id),
+        &[node_id.to_string()],
     )
     .await?
     .map_err(|report| match report.refusal {
@@ -372,13 +376,20 @@ pub async fn distribute(
         place,
         request.count,
         width,
-        None,
+        request.relay,
     )
     .await?
     {
         Ok(seats) => seats,
         Err(report) => return Ok(report),
     };
+    let kept = request.relay.len().min(stations.len());
+    for id in &request.relay[kept..] {
+        fixture_create::delete(access, id)
+            .await
+            .map_err(|e| e.to_string())?;
+        graph.remove(id);
+    }
     let rows = fixtures_db::get_patched_fixtures(access).await?;
 
     // Addresses come from the allocator, against the venue as it stands — the
@@ -386,13 +397,45 @@ pub async fn distribute(
     // see the re-derivation below.
     let solved = luma_scene::venue::resolve(&graph, sockets);
     let run = run_of(&solved, &host_id);
-    let footprints = offer(&solved, &rows, run.as_deref(), channels, stations.len())?;
+    let footprints = offer(
+        &solved,
+        &rows,
+        run.as_deref(),
+        channels,
+        stations.len() - kept,
+    )?;
 
     let mut numbering = fixture_create::numbering(access)
         .await
         .map_err(|e| e.to_string())?;
     let mut placed: Vec<(String, String, Footprint, f64)> = Vec::new();
-    for (station, footprint) in stations.iter().zip(&footprints) {
+    // A light that stays keeps its turn, its aim, its address and its
+    // groups: only where it sits along the face is written.
+    for (id, station) in request.relay[..kept].iter().zip(&stations) {
+        let row = rows
+            .iter()
+            .find(|row| &row.id == id)
+            .ok_or_else(|| format!("`{id}` has no patch row"))?;
+        let footprint = Footprint::new(
+            u16::try_from(row.universe).unwrap_or_default(),
+            u16::try_from(row.address).unwrap_or_default(),
+            channels,
+        )
+        .ok_or_else(|| format!("`{id}` is patched outside a universe"))?;
+        venue_graph_db::set_params(
+            access,
+            id,
+            &BTreeMap::from([("u".to_string(), Some(*station))]),
+        )
+        .await?;
+        placed.push((
+            id.clone(),
+            row.label.clone().unwrap_or_default(),
+            footprint,
+            *station,
+        ));
+    }
+    for (station, footprint) in stations[kept..].iter().zip(&footprints) {
         let edge = Edge {
             parent: host_id.clone(),
             my_socket: clamp.clone(),
@@ -636,12 +679,12 @@ fn occupied(
     host: &str,
     socket: &str,
     across_m: f64,
-    moving: Option<&str>,
+    moving: &[String],
 ) -> Vec<DistributeOccupied> {
     let mut widths: BTreeMap<&str, f64> = BTreeMap::new();
     let mut held: Vec<DistributeOccupied> = graph
         .nodes()
-        .filter(|node| node.kind == NodeKind::Fixture && moving != Some(node.id.as_str()))
+        .filter(|node| node.kind == NodeKind::Fixture && !moving.contains(&node.id))
         .filter(|node| {
             graph
                 .edge(&node.id)

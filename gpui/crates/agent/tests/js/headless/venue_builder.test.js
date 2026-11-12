@@ -598,3 +598,26 @@ test("a light's tilt drags, sticks and undoes", () => {
   app.action("luma::Undo");
   until("the tilt to come back", () => settled("stage-tilt") === before);
 });
+
+// A placed light is picked up from its card and put down somewhere else. It
+// is the same light afterwards: the patch rows, addresses and groups are the
+// ones it had, and the card says it now hangs on what it was dropped on.
+test("a light is picked up and put down as the same light", () => {
+  open();
+  const patch = () => said().filter((l) => l.startsWith("Mover ")).sort();
+  const edge = () => one("Edge: Mover 0 ");
+  nav.step("a light", "text", "Mover 0 label = Mover 0");
+  until("the card", (s) => s.find({ role: "button", label: "Move light" }));
+  const before = patch();
+  const hung = edge();
+  press("Move light");
+  until("the light in the hand", () => heldSurface());
+  const pane = app.snapshot().find({ role: "card", label: "Stage drop surface" });
+  app.drag({ x: pane.bounds.x + pane.bounds.width * 0.3, y: pane.bounds.y + pane.bounds.height * 0.78 }, { dx: 1, dy: 0 }, { steps: 2 });
+  settle("the light to land", () => edge() !== undefined && edge() !== hung);
+  // One drop, and the hand is empty: a moved light is not a stamp.
+  expect(heldSurface()).toBe(false);
+  expect(patch()).toEqual(before);
+  app.action("luma::Undo");
+  settle("the light to go back", () => edge() === hung);
+});

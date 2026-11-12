@@ -5,7 +5,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` fails when it is stale and
 rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 
-**139 commands** across **27 domains**
+**140 commands** across **27 domains**
 
 ## Domains
 
@@ -18,7 +18,7 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
 | `controls` | 1 | `backend/src/dispatch/handlers/controls.rs` |
-| `distribute` | 2 | `backend/src/dispatch/handlers/distribute.rs` |
+| `distribute` | 3 | `backend/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `backend/src/dispatch/handlers/engine_dj.rs` |
 | `fixtures` | 12 | `backend/src/dispatch/handlers/fixtures.rs` |
 | `folders` | 5 | `backend/src/dispatch/handlers/folders.rs` |
@@ -38,7 +38,7 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 11 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **139** | |
+| **total** | **140** | |
 
 ## Commands
 
@@ -108,6 +108,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | --- | --- | --- |
 | `distribute` | `venueId: String`<br>`hostNodeId: Option<String>`<br>`hostSocket: Option<String>`<br>`fixturePath: String`<br>`modeName: String`<br>`count: usize`<br>`layout: DistributeLayout`<br>`labelPrefix: Option<String>` | `DistributeReport` |
 | `redistribute` | `venueId: String`<br>`memberNodeId: String`<br>`count: usize`<br>`layout: DistributeLayout` | `DistributeReport` |
+| `move_light` | `venueId: String`<br>`nodeId: String`<br>`hostNodeId: Option<String>`<br>`hostSocket: String`<br>`layout: DistributeLayout` | `PlacementReport` |
 
 ### `engine_dj`
 

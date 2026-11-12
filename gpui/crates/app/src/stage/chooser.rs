@@ -305,6 +305,7 @@ pub(crate) fn chooser_rows(library: &FixtureLibrary, offer: Offer) -> Vec<Choose
                         mode: None,
                         width_m: DEFAULT_FIXTURE_WIDTH_M,
                         dims: None,
+                        moving: None,
                     },
                 }
             })
