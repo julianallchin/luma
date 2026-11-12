@@ -38,7 +38,9 @@ playback history and has no fixed simulation rate. Because of this:
 ## Musical time for clips
 
 Clip start and duration are in beats. The beat grid of the track converts them
-to seconds. A clip stays on the same beats when the beat grid changes.
+to seconds. A clip stays on the same beats when the beat grid changes. A beat
+grid is never edited: a new analysis writes a new grid, and a score records
+the grid it was written against.
 
 ## Unwired is not zero
 
@@ -63,6 +65,19 @@ no write server:
 - Each domain writes its own tables in ordinary SQLite transactions.
 - Two edits to one row merge per column.
 - Postgres row-level security controls access.
+
+## The server keeps what a device deletes
+
+A device is a cache of live rows. The server is the permanent record:
+
+- A delete on a device removes the row there. On the server it sets a flag,
+  and the row leaves every other device.
+- Ids are random, so a row keeps its id for good and inserting it again
+  brings it back.
+- The server logs every change to what people and agents made, with who made
+  it.
+- Analysis results are a cache. They are deleted for real and computed again
+  from the audio.
 
 Venues and their fixtures and groups sync like other rows. Venue members can
 read and edit a shared venue. Where each universe goes is the local `dmx_routes`
