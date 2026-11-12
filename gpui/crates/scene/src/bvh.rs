@@ -242,6 +242,26 @@ impl TriMesh {
         }
     }
 
+    /// A closed box, faces wound outward: what a pointer should meet on a
+    /// piece that is mostly air, such as a truss lattice.
+    pub fn solid(bounds: Aabb) -> TriMesh {
+        const FACES: [[u32; 4]; 6] = [
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+        ];
+        TriMesh::new(
+            bounds.corners().to_vec(),
+            FACES
+                .iter()
+                .flat_map(|[a, b, c, d]| [[*a, *b, *c], [*a, *c, *d]])
+                .collect(),
+        )
+    }
+
     pub fn bounds(&self) -> Aabb {
         self.bvh.bounds()
     }
@@ -419,5 +439,21 @@ mod tests {
         let a = Vec3::ZERO;
         let mesh = TriMesh::new(vec![a, Vec3::X, Vec3::Y], vec![[0, 1, 2]; 8]);
         assert_eq!(mesh.triangle_count(), 8);
+    }
+
+    /// A solid box stops a ray from every side, and says which way the face
+    /// it met points: back at where the ray came from.
+    #[test]
+    fn a_solid_box_faces_outward_on_every_side() {
+        let solid = TriMesh::solid(Aabb::from_points([
+            Vec3::new(-1.0, -0.2, -0.3),
+            Vec3::new(1.0, 0.2, 0.3),
+        ]));
+        for from in [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z] {
+            let hit = solid
+                .raycast(Ray::new(from * 5.0 + Vec3::splat(0.05), -from))
+                .expect("a ray at the middle of a face meets it");
+            assert!(hit.normal.dot(from) > 0.99, "{from}: {:?}", hit.normal);
+        }
     }
 }
