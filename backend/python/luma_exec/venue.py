@@ -383,13 +383,7 @@ def _node(value: Any) -> str:
 
 
 def _along(at: Any) -> float:
-    """A 1-D `at=` on a stick host: signed metres from midspan.
-
-    A pair is accepted and its first number taken, so a caller that reached for
-    the 2-D spelling on a one-dimensional host is not stopped by punctuation.
-    """
-    if isinstance(at, (list, tuple)):
-        return _finite("at", at[0])
+    """A 1-D `at=` on a stick host: signed metres from midspan."""
     return _finite("at", at)
 
 
@@ -1965,6 +1959,18 @@ class Venue:
         than a plane — a speaker stand's pole — leave `at=` out and the piece
         seats on the joint.
 
+        A light goes anywhere. With no `on=` it stands on the floor at
+        `at=(u, v)`, that point of the room; `trim=` lifts it, and
+        `face=(0, 0, -1)` hangs it looking down from that height. On a deck,
+        `at=(u, v)` is that far from the middle of its top in the room's
+        directions, whichever way the deck is turned, and the top is the face
+        when none is named. On a truss face `at=` is one number along it, and
+        a point off a face is refused, not moved.
+
+            v.place("par", at=(3, 4))                           # on the floor
+            v.place("par", at=(3, 4), face=(0, 0, -1), trim=5)  # hung over it
+            v.place("par", on=deck, at=(0.6, 0.3))
+
         `direction=` is the way the piece runs — `(0, 0, 1)` stands a truss on
         end as a tower, `(1, 0, 0)` lays it along stage right. On a speaker or
         a player, which has a front rather than a run, it is the way the box is
@@ -2001,7 +2007,8 @@ class Venue:
             )
         # Not structure: a light, and a light is always a row of one on a host
         # face — there is no bare insert and no self-authored pose.
-        along = 0.0 if at is None else _along(at)
+        if trim and at is None:
+            at = (0.0, 0.0)
         try:
             return self.distribute(
                 piece,
@@ -2009,7 +2016,8 @@ class Venue:
                 on=on,
                 face=face,
                 mode=mode,
-                at=along,
+                at=0.0 if at is None else at,
+                trim=trim,
                 label=label,
                 draft=draft,
             )
@@ -2352,6 +2360,61 @@ class Venue:
         self._verb("venue.remove", {"nodeIds": ids})
         return f"removed {len(ids)} node{'' if len(ids) == 1 else 's'} and what hung on them"
 
+    def move(
+        self,
+        light: Any,
+        *,
+        on: Any = None,
+        at: Any = None,
+        face: Any = None,
+        trim: float = 0.0,
+    ) -> Placement:
+        """Move one light, keeping its id, its address and its groups.
+
+        It takes what `place` takes for a light:
+
+            v.move(light, at=(3, 4))             # onto the floor, at that point
+            v.move(light, on=beam, at=1.5, face=(0, 0, -1))
+            v.move(light, on=deck, at=(0.6, 0.3))
+            v.move(light, at=-2.0)               # along the face it hangs on
+
+        One number with no `on=` slides the light along the face it already
+        has. On a new face its turn and aim return to rest, so it points
+        straight out of where it now hangs; the result says when that
+        happened. A place a new light would be refused at is refused here too.
+        """
+        if at is None:
+            raise LumaHostCallError("invalid_argument", "move needs at=: where the light goes")
+        pair = isinstance(at, (list, tuple))
+        if pair and len(at) != 2:
+            raise LumaHostCallError(
+                "invalid_argument", "at= is one number along a face, or (u, v) on a floor or a deck"
+            )
+        if trim and not pair:
+            raise LumaHostCallError(
+                "invalid_argument", "trim= lifts a light placed at a point: give at=(u, v)"
+            )
+        layout = (
+            {"kind": "point", "u": _finite("at[0]", at[0]), "v": _finite("at[1]", at[1]),
+             "trim": _finite("trim", trim)}
+            if pair
+            else {"kind": "at", "metres": _along(at)}
+        )
+        response = self._verb(
+            "venue.move",
+            {
+                "nodeId": _node(light),
+                "hostNodeId": None if on is None else _node(on),
+                "face": None if face is None else _vector("face", face),
+                "stay": on is None and face is None and not pair,
+                "layout": layout,
+            },
+        )
+        placed = Placement(response)
+        if response.get("rehung"):
+            print("move: on a new face, so its turn and aim are back at rest")
+        return placed
+
     def trim(self, node: Any, *, label: str | None = None, **params: Any) -> Placement:
         """Edit a node's parameters, and optionally rename it.
 
@@ -2514,6 +2577,7 @@ class Venue:
         at: Any = None,
         span: Sequence[float] | None = None,
         spacing_m: float | None = None,
+        trim: float = 0.0,
         label: str | None = None,
         draft: str | None = None,
     ) -> Distribution:
@@ -2542,7 +2606,9 @@ class Venue:
         - nothing  — evenly across the whole face;
         - `span=(a, b)` — evenly across that window, clipped to the face;
         - `spacing_m=` — a fixed centre-to-centre pitch, centred;
-        - `at=` — one mark, which is what `place(light, on=..., at=...)` uses.
+        - `at=` — one mark, which is what `place(light, on=..., at=...)` uses;
+          on a floor or a deck top `at=(u, v)` is a point, in the room's
+          directions from the face's middle, and `trim=` lifts it.
 
         A row that does not fit is **not** an error: the result has `ok` false
         and `needed_m`, the length that would make the same call succeed.
@@ -2556,8 +2622,25 @@ class Venue:
                 "invalid_argument",
                 f"a row sits one way along its face; {' and '.join(chosen)} is two",
             )
+        if trim and not isinstance(at, (list, tuple)):
+            raise LumaHostCallError(
+                "invalid_argument", "trim= lifts a light placed at a point: give at=(u, v)"
+            )
         if at is not None:
-            plan: dict[str, Any] = {"kind": "at", "metres": _along(at)}
+            if isinstance(at, (list, tuple)):
+                if len(at) != 2:
+                    raise LumaHostCallError(
+                        "invalid_argument",
+                        "at= is one number along a face, or (u, v) on a floor or a deck",
+                    )
+                plan: dict[str, Any] = {
+                    "kind": "point",
+                    "u": _finite("at[0]", at[0]),
+                    "v": _finite("at[1]", at[1]),
+                    "trim": _finite("trim", trim),
+                }
+            else:
+                plan = {"kind": "at", "metres": _along(at)}
         elif span is not None:
             if len(span) != 2:
                 raise LumaHostCallError(

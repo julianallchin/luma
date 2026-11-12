@@ -38,6 +38,9 @@ pub struct HostFace {
     pub socket: ResolvedSocket,
     /// How long it is and how short a change to that length the host admits.
     pub feature: Feature,
+    /// How wide it is across that length: a deck top is a surface with room
+    /// for a point off its middle line, a truss face barely any.
+    pub width: Feature,
 }
 
 /// The named face of a host node, or `None` if the node has no such socket.
@@ -51,12 +54,18 @@ pub fn host_face(sockets: &VenueSockets, node: &Node, name: &str) -> Option<Host
             return Some(HostFace {
                 socket,
                 feature: Feature::unbounded(),
+                width: Feature::unbounded(),
             });
         }
     }
     let socket = sockets.sockets(node).into_iter().find(|s| s.name == name)?;
     let feature = extent_along(sockets, node, socket.tangent);
-    Some(HostFace { socket, feature })
+    let width = extent_along(sockets, node, socket.normal.cross(socket.tangent));
+    Some(HostFace {
+        socket,
+        feature,
+        width,
+    })
 }
 
 /// The host's size along one of its own local axes, as a distributable feature.

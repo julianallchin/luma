@@ -853,6 +853,113 @@ fn session_turn(thread: &str) -> String {
     format!("{thread}-session")
 }
 
+/// A moved light is the same light: its id, its address and its group
+/// survive the trip from the floor onto a truss and along it, and a place a
+/// new light could not take is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_python_program_moves_a_light_and_it_stays_the_same_light() {
+    let Some(f) = Fixture::new("venue move").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+v = luma.venue
+def where(id):
+    node = v.nodes(ids=[id])[0]
+    return (round(node.at[0], 2), round(node.at[1], 2), round(node.z, 1))
+def patch(id):
+    return [(f.universe, f.address) for f in v.fixtures if f.id == id]
+
+beam = v.place("truss", at=(0.0, 2.0), length=6, direction=(1, 0, 0), trim=4.0)
+light = v.place(MOVER, at=(3.0, 4.0), mode=MODE).fixtures[0]
+other = v.place(MOVER, on=beam, at=-2.0, face=(0, 0, -1), mode=MODE).fixtures[0]
+v.group("movers", [light])
+before = patch(light.id)
+
+v.move(light, at=(-1.0, 5.0))
+on_floor = where(light.id)
+v.move(light, on=beam, at=1.5, face=(0, 0, -1))
+hung = where(light.id)
+v.move(light, at=0.5)
+slid = where(light.id)
+try:
+    v.move(light, at=-2.0)
+    taken = False
+except luma.VenueRefused:
+    taken = True
+
+grouped = [g.split() for g in str(v.groups()).splitlines() if g.strip().startswith("movers")]
+(on_floor[:2], hung[:2], hung[2] > 3, slid[:2], taken, patch(light.id) == before,
+ grouped[0][1], where(other.id)[:2])
+"#
+            .replace("MOVER", &format!("{MOVER:?}"))
+            .replace("MODE", &format!("{MOVER_MODE:?}"))
+            .as_str(),
+        )
+        .await;
+    expect_ok(&out, "move a light");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "((-1.0, 5.0), (1.5, 2.0), True, (0.5, 2.0), True, True, '1', (-2.0, 2.0))",
+        "{}",
+        out.stdout
+    );
+}
+
+/// A light goes where it was asked to: a point of the floor, a point of a deck
+/// top in the room's directions however the deck is turned, and a height in
+/// the air. A point that is not on the face is refused, not moved onto it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_python_program_places_lights_at_points_of_the_room() {
+    let Some(f) = Fixture::new("venue points").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+v = luma.venue
+def where(row):
+    node = v.nodes(ids=[row.fixtures[0].id])[0]
+    return (round(node.at[0], 2), round(node.at[1], 2), round(node.z, 1))
+
+floor = where(v.place(MOVER, at=(3.0, 4.0), mode=MODE))
+hung = where(v.place(MOVER, at=(-2.0, 5.0), face=(0, 0, -1), trim=5.0, mode=MODE))
+decks = [v.place("deck", at=(0.0, -3.0)),
+         v.place("deck", at=(4.0, -3.0), direction=(0, 1, 0))]
+on_deck = [where(v.place(MOVER, on=deck, at=(0.3, 0.2), mode=MODE)) for deck in decks]
+beam = v.place("truss", at=(0.0, 2.0), length=4, direction=(1, 0, 0), trim=4.0)
+refused = []
+for at in ((1.0, 0.8), (0.0, 3.0)):
+    try:
+        v.place(MOVER, on=beam if at[1] < 1 else decks[0], at=at, face=(0, 0, -1) if at[1] < 1 else None, mode=MODE)
+    except luma.VenueRefused:
+        refused.append(at)
+
+(floor[:2], hung[:2], hung[2] > floor[2] + 4,
+ [(round(x - deck.at[0], 2), round(y - deck.at[1], 2)) for (x, y, _), deck in zip(on_deck, decks)],
+ len(refused))
+"#
+            .replace("MOVER", &format!("{MOVER:?}"))
+            .replace("MODE", &format!("{MOVER_MODE:?}"))
+            .as_str(),
+        )
+        .await;
+    expect_ok(&out, "place lights at points");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "((3.0, 4.0), (-2.0, 5.0), True, [(0.3, 0.2), (0.3, 0.2)], 2)",
+        "{}",
+        out.stdout
+    );
+}
+
 /// One program builds a whole rig out of an empty room, and reads back what it
 /// built through the same three channels the stage page draws from.
 ///

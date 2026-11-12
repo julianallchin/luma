@@ -498,6 +498,73 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
             .ok_or_else(|| self.no_face(node, &faces))
     }
 
+    /// The one face of `node` a light can mount on, for a caller that named
+    /// none: a deck has its top and nothing else.
+    ///
+    /// # Errors
+    /// [`Refusal::NoFace`] when there is none, and [`Refusal::WhichFace`] when
+    /// there are several, listing them as vectors.
+    pub fn only_face(&self, node: &str) -> Result<String, Refusal> {
+        let faces: Vec<(ResolvedSocket, DVec3)> = self
+            .world_sockets(node)
+            .into_iter()
+            .filter(|(s, _, _)| {
+                crate::catalog::fixture_clamp(0.0)
+                    .socket_type
+                    .mates(s.socket_type)
+            })
+            .map(|(s, _, normal)| (s, normal))
+            .collect();
+        match faces.as_slice() {
+            [] => Err(self.no_face(node, &faces)),
+            [(socket, _)] => Ok(socket.name.clone()),
+            _ => Err(Refusal::WhichFace {
+                name: self.name_of(node),
+                offered: faces
+                    .iter()
+                    .map(|(_, n)| facade_from_three(*n).to_array())
+                    .collect(),
+            }),
+        }
+    }
+
+    /// A point stated in plan, as metres along and across one of `node`'s
+    /// faces from its middle: the `(u, v)` a node on that face is stored with.
+    ///
+    /// `offset` is `(u, v)` stage metres from the face's middle, in the room's
+    /// own directions whichever way the host is turned, so `(1, 0)` on a deck
+    /// is a metre toward stage right on every deck.
+    ///
+    /// # Errors
+    /// [`Refusal::UnknownNode`] for a node or face that is not there, and
+    /// [`Refusal::NotLevel`] for a face that is not a floor or a ceiling: a
+    /// point in plan names nothing on a wall.
+    pub fn surface_point(
+        &self,
+        node: &str,
+        face: &str,
+        offset: [f64; 2],
+    ) -> Result<(f64, f64), Refusal> {
+        let unknown = || Refusal::UnknownNode(node.to_string());
+        let world = self.world(node).ok_or_else(unknown)?;
+        let (socket, _, normal) = self
+            .world_sockets(node)
+            .into_iter()
+            .find(|(socket, _, _)| socket.name == face)
+            .ok_or_else(unknown)?;
+        if normal.dot(crate::snap::WORLD_UP).abs() < 0.9 {
+            return Err(Refusal::NotLevel {
+                name: self.name_of(node),
+            });
+        }
+        let frame = world * crate::venue::socket_frame(&socket);
+        let wanted = three_from_facade(DVec3::new(offset[0], offset[1], 0.0));
+        Ok((
+            wanted.dot(frame.x_axis.truncate().normalize_or_zero()),
+            wanted.dot(frame.y_axis.truncate().normalize_or_zero()),
+        ))
+    }
+
     /// How a node reads in a message: its id, its label and what it is.
     ///
     /// A refusal naming a bare uuid tells the reader nothing they can act on,
@@ -595,6 +662,13 @@ pub enum Refusal {
         hint: Option<String>,
         offered: Vec<[f64; 3]>,
     },
+    /// Several faces a light could mount on and no direction to pick one.
+    WhichFace {
+        name: String,
+        offered: Vec<[f64; 3]>,
+    },
+    /// A point in plan asked of a face that is not level.
+    NotLevel { name: String },
     /// A piece with no half that bolts to the end it was handed.
     NoJoint {
         piece: String,
@@ -681,6 +755,17 @@ impl std::fmt::Display for Refusal {
                 f,
                 "{name} has no face that way; its faces point {}",
                 vectors(offered)
+            ),
+            Refusal::WhichFace { name, offered } => write!(
+                f,
+                "{name} has {} faces a light mounts on — say which with face=, one of {}",
+                offered.len(),
+                vectors(offered)
+            ),
+            Refusal::NotLevel { name } => write!(
+                f,
+                "at=(u, v) is a point on a level surface, and that face of {name} is not \
+                 one — give one number, metres along the face from its middle"
             ),
             Refusal::NoJoint {
                 piece,

@@ -713,17 +713,21 @@ impl<'a> Stage<'a> {
     ) -> Result<Distributed> {
         let relative = confine(fixture_path)?;
         let mut access = self.write().await?;
+        let (place, trim_m) = self
+            .place_on_face(&mut access, host_node_id, host_socket, layout)
+            .await?;
         let report = distribute_service::distribute(
             &mut access,
             self.fixtures_root,
             distribute_service::Request {
-                host_node: host_node_id,
-                host_socket,
+                host_node: place.host_node,
+                host_socket: place.host_socket,
                 fixture_path: relative,
                 mode_name,
                 count,
-                layout: layout.into(),
-                across_m: layout.across_m(),
+                layout: place.layout,
+                across_m: place.across_m,
+                trim_m,
                 label_prefix,
             },
         )
@@ -735,6 +739,96 @@ impl<'a> Stage<'a> {
         let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
         venue_graph::commit_graph(access).await?;
         Ok(Distributed { report, patch })
+    }
+
+    /// A layout as a place on one host face, and how high above it: a point
+    /// in plan is put on the face here, for a new row and a moved light alike.
+    async fn place_on_face<'h>(
+        &self,
+        access: &mut VenueAccess<'_, Write>,
+        host_node: Option<&'h str>,
+        host_socket: Option<&'h str>,
+        layout: DistributeLayout,
+    ) -> Result<(distribute_service::Place<'h>, f64)> {
+        let (layout, across_m, trim_m) = match layout.on_face() {
+            Ok((layout, across_m)) => (layout, across_m, 0.0),
+            Err(point) => {
+                let graph = venue_graph::graph(access).await?;
+                let solved = venue_graph::resolved(access, self.fixtures_root).await?;
+                let supply = venue_graph::sockets(self.fixtures_root)?;
+                let (along, across) = build::Scene::new(&graph, &solved, supply)
+                    .surface_point(
+                        host_node.unwrap_or(graph.root()),
+                        host_socket.unwrap_or(FLOOR_SOCKET),
+                        [point.u, point.v],
+                    )
+                    .map_err(|refusal| StageError::Refused(refusal.to_string()))?;
+                (
+                    luma_scene::distribute::Layout::At(along),
+                    across,
+                    point.trim,
+                )
+            }
+        };
+        Ok((
+            distribute_service::Place {
+                host_node,
+                host_socket,
+                layout,
+                across_m,
+            },
+            trim_m,
+        ))
+    }
+
+    /// Move one light to a new place, keeping its id, its address and every
+    /// group it is in.
+    ///
+    /// `to` is the host and face to hang it on (`None` for the room); leave
+    /// `to` out and it stays on the face it has and moves along it. On a new
+    /// face the light's turn and aim return to rest, and the answer says so.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] for anything but one light at one place, and
+    /// for a place a new light would be refused at.
+    pub async fn move_light(
+        &self,
+        node_id: &str,
+        to: Option<(Option<&str>, &str)>,
+        layout: DistributeLayout,
+    ) -> Result<Moved> {
+        let mut access = self.write().await?;
+        require_in_venue(&mut access, &[node_id]).await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let Some(edge) = graph.edge(node_id).cloned() else {
+            return Err(StageError::Refused(format!(
+                "`{node_id}` is not a placed light"
+            )));
+        };
+        let (host, socket) = match to {
+            Some((host, socket)) => (host.map(str::to_string), socket.to_string()),
+            None => (
+                (edge.parent != graph.root()).then_some(edge.parent),
+                edge.their_socket,
+            ),
+        };
+        drop(graph);
+        let (place, trim_m) = self
+            .place_on_face(&mut access, host.as_deref(), Some(&socket), layout)
+            .await?;
+        if !matches!(place.layout, luma_scene::distribute::Layout::At(_)) {
+            return Err(StageError::Refused(
+                "a move puts one light in one place: give at=".into(),
+            ));
+        }
+        let rehung =
+            distribute_service::relocate(&mut access, self.fixtures_root, node_id, place, trim_m)
+                .await
+                .map_err(StageError::Refused)?;
+        Ok(Moved {
+            rehung,
+            report: self.report(access, node_id).await?,
+        })
     }
 
     /// Re-lay an existing row of fixtures at a new count or layout.
@@ -773,28 +867,22 @@ impl<'a> Stage<'a> {
             )));
         };
         let (path, mode) = (member.fixture_path.clone(), member.mode_name.clone());
-        // The row is one line across the face: on a floor, the lights at
+        // The row keeps its own line and height: on a floor, the lights at
         // another depth are not in it and are left where they stand.
-        let across_m = graph
-            .node(member_node_id)
-            .map_or(0.0, |node| node.params.get("v", 0.0));
+        let (across_m, trim_m) = graph.node(member_node_id).map_or((0.0, 0.0), |node| {
+            (node.params.get("v", 0.0), node.params.get("trim", 0.0))
+        });
         let siblings: Vec<String> = graph
-            .nodes()
-            .filter(|node| node.kind == NodeKind::Fixture)
-            .filter(|node| {
-                (node.params.get("v", 0.0) - across_m).abs() < distribute_service::ROW_LINE_M
-            })
-            .filter(|node| {
-                graph.edge(&node.id).is_some_and(|sibling| {
-                    sibling.parent == edge.parent && sibling.their_socket == edge.their_socket
-                })
-            })
-            .filter(|node| {
+            .row_of(member_node_id, |node| {
                 rows.iter()
                     .any(|row| row.id == node.id && row.fixture_path == path)
             })
+            .into_iter()
             .map(|node| node.id.clone())
             .collect();
+        let (layout, _) = layout.on_face().map_err(|_| {
+            StageError::Refused("a row is re-laid along its face, not at a point".into())
+        })?;
         let host_node = (edge.parent != graph.root()).then_some(edge.parent.clone());
         drop(graph);
         for id in &siblings {
@@ -809,8 +897,9 @@ impl<'a> Stage<'a> {
                 fixture_path: &path,
                 mode_name: &mode,
                 count,
-                layout: layout.into(),
+                layout,
                 across_m,
+                trim_m,
                 label_prefix: None,
             },
         )
@@ -1259,6 +1348,14 @@ impl<'a> Stage<'a> {
 // The authoring surface: chains, queries, drafts
 // ---------------------------------------------------------------------------
 
+/// What a move did.
+pub struct Moved {
+    /// The light now hangs on a different face, so its turn and aim are back
+    /// at rest.
+    pub rehung: bool,
+    pub report: PlacementReport,
+}
+
 /// What one chain op did: the node it made, where it landed, and the end the
 /// next op grows from.
 ///
@@ -1642,6 +1739,22 @@ impl Draft {
             .map_err(|refusal| StageError::Refused(refusal.to_string()))
     }
 
+    /// The draft's reading of [`build::Scene::surface_point`].
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] for a face that is not level.
+    pub fn surface_point(
+        &self,
+        supply: &VenueSockets,
+        node_id: &str,
+        socket: &str,
+        point: [f64; 2],
+    ) -> Result<(f64, f64)> {
+        build::Scene::new(&self.graph, &self.solved, supply)
+            .surface_point(node_id, socket, point)
+            .map_err(|refusal| StageError::Refused(refusal.to_string()))
+    }
+
     /// One node's free end, by the direction it faces.
     ///
     /// # Errors
@@ -1828,6 +1941,24 @@ impl<'a> Stage<'a> {
         let node = node_id.map_or_else(|| graph.root().to_string(), str::to_string);
         build::Scene::new(&graph, &solved, supply)
             .face(&node, glam::DVec3::from(face))
+            .map_err(|refusal| StageError::Refused(refusal.to_string()))
+    }
+
+    /// The face a row lands on when its caller named none: the floor for the
+    /// room, and a host's one mounting face.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] when the host has no such face, or several.
+    pub async fn default_face(&self, node_id: Option<&str>) -> Result<String> {
+        let Some(node_id) = node_id else {
+            return Ok(luma_scene::venue::FLOOR_SOCKET.to_string());
+        };
+        let mut access = self.read().await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let supply = venue_graph::sockets(self.fixtures_root)?;
+        build::Scene::new(&graph, &solved, supply)
+            .only_face(node_id)
             .map_err(|refusal| StageError::Refused(refusal.to_string()))
     }
 

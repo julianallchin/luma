@@ -84,6 +84,26 @@ g = g.add("guardrail")                # continues along the hinge's out — need
 `on=` reframes `at=` into the host's own frame. Deck host → 2-D `at=(u, v)` on
 its top. Stick host → 1-D signed metres from midspan.
 
+A light takes the same `at=`. With no host it stands on the floor at that point
+of the room, and `trim=` lifts it. On a deck, `(u, v)` is measured from the
+middle of the top in the **room's** directions, not the deck's, so the same
+pair means the same move on a deck turned any way; the stage converts it to the
+face's own along and across. A point off the face (a pair on a truss, a point
+past a deck's edge) is refused by the distribute service, which owns the
+face's width, and a pair on a face that is not level is refused by the scene.
+A host with one mounting face needs no `face=`.
+
+`move(light, on=, at=, face=, trim=)` re-hangs a placed light without
+changing its id, so its address and groups survive. It passes the same seating
+rules as a new row of one (`services::distribute::seats`): the two cannot
+disagree about what fits. On a new face the light's turn and aim return to
+rest.
+
+A person clicking the floor and an agent naming a coordinate send the same
+thing, `DistributeLayout::Point`, and one function (`Scene::surface_point`)
+puts it on the face. What a row is has one definition too:
+`VenueGraph::row_of`.
+
 `face=` is a **vector** mapped to the piece's nearest mounting face. Beam =
 mount normal, so choosing the face is choosing where the light points at rest.
 

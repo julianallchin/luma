@@ -408,6 +408,10 @@ pub struct VenueGraph {
     warnings: Vec<NodeWarning>,
 }
 
+/// How far apart across a face two fixtures may sit and still be one row, in
+/// metres: a row is one line, and a floor holds many.
+pub const ROW_LINE_M: f64 = 1e-3;
+
 impl VenueGraph {
     /// A venue holding nothing but its root.
     #[must_use]
@@ -452,6 +456,33 @@ impl VenueGraph {
     #[must_use]
     pub fn edge(&self, id: &str) -> Option<&Edge> {
         self.edges.get(id)
+    }
+
+    /// The row `member` is in: the fixtures `same_model` accepts that hang on
+    /// the same host face along the same line, ordered along it.
+    ///
+    /// Derived, never stored: the graph keeps where each light sits, and "the
+    /// row" is a reading of that, so there is no row id to go stale when a
+    /// light is deleted by hand. Lights at another depth of a floor are beside
+    /// the row, not in it.
+    pub fn row_of(&self, member: &str, same_model: impl Fn(&Node) -> bool) -> Vec<&Node> {
+        let (Some(node), Some(edge)) = (self.node(member), self.edge(member)) else {
+            return Vec::new();
+        };
+        let across = node.params.get("v", 0.0);
+        let mut row: Vec<&Node> = self
+            .nodes()
+            .filter(|sibling| sibling.kind == NodeKind::Fixture)
+            .filter(|sibling| {
+                self.edge(&sibling.id).is_some_and(|joint| {
+                    joint.parent == edge.parent && joint.their_socket == edge.their_socket
+                })
+            })
+            .filter(|sibling| (sibling.params.get("v", 0.0) - across).abs() < ROW_LINE_M)
+            .filter(|sibling| same_model(sibling))
+            .collect();
+        row.sort_by(|a, b| a.params.get("u", 0.0).total_cmp(&b.params.get("u", 0.0)));
+        row
     }
 
     /// Every far-end check.
@@ -1418,7 +1449,7 @@ fn flip_for(mode: SocketMode) -> DMat4 {
 
 /// A socket's local frame: origin at the socket, `+Z` its normal, `+X` its
 /// tangent re-orthogonalized against the normal.
-fn socket_frame(socket: &ResolvedSocket) -> DMat4 {
+pub(crate) fn socket_frame(socket: &ResolvedSocket) -> DMat4 {
     let z = socket.normal.normalize_or_zero();
     let x = socket.tangent.normalize_or_zero();
     let x = (x - z * z.dot(x)).normalize_or_zero();

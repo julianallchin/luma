@@ -193,9 +193,10 @@ impl Luma {
                 path,
                 &mode,
                 1,
-                luma_lib::models::distribute::DistributeLayout::At {
-                    metres: seat.u,
-                    across: seat.v,
+                luma_lib::models::distribute::DistributeLayout::Point {
+                    u: seat.u,
+                    v: seat.v,
+                    trim: 0.0,
                 },
                 None,
             );

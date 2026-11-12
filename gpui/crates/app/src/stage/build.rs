@@ -334,33 +334,16 @@ impl Build {
         node: &str,
         path_of: &dyn Fn(&str) -> Option<String>,
     ) -> Vec<String> {
-        let Some(edge) = self.graph.edge(node) else {
-            return Vec::new();
-        };
         let Some(path) = path_of(node) else {
             return Vec::new();
         };
-        let across = self
-            .graph
-            .node(node)
-            .map_or(0.0, |node| node.params.get("v", 0.0));
-        let mut out: Vec<(f64, String)> = self
-            .graph
-            .nodes()
-            .filter(|sibling| sibling.kind == luma_scene::venue::NodeKind::Fixture)
-            .filter(|sibling| {
-                self.graph.edge(&sibling.id).is_some_and(|joint| {
-                    joint.parent == edge.parent && joint.their_socket == edge.their_socket
-                })
+        self.graph
+            .row_of(node, |sibling| {
+                path_of(&sibling.id).as_deref() == Some(path.as_str())
             })
-            // One line across the face: lights at another depth of a floor
-            // are beside the row, not in it.
-            .filter(|sibling| (sibling.params.get("v", 0.0) - across).abs() < ROW_LINE_M)
-            .filter(|sibling| path_of(&sibling.id).as_deref() == Some(path.as_str()))
-            .map(|sibling| (sibling.params.get("u", 0.0), sibling.id.clone()))
-            .collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        out.into_iter().map(|(_, id)| id).collect()
+            .into_iter()
+            .map(|sibling| sibling.id.clone())
+            .collect()
     }
 
     /// The room as it stands, as an undo step.
@@ -663,10 +646,6 @@ impl Build {
         }
     }
 }
-
-/// How far apart across a face two lights may sit and still be one row, in
-/// metres. The same line `luma_lib`'s `redistribute` re-lays.
-const ROW_LINE_M: f64 = luma_lib::services::distribute::ROW_LINE_M;
 
 /// What a placed node may be moved by.
 ///

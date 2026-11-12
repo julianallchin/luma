@@ -904,6 +904,32 @@ class BuildTests(unittest.TestCase):
             self.host.last("venue.distribute")["layout"], {"kind": "at", "metres": 2.0}
         )
 
+    def test_a_light_placed_at_a_pair_keeps_both_numbers(self) -> None:
+        """A floor is a surface: the second number is how far toward the crowd,
+        and dropping it stands every light on the room's centre line."""
+        self.venue.place("a.qxf", at=(3.0, -4.5), mode="m")
+        payload = self.host.last("venue.distribute")
+        self.assertEqual(payload["layout"], {"kind": "point", "u": 3.0, "v": -4.5, "trim": 0.0})
+        self.assertIsNone(payload["hostNodeId"])
+        # Lifted, it is still one call: the height travels with the point.
+        self.venue.place("a.qxf", at=(3.0, -4.5), trim=5.0, mode="m")
+        self.assertEqual(self.host.last("venue.distribute")["layout"]["trim"], 5.0)
+        with self.assertRaises(LumaHostCallError):
+            self.venue.place("a.qxf", at=(1.0, 2.0, 3.0), mode="m")
+
+    def test_a_move_says_where_in_the_words_place_uses(self) -> None:
+        self.venue.move("light-1", at=(3.0, -4.5), trim=2.0)
+        payload = self.host.last("venue.move")
+        self.assertEqual(payload["layout"], {"kind": "point", "u": 3.0, "v": -4.5, "trim": 2.0})
+        self.assertFalse(payload["stay"])
+        # One number and no host: along the face it already hangs on.
+        self.venue.move("light-1", at=-2.0)
+        payload = self.host.last("venue.move")
+        self.assertEqual(payload["layout"], {"kind": "at", "metres": -2.0})
+        self.assertTrue(payload["stay"])
+        with self.assertRaises(LumaHostCallError):
+            self.venue.move("light-1")
+
     def test_two_ways_along_one_face_is_refused_before_the_host_sees_it(self) -> None:
         with self.assertRaises(LumaHostCallError):
             self.venue.distribute(

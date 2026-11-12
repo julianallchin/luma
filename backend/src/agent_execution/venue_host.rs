@@ -784,6 +784,42 @@ impl VenueHost {
         self.placed(report).await
     }
 
+    /// The face a caller means on a host: the one its vector points at, the
+    /// one it named, or the host's only mounting face.
+    async fn socket(
+        &self,
+        host: Option<&str>,
+        face: Option<[f64; 3]>,
+        named: Option<String>,
+    ) -> Result<String, HostCallError> {
+        Ok(match (face, named) {
+            (Some(face), _) => self.stage().face_socket(host, face).await?,
+            (None, Some(named)) => named,
+            (None, None) => self.stage().default_face(host).await?,
+        })
+    }
+
+    /// Move one light, keeping its id.
+    async fn move_light(&self, request: MoveRequest) -> Result<Value, HostCallError> {
+        let socket = match (&request.host_node_id, request.face, request.stay) {
+            (None, None, true) => None,
+            (host, face, _) => Some(self.socket(host.as_deref(), face, None).await?),
+        };
+        let moved = self
+            .stage()
+            .move_light(
+                &request.node_id,
+                socket
+                    .as_deref()
+                    .map(|socket| (request.host_node_id.as_deref(), socket)),
+                request.layout,
+            )
+            .await?;
+        let mut placed = self.placed(moved.report).await?;
+        placed["rehung"] = json!(moved.rehung);
+        Ok(placed)
+    }
+
     /// The fixture constructor: place, name and patch a row in one
     /// transaction. A fit failure is a report, not an error.
     ///
@@ -811,14 +847,31 @@ impl VenueHost {
             // Refuse a face the host does not have *now*, rather than at the
             // stamp: the caller is standing in front of the piece it just
             // built, and that is where the fix is cheapest.
-            draft.face(supply, &host, face)?;
+            let socket = draft.face(supply, &host, face)?;
+            // A point is put on the face now, in the draft's own directions:
+            // the stamp may turn the piece, and the light turns with it.
+            let layout = match request.layout.on_face() {
+                Err(point) if point.trim != 0.0 => {
+                    return Err(HostCallError::new(
+                        "invalid_argument",
+                        "a light in a draft has no height of its own until the stamp; \
+                         lift it afterwards with v.trim(light, trim=...)",
+                    ));
+                }
+                Err(point) => {
+                    let (metres, across) =
+                        draft.surface_point(supply, &host, &socket, [point.u, point.v])?;
+                    DistributeLayout::At { metres, across }
+                }
+                Ok(_) => request.layout,
+            };
             let row = draft.record(crate::services::stage_ops::PendingRow {
                 host,
                 face,
                 fixture_path: request.fixture_path.clone(),
                 mode_name: request.mode_name.clone(),
                 count: request.count,
-                layout: request.layout,
+                layout,
                 label_prefix: request.label_prefix.clone(),
                 aim: None,
             });
@@ -835,14 +888,14 @@ impl VenueHost {
                 "describe": draft.summary(supply),
             }));
         }
-        let socket = match (request.face, request.host_socket.clone()) {
-            (Some(face), _) => Some(
-                self.stage()
-                    .face_socket(request.host_node_id.as_deref(), face)
-                    .await?,
-            ),
-            (None, named) => named,
-        };
+        let socket = Some(
+            self.socket(
+                request.host_node_id.as_deref(),
+                request.face,
+                request.host_socket.clone(),
+            )
+            .await?,
+        );
         let distributed = self
             .stage()
             .distribute(
@@ -1239,6 +1292,7 @@ impl HostCallHandler for VenueHost {
                     "venue.remove" => self.remove(decode(payload)?).await,
                     "venue.params" => self.params(decode(payload)?).await,
                     "venue.distribute" => self.distribute(decode(payload)?).await,
+                    "venue.move" => self.move_light(decode(payload)?).await,
                     "venue.chain" => self.chain(decode(payload)?).await,
                     "venue.query" => self.query(decode(payload)?).await,
                     "venue.extent" => self.extent(decode(payload)?).await,
@@ -1565,6 +1619,20 @@ struct TilesRequest {
 #[serde(rename_all = "camelCase")]
 struct RemoveRequest {
     node_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MoveRequest {
+    node_id: String,
+    /// The host to hang it on; `None` is the room, or with `stay` the host
+    /// the light already has.
+    host_node_id: Option<String>,
+    face: Option<[f64; 3]>,
+    /// Keep the face it hangs on and move along it.
+    #[serde(default)]
+    stay: bool,
+    layout: DistributeLayout,
 }
 
 #[derive(Deserialize)]

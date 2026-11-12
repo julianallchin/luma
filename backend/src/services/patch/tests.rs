@@ -612,6 +612,7 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
                 count: 2,
                 layout: Layout::At(if step < 2 { -2.0 } else { -3.0 }),
                 across_m: 0.0,
+                trim_m: 0.0,
                 label_prefix: None,
             };
             let report = distribute(&mut access, &fixtures_root(), request.clone())
@@ -957,6 +958,7 @@ async fn lights_on_the_floor_land_where_asked_and_only_collide_in_place() {
         count: 1,
         layout: Layout::At(1.5),
         across_m,
+        trim_m: 0.0,
         label_prefix: None,
     };
     let mut placed = Vec::new();
