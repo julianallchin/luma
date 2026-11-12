@@ -117,7 +117,7 @@ impl TrackHost {
         let mut access = VenueAccess::<Write>::write_as(
             &self.pool,
             VenueResource::Score(&self.scope.score_id),
-            self.actor.as_deref(),
+            self.attribution.get(),
         )
         .await
         .map_err(|error| HostCallError::new("forbidden", error))?;

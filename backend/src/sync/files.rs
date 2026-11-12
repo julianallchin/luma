@@ -10,6 +10,7 @@ use sqlx::SqlitePool;
 use super::error::SyncError;
 use crate::storage::StorageRoot;
 use crate::sync::supabase::Storage;
+use crate::sync::triggers::{AttributedWrite, Attribution};
 
 /// Stats from a file sync operation.
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -55,7 +56,7 @@ async fn upload<Record, Recorded>(
 ) -> bool
 where
     Record: FnOnce(String) -> Recorded,
-    Recorded: std::future::Future<Output = Result<(), sqlx::Error>>,
+    Recorded: std::future::Future<Output = Result<(), String>>,
 {
     match remote
         .upload_file(bucket, object, bytes, content_type, token)
@@ -73,6 +74,21 @@ where
             false
         }
     }
+}
+
+/// Write down where an upload landed. Nobody edited the row: the app moved
+/// its bytes, so the change uploads as `app:media-sync` and the server's
+/// history does not put it on the person.
+pub(super) async fn record_upload(
+    pool: &SqlitePool,
+    query: sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>,
+) -> Result<(), String> {
+    let mut write = AttributedWrite::begin(pool, Attribution::MEDIA_SYNC).await?;
+    query
+        .execute(write.connection())
+        .await
+        .map_err(|error| error.to_string())?;
+    write.commit().await
 }
 
 /// Fetch the object `storage_path` (`bucket/object`) names and write it to
@@ -158,12 +174,13 @@ pub async fn upload_pending_audio(
             &format!("audio {}", row.id),
             &mut stats.errors,
             |full_path| async move {
-                sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
-                    .bind(full_path)
-                    .bind(&row.id)
-                    .execute(pool)
-                    .await
-                    .map(drop)
+                record_upload(
+                    pool,
+                    sqlx::query("UPDATE tracks SET storage_path = ? WHERE id = ?")
+                        .bind(full_path)
+                        .bind(&row.id),
+                )
+                .await
             },
         )
         .await;
@@ -233,15 +250,17 @@ pub async fn upload_pending_stems(
             &format!("stem {}/{}", row.track_id, row.stem_name),
             &mut stats.errors,
             |full_path| async move {
-                sqlx::query(
-                    "UPDATE track_stems SET storage_path = ? WHERE track_id = ? AND stem_name = ?",
+                record_upload(
+                    pool,
+                    sqlx::query(
+                        "UPDATE track_stems SET storage_path = ?
+                          WHERE track_id = ? AND stem_name = ?",
+                    )
+                    .bind(full_path)
+                    .bind(&row.track_id)
+                    .bind(&row.stem_name),
                 )
-                .bind(full_path)
-                .bind(&row.track_id)
-                .bind(&row.stem_name)
-                .execute(pool)
                 .await
-                .map(drop)
             },
         )
         .await;
@@ -308,12 +327,13 @@ pub async fn upload_pending_album_art(
             &format!("art {}", row.id),
             &mut stats.errors,
             |full_path| async move {
-                sqlx::query("UPDATE tracks SET album_art_storage_path = ? WHERE id = ?")
-                    .bind(full_path)
-                    .bind(&row.id)
-                    .execute(pool)
-                    .await
-                    .map(drop)
+                record_upload(
+                    pool,
+                    sqlx::query("UPDATE tracks SET album_art_storage_path = ? WHERE id = ?")
+                        .bind(full_path)
+                        .bind(&row.id),
+                )
+                .await
             },
         )
         .await;
@@ -378,6 +398,7 @@ pub async fn upload_pending_agent_figures(
                     .execute(pool)
                     .await
                     .map(drop)
+                    .map_err(|error| error.to_string())
             },
         )
         .await;

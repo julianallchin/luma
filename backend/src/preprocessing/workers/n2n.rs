@@ -108,8 +108,15 @@ impl Preprocessor for N2NPreprocessor {
         let onsets_json = serde_json::to_string(&onsets.onsets)
             .map_err(|e| format!("Failed to serialize drum onsets: {e}"))?;
 
-        tracks_db::upsert_track_drum_onsets(ctx.pool(), track_id, &onsets_json, self.version())
-            .await
+        let mut write = ctx.publish().await?;
+        tracks_db::upsert_track_drum_onsets(
+            write.connection(),
+            track_id,
+            &onsets_json,
+            self.version(),
+        )
+        .await?;
+        write.commit().await
     }
 }
 

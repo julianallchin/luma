@@ -469,7 +469,7 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
         downbeat_offset: 0.5,
         beats_per_bar: 4,
     };
-    crate::database::local::tracks::record_track_beats(&f.pool, TRACK_ID, &reanalysed, 1)
+    crate::database::local::tracks::record_track_beats(&mut *f.pool.acquire().await.unwrap(), TRACK_ID, &reanalysed, 1)
         .await
         .unwrap();
     let out = f

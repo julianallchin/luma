@@ -52,6 +52,8 @@ impl Preprocessor for BeatGridPreprocessor {
             downbeat_offset: beat_data.downbeat_offset,
             beats_per_bar: beat_data.beats_per_bar,
         };
-        tracks_db::record_track_beats(ctx.pool(), track_id, &grid, self.version()).await
+        let mut write = ctx.publish().await?;
+        tracks_db::record_track_beats(write.connection(), track_id, &grid, self.version()).await?;
+        write.commit().await
     }
 }

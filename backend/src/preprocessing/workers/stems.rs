@@ -67,10 +67,10 @@ impl Preprocessor for StemsPreprocessor {
         .map_err(|e| format!("Stem worker task failed: {e}"))??;
         ctx.checkpoint()?;
 
+        let mut write = ctx.publish().await?;
         for stem in &stem_files {
-            ctx.checkpoint()?;
             tracks_db::upsert_track_stem(
-                ctx.pool(),
+                write.connection(),
                 track_id,
                 &stem.name,
                 &stem.path.to_string_lossy(),
@@ -79,8 +79,7 @@ impl Preprocessor for StemsPreprocessor {
             )
             .await?;
         }
-
-        Ok(())
+        write.commit().await
     }
 }
 

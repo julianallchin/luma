@@ -1055,7 +1055,7 @@ mod tests {
             downbeat_offset: 0.5,
             beats_per_bar: 4,
         };
-        tracks_db::record_track_beats(pool, "t1", &grid, version("beat_grid"))
+        tracks_db::record_track_beats(&mut *pool.acquire().await.unwrap(), "t1", &grid, version("beat_grid"))
             .await
             .unwrap();
         let stems = services.storage.stems_root().join("hash");
@@ -1108,7 +1108,7 @@ mod tests {
             downbeat_offset: downbeats[0],
             beats_per_bar: 4,
         };
-        tracks_db::record_track_beats(pool, "t1", &grid([0.5, 2.5, 4.5]), 1)
+        tracks_db::record_track_beats(&mut *pool.acquire().await.unwrap(), "t1", &grid([0.5, 2.5, 4.5]), 1)
             .await
             .unwrap();
         sqlx::query(
@@ -1148,7 +1148,7 @@ mod tests {
 
         // The song is analysed again, or another device's grid syncs in:
         // a second grid, beside the one the row was computed against.
-        tracks_db::record_track_beats(pool, "t1", &grid([0.0, 2.0, 4.0]), 1)
+        tracks_db::record_track_beats(&mut *pool.acquire().await.unwrap(), "t1", &grid([0.0, 2.0, 4.0]), 1)
             .await
             .unwrap();
         assert!(queued().await, "reconcile would not queue the track");

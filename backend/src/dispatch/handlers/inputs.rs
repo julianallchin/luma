@@ -6,6 +6,7 @@ use crate::error::CommandError;
 pub use crate::inputs::{
     Address, Binding, Controller, ControllerState, InputState, LastInput, Mode,
 };
+use crate::sync::triggers::Attribution;
 
 async fn open(services: &AppServices, venue_id: &str) -> Result<(), CommandError> {
     let _access = VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(venue_id)).await?;
@@ -54,7 +55,12 @@ pub async fn input_learn(
     open_unless_open(services, &venue_id).await?;
     Ok(services
         .inputs
-        .learn(&control, mode, controller_id.as_deref(), None)
+        .learn(
+            &control,
+            mode,
+            controller_id.as_deref(),
+            Attribution::PERSON,
+        )
         .await?)
 }
 
@@ -75,7 +81,7 @@ pub async fn input_update_binding(
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     Ok(services
         .inputs
-        .update(&venue_id, &binding_id, mode, invert, None)
+        .update(&venue_id, &binding_id, mode, invert, Attribution::PERSON)
         .await?)
 }
 
@@ -86,7 +92,10 @@ pub async fn input_unbind(
 ) -> Result<(), CommandError> {
     let _access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    Ok(services.inputs.unbind(&venue_id, &binding_id, None).await?)
+    Ok(services
+        .inputs
+        .unbind(&venue_id, &binding_id, Attribution::PERSON)
+        .await?)
 }
 
 /// Rename controller `controller_id` of the venue.
@@ -99,7 +108,7 @@ pub async fn input_rename_controller(
     open_unless_open(services, &venue_id).await?;
     services
         .inputs
-        .change_controller(&controller_id, None, |controller| {
+        .change_controller(&controller_id, Attribution::PERSON, |controller| {
             controller.name = name;
             Ok(())
         })
@@ -129,7 +138,7 @@ pub async fn input_map_page(
     open_unless_open(services, &venue_id).await?;
     services
         .inputs
-        .map_page(&controller_id, page, &set.patterns, None)
+        .map_page(&controller_id, page, &set.patterns, Attribution::PERSON)
         .await
         .map_err(CommandError::Invalid)
 }

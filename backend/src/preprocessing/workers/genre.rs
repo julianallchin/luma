@@ -87,14 +87,16 @@ impl Preprocessor for GenrePreprocessor {
         let labels_json = serde_json::to_string(&analysis.labels)
             .map_err(|e| format!("Failed to serialize genre labels: {e}"))?;
 
+        let mut write = ctx.publish().await?;
         tracks_db::upsert_track_genres(
-            ctx.pool(),
+            write.connection(),
             track_id,
             &genres_json,
             &labels_json,
             self.version(),
         )
-        .await
+        .await?;
+        write.commit().await
     }
 }
 

@@ -112,14 +112,16 @@ impl Preprocessor for ClassifierPreprocessor {
         let tag_order_json = serde_json::to_string(&analysis.tag_order)
             .map_err(|e| format!("Failed to serialize tag order: {e}"))?;
 
+        let mut write = ctx.publish().await?;
         tracks_db::upsert_track_bar_classifications(
-            ctx.pool(),
+            write.connection(),
             track_id,
             &classifications_json,
             &tag_order_json,
             self.version(),
         )
-        .await
+        .await?;
+        write.commit().await
     }
 }
 

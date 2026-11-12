@@ -357,6 +357,14 @@ pub async fn run_python_cell_inner(
 
     let workspace_for_cell = Arc::clone(&workspace);
     let edit_scope = resolved.track_edit;
+    // What this cell writes is the thread's actor's doing, in this
+    // conversation, on the turn that ran it. Every cell of the turn names the
+    // same message, so history reads the whole turn as one group of changes.
+    let attribution = crate::sync::triggers::TurnAttribution::turn(
+        thread.actor.as_deref(),
+        &thread_id,
+        turn_message_id.as_deref(),
+    );
     // A room is renderable whenever one is in scope, whether or not this thread
     // may edit a track in it — a graph agent working against a venue still gets
     // to look at it. When a score *is* pinned, that score is what lights it.
@@ -371,7 +379,7 @@ pub async fn run_python_cell_inner(
             track_scope,
             edit_scope,
             draft_id.clone(),
-            thread.actor.clone(),
+            attribution.clone(),
         ))
     });
     let venue = scope.venue_id.clone().map(|venue_id| {
@@ -381,7 +389,7 @@ pub async fn run_python_cell_inner(
             resource_root.to_path_buf(),
             Arc::clone(&workspace),
             venue_id,
-            thread.actor.clone(),
+            attribution.clone(),
             track.clone(),
         )
     });
@@ -391,7 +399,7 @@ pub async fn run_python_cell_inner(
             pool.clone(),
             resource_root.to_path_buf(),
             venue_id,
-            thread.actor.clone(),
+            attribution,
             Arc::clone(&live.perform),
             Arc::clone(&live.inputs),
         )

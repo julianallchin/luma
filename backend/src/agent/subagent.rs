@@ -374,18 +374,26 @@ async fn publish(ctx: &ToolContext<'_>, child_thread_id: &str, _text: &str) -> S
     }
 }
 
-/// The merge is the child's edit, so its rows are attributed to the child's
-/// actor. One transaction, so the attribution cannot outlive it and a merge
+/// The merge is the child's edit, so its rows are attributed as the child's
+/// own cells were: to its actor, its thread and the prompt that started its
+/// turn. One transaction, so the attribution cannot outlive it and a merge
 /// that fails halfway leaves the live score as it was.
 async fn merge_draft(pool: &sqlx::SqlitePool, child_thread_id: &str) -> Result<(), String> {
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|error| error.to_string())?;
-    let found: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT draft.id, thread.actor FROM drafts draft
-         LEFT JOIN agent_threads thread ON thread.id = draft.thread_id
-         WHERE draft.thread_id = ?",
+    // The turn's message is the newest a principal wrote in the child's
+    // thread, which is what the child's cells named while they ran.
+    let found: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT draft.id, thread.actor,
+                (SELECT message.id FROM agent_thread_messages message
+                  WHERE message.created_in_thread_id = draft.thread_id
+                    AND message.role IN ('user', 'session')
+                  ORDER BY message.depth DESC LIMIT 1)
+           FROM drafts draft
+           LEFT JOIN agent_threads thread ON thread.id = draft.thread_id
+          WHERE draft.thread_id = ?",
     )
     .bind(child_thread_id)
     .fetch_optional(&mut *transaction)
@@ -393,20 +401,17 @@ async fn merge_draft(pool: &sqlx::SqlitePool, child_thread_id: &str) -> Result<(
     .map_err(|error| error.to_string())?;
     // A child with no score in scope had nothing to draft and nothing to
     // merge; its answer is the whole of its contribution.
-    let Some((draft, actor)) = found else {
+    let Some((draft, actor, message)) = found else {
         return Ok(());
     };
-    if let Some(actor) = actor.as_deref() {
-        crate::sync::triggers::attribute(
-            &mut transaction,
-            crate::sync::triggers::Attribution::actor(actor),
-        )
-        .await?;
-    }
+    let attribution = crate::sync::triggers::TurnAttribution::turn(
+        actor.as_deref(),
+        child_thread_id,
+        message.as_deref(),
+    );
+    crate::sync::triggers::attribute(&mut transaction, attribution.get()).await?;
     drafts::merge(&mut transaction, &draft).await?;
-    if actor.is_some() {
-        crate::sync::triggers::unattribute(&mut transaction).await?;
-    }
+    crate::sync::triggers::unattribute(&mut transaction).await?;
     transaction
         .commit()
         .await

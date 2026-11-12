@@ -13,17 +13,30 @@ use crate::database::local::scores::{get_score, rows};
 use crate::database::local::tracks::current_grid_id;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, VenueResource, Write};
 use crate::models::scores::Score;
+use crate::sync::triggers::Attribution;
 
 /// Create a score on a `(track, venue)` pair. A pair carries as many scores as
 /// there are people who annotated it, so this always makes a new one.
+/// `attribution` says who made it when that is not the person alone: an MCP
+/// client opening a session mints its score before it has a thread.
 pub async fn create_score(
     pool: &SqlitePool,
     request_id: &str,
     track_id: &str,
     venue_id: &str,
     name: Option<&str>,
+    attribution: Attribution<'_>,
 ) -> Result<Score, String> {
-    insert_score(pool, request_id, track_id, venue_id, name, false).await
+    insert_score(
+        pool,
+        request_id,
+        track_id,
+        venue_id,
+        name,
+        attribution,
+        false,
+    )
+    .await
 }
 
 /// Give the track durable membership in the venue: an existing score for the
@@ -34,8 +47,18 @@ pub async fn ensure_venue_score(
     track_id: &str,
     venue_id: &str,
     name: Option<&str>,
+    attribution: Attribution<'_>,
 ) -> Result<Score, String> {
-    insert_score(pool, request_id, track_id, venue_id, name, true).await
+    insert_score(
+        pool,
+        request_id,
+        track_id,
+        venue_id,
+        name,
+        attribution,
+        true,
+    )
+    .await
 }
 
 async fn insert_score(
@@ -44,10 +67,12 @@ async fn insert_score(
     track_id: &str,
     venue_id: &str,
     name: Option<&str>,
+    attribution: Attribution<'_>,
     reuse_existing: bool,
 ) -> Result<Score, String> {
     let request_id = request_uuid(request_id)?;
-    let mut access = VenueAccess::<Write>::write(pool, VenueResource::Venue(venue_id)).await?;
+    let mut access =
+        VenueAccess::<Write>::write_as(pool, VenueResource::Venue(venue_id), attribution).await?;
     let owner = access.principal().to_owned();
     let score_id = derived_id(&principal_key(&owner), "score", &request_id, "subject");
     let existing: Option<String> = if reuse_existing {
