@@ -50,6 +50,7 @@ fn plan(
             laser: draws,
         },
         span,
+        source: None,
     })
 }
 /// A clip's plan over `cells`. Every clip graph writes its lighting to the

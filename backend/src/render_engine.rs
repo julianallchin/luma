@@ -186,6 +186,16 @@ impl RenderEngine {
         SceneUpdate { target, generation }
     }
 
+    /// The scene on show in the active slot. Clones share what it has learnt
+    /// of when its heads are lit.
+    pub(crate) fn active_scene(&self) -> Option<Scene> {
+        self.inner
+            .lock()
+            .expect("render engine poisoned")
+            .active_scene
+            .clone()
+    }
+
     /// Begin showing `score_id` in the active slot: a [`Self::begin_scene_update`]
     /// that also records whose scene the slot now holds.
     pub(crate) fn begin_score_update(&self, score_id: &str) -> SceneUpdate {

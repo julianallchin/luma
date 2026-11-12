@@ -11,7 +11,8 @@
 //! stage draws the beam from and `fixtures::engine` maps onto the DMX range.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use fixture_kinematics::{aim_at, Mount};
 use glam::Vec3;
@@ -22,11 +23,14 @@ use crate::eval::{Arena, CompiledAnnotation};
 use crate::models::fixtures::FixtureDefinition;
 use crate::models::universe::{PrimitiveState, UniverseState};
 
-/// Move-in-black sample step, in seconds: about 1/64 beat at 120 BPM.
+/// Move-in-black sample step, in seconds: about 1/64 beat at 120 BPM. A
+/// power of two, so every sample time is exact.
 const LIT_STEP: f32 = 1.0 / 128.0;
 
-/// Times sampled per batch when the lit table is built.
-const LIT_CHUNK: usize = 2048;
+/// Samples per [`Stretch`] of the lit table: two seconds. Small enough that
+/// a song is many stretches to share between cores, and that an edited clip
+/// puts few of them out of date.
+const LIT_CHUNK: usize = 256;
 
 /// A later frame more than this far ahead of the last one is a seek.
 const SEEK_AHEAD: f32 = 1.0;
@@ -224,74 +228,197 @@ fn lit(state: &PrimitiveState) -> bool {
     state.dimmer > 0.0 && state.color.iter().any(|c| *c > 0.0)
 }
 
-/// When each aimed head is lit, sampled every [`LIT_STEP`]: runs of lit
-/// sample times, first and last sample of each, in order.
-#[derive(Debug, Default)]
+/// When a scene samples the light its move in black looks ahead through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LookAhead {
+    /// Before the scene is built: every frame is exact from the first. For
+    /// anything that reports what it renders: an export, a preview, a deck.
+    UpFront,
+    /// Afterwards, off the caller's thread, by [`Scene::look_ahead`], nearest
+    /// the playhead first. Until a stretch of the score is sampled, a head
+    /// dark there holds the aim its clips give it. For the editor, where
+    /// light must show at once.
+    ///
+    /// [`Scene::look_ahead`]: crate::eval::Scene::look_ahead
+    Deferred,
+}
+
+/// [`LIT_CHUNK`] samples of the lit table.
+#[derive(Debug)]
+struct Stretch {
+    /// Per sample, per head of the table: whether it is lit.
+    lit: Vec<bool>,
+    /// Per head: its first and last lit sample in the stretch.
+    edges: Vec<Option<(usize, usize)>>,
+}
+
+/// When each aimed head is lit: the composite of the layers that can light
+/// one, sampled every [`LIT_STEP`] from time zero.
+///
+/// The table fills a [`Stretch`] at a time, in any order, and each is
+/// sampled once. Where it is not sampled yet, nothing is known.
+#[derive(Debug)]
 struct Lit {
-    runs: HashMap<String, Vec<(f32, f32)>>,
+    /// The aimed heads, in id order: a stretch's columns.
+    heads: Vec<String>,
+    /// The layers that can light one of them.
+    layers: Vec<CompiledAnnotation>,
+    stretches: Vec<OnceLock<Arc<Stretch>>>,
+    /// The time a frame last looked from, as `f32` bits: where sampling
+    /// starts.
+    wanted: AtomicU32,
 }
 
 impl Lit {
-    /// Sample the composite of `layers` and record when each head in `rig`
-    /// is lit.
-    fn build(
-        layers: &[CompiledAnnotation],
-        rig: &Rig,
-        scratch: &mut Arena,
-    ) -> Result<Self, String> {
-        // Per head: whether the last sample was lit, and the runs so far.
-        let mut heads: Vec<(&str, bool, Vec<(f32, f32)>)> = rig
-            .heads
-            .keys()
-            .map(|id| (id.as_str(), false, Vec::new()))
-            .collect();
-        let start = layers
-            .iter()
-            .map(|a| a.span.0)
-            .fold(f32::INFINITY, f32::min);
-        let end = layers
-            .iter()
-            .map(|a| a.span.1)
-            .fold(f32::NEG_INFINITY, f32::max);
-        if end > start {
-            let count = ((end - start) / LIT_STEP).ceil() as usize + 1;
-            for first in (0..count).step_by(LIT_CHUNK) {
-                let times: Vec<f32> = (first..count.min(first + LIT_CHUNK))
-                    .map(|i| start + i as f32 * LIT_STEP)
-                    .collect();
-                let frames = super::scene::composite(layers, &times, scratch, Some(rig))?;
-                for (t, frame) in times.iter().zip(&frames) {
-                    for (id, was, runs) in &mut heads {
-                        let now = frame.primitives.get(*id).is_some_and(lit);
-                        match (now, *was, runs.last_mut()) {
-                            (true, true, Some(run)) => run.1 = *t,
-                            (true, _, _) => runs.push((*t, *t)),
-                            _ => {}
-                        }
-                        *was = now;
-                    }
-                }
-            }
+    /// An empty table of when `layers` light the heads of `rig`.
+    fn new(layers: Vec<CompiledAnnotation>, rig: &Rig) -> Self {
+        let mut heads: Vec<String> = rig.heads.keys().cloned().collect();
+        heads.sort();
+        let end = layers.iter().map(|a| a.span.1).fold(0.0, f32::max);
+        let samples = (end / LIT_STEP).ceil() as usize + 1;
+        Self {
+            heads,
+            stretches: (0..samples.div_ceil(LIT_CHUNK))
+                .map(|_| OnceLock::new())
+                .collect(),
+            layers,
+            wanted: AtomicU32::default(),
         }
-        let runs = heads
-            .into_iter()
-            .filter(|(_, _, runs)| !runs.is_empty())
-            .map(|(id, _, runs)| (id.to_owned(), runs))
-            .collect();
-        Ok(Self { runs })
     }
 
-    /// The time whose aim a head dark at `t` takes: its next lit sample, or
-    /// its last lit sample once it is never lit again. `None` when the table
-    /// has it lit at `t` (it is dark only between samples) or never lit.
-    fn source(&self, id: &str, t: f32) -> Option<f32> {
-        let runs = self.runs.get(id)?;
-        let next = runs.partition_point(|run| run.1 < t);
-        match runs.get(next) {
-            Some(run) if run.0 <= t => None,
-            Some(run) => Some(run.0),
-            None => runs.last().map(|run| run.1),
+    /// Sample each of `stretches` not sampled yet, in parallel.
+    fn sample(
+        &self,
+        rig: &Rig,
+        stretches: impl rayon::iter::IntoParallelIterator<Item = usize>,
+    ) -> Result<(), String> {
+        use rayon::prelude::*;
+        stretches
+            .into_par_iter()
+            .map_init(Arena::default, |scratch, c| {
+                if self.stretches[c].get().is_some() {
+                    return Ok(());
+                }
+                let times: Vec<f32> = (c * LIT_CHUNK..(c + 1) * LIT_CHUNK)
+                    .map(|i| i as f32 * LIT_STEP)
+                    .collect();
+                let frames = super::scene::composite(&self.layers, &times, scratch, Some(rig))?;
+                let lit: Vec<bool> = frames
+                    .iter()
+                    .flat_map(|frame| {
+                        self.heads
+                            .iter()
+                            .map(|id| frame.primitives.get(id).is_some_and(lit))
+                    })
+                    .collect();
+                let edges = (0..self.heads.len())
+                    .map(|head| {
+                        let mut samples =
+                            (0..LIT_CHUNK).filter(|i| lit[i * self.heads.len() + head]);
+                        let first = samples.next()?;
+                        Some((first, samples.next_back().unwrap_or(first)))
+                    })
+                    .collect();
+                // Another thread may have sampled it meanwhile, to the same.
+                let _ = self.stretches[c].set(Arc::new(Stretch { lit, edges }));
+                Ok(())
+            })
+            .collect()
+    }
+
+    /// Up to `limit` stretches not sampled yet: from where a frame last
+    /// looked to the end, which is what it looks ahead through, then the rest.
+    fn missing(&self, limit: usize) -> Vec<usize> {
+        let wanted = f32::from_bits(self.wanted.load(Ordering::Relaxed));
+        let at = ((wanted / LIT_STEP).max(0.0) as usize / LIT_CHUNK).min(self.stretches.len());
+        (at..self.stretches.len())
+            .chain(0..at)
+            .filter(|c| self.stretches[*c].get().is_none())
+            .take(limit)
+            .collect()
+    }
+
+    /// What stretch `c` was sampled from: the source of each layer on during
+    /// it, bottom first. `None` when one of them does not say.
+    fn sources(&self, c: usize) -> Option<Vec<u64>> {
+        let first = (c * LIT_CHUNK) as f32 * LIT_STEP;
+        let last = ((c + 1) * LIT_CHUNK - 1) as f32 * LIT_STEP;
+        self.layers
+            .iter()
+            .filter(|layer| layer.span.0 <= last && layer.span.1 > first)
+            .map(|layer| layer.plan.source)
+            .collect()
+    }
+
+    /// Take each stretch `previous` sampled from the same layers on the same
+    /// heads, which is every stretch an edit since did not reach.
+    fn keep(&self, previous: &Lit) {
+        if self.heads != previous.heads {
+            return;
         }
+        for (c, (stretch, old)) in self.stretches.iter().zip(&previous.stretches).enumerate() {
+            let Some(old) = old.get() else {
+                continue;
+            };
+            if self
+                .sources(c)
+                .is_some_and(|sources| Some(sources) == previous.sources(c))
+            {
+                let _ = stretch.set(old.clone());
+            }
+        }
+    }
+
+    /// Whether `head` is lit at sample `i`: dark outside the table, `None`
+    /// where the table is not sampled yet.
+    fn lit_at(&self, head: usize, i: i64) -> Option<bool> {
+        let Some(stretch) = usize::try_from(i)
+            .ok()
+            .and_then(|i| self.stretches.get(i / LIT_CHUNK))
+        else {
+            return Some(false);
+        };
+        let at = i as usize % LIT_CHUNK;
+        Some(stretch.get()?.lit[at * self.heads.len() + head])
+    }
+
+    /// The time whose aim `head`, dark at `t`, takes: its next lit sample, or
+    /// its last lit sample once it is never lit again. `None` when the table
+    /// has it lit at `t` (it is dark only between samples), never lit, or
+    /// does not know yet.
+    fn source(&self, head: usize, t: f32) -> Option<f32> {
+        let at = t / LIT_STEP;
+        if self.lit_at(head, at.floor() as i64)? && self.lit_at(head, at.ceil() as i64)? {
+            return None;
+        }
+        let width = self.heads.len();
+        let from = at.ceil().max(0.0) as usize;
+        for c in from / LIT_CHUNK..self.stretches.len() {
+            let stretch = self.stretches[c].get()?;
+            let base = c * LIT_CHUNK;
+            let Some((first, last)) = stretch.edges[head].filter(|edges| base + edges.1 >= from)
+            else {
+                continue;
+            };
+            let next = (from.saturating_sub(base).max(first)..=last)
+                .find(|i| stretch.lit[i * width + head])
+                .expect("the last sample is lit");
+            return Some((base + next) as f32 * LIT_STEP);
+        }
+        for c in (0..self.stretches.len().min(from / LIT_CHUNK + 1)).rev() {
+            let stretch = self.stretches[c].get()?;
+            let base = c * LIT_CHUNK;
+            let Some((first, last)) = stretch.edges[head].filter(|edges| base + edges.0 < from)
+            else {
+                continue;
+            };
+            let previous = (first..=last.min(from - 1 - base))
+                .rev()
+                .find(|i| stretch.lit[i * width + head])
+                .expect("the first sample is lit");
+            return Some((base + previous) as f32 * LIT_STEP);
+        }
+        None
     }
 }
 
@@ -351,7 +478,15 @@ pub(crate) struct Aiming {
 impl Aiming {
     /// Everything [`Self::apply`] needs, or `None` when no layer aims a head
     /// in `rig`.
-    pub(crate) fn new(layers: &[CompiledAnnotation], mut rig: Rig) -> Result<Option<Self>, String> {
+    ///
+    /// # Errors
+    /// Fails when the light is sampled up front and a layer cannot be
+    /// evaluated.
+    pub(crate) fn new(
+        layers: &[CompiledAnnotation],
+        mut rig: Rig,
+        look: LookAhead,
+    ) -> Result<Option<Self>, String> {
         let aimed: std::collections::HashSet<&str> = layers
             .iter()
             .filter(|layer| layer.plan.outputs.aim)
@@ -374,12 +509,39 @@ impl Aiming {
             })
             .cloned()
             .collect();
-        let lit = Lit::build(&lighting, &rig, &mut Arena::default())?;
+        let lit = Lit::new(lighting, &rig);
+        if look == LookAhead::UpFront {
+            lit.sample(&rig, 0..lit.stretches.len())?;
+        }
         Ok(Some(Self {
             rig,
             lit,
             solver: Mutex::default(),
         }))
+    }
+
+    /// Keep what `previous` knows of when heads are lit, wherever the same
+    /// clips light them.
+    pub(crate) fn keep(&self, previous: &Aiming) {
+        self.lit.keep(&previous.lit);
+    }
+
+    /// Sample what is left of when heads are lit, in the background, until
+    /// it is all known or nothing holds `this` any more.
+    pub(crate) fn look_ahead(this: &Arc<Self>) {
+        let this = Arc::downgrade(this);
+        rayon::spawn(move || {
+            while let Some(aiming) = this.upgrade() {
+                let missing = aiming.lit.missing(rayon::current_num_threads());
+                if missing.is_empty() {
+                    return;
+                }
+                if let Err(error) = aiming.lit.sample(&aiming.rig, missing) {
+                    log::error!("Move in black: {error}");
+                    return;
+                }
+            }
+        });
     }
 
     pub(crate) fn rig(&self) -> &Rig {
@@ -400,12 +562,15 @@ impl Aiming {
         scratch: &mut Arena,
     ) -> Result<(), String> {
         let mut moves: Vec<(usize, &str, f32)> = Vec::new();
+        if let Some(t) = times.last() {
+            self.lit.wanted.store(t.to_bits(), Ordering::Relaxed);
+        }
         for (k, (t, frame)) in times.iter().zip(frames.iter()).enumerate() {
-            for id in self.lit.runs.keys() {
+            for (head, id) in self.lit.heads.iter().enumerate() {
                 if frame.primitives.get(id).is_some_and(lit) {
                     continue;
                 }
-                if let Some(source) = self.lit.source(id, *t) {
+                if let Some(source) = self.lit.source(head, *t) {
                     moves.push((k, id, source));
                 }
             }
@@ -788,6 +953,68 @@ mod tests {
         );
         // Over no aim, alpha is the weight, as for a Replace clip.
         assert_eq!(offset(0.5).weight, 0.5);
+    }
+
+    /// The two-clip score of the first test, its second wash from `second`
+    /// with source `source`, looking ahead as `look` says.
+    fn looking(second: f64, source: u64, look: LookAhead) -> Aiming {
+        let sourced = |mut layer: CompiledAnnotation, source| {
+            Arc::make_mut(&mut layer.plan).source = Some(source);
+            layer
+        };
+        let layers = [
+            sourced(wash(0.0, 2.0, 1.0), 1),
+            sourced(aim(0.0, 2.0, FIRST), 2),
+            sourced(wash(second, 2.0, 1.0), source),
+            sourced(aim(second, 2.0, SECOND), 4),
+        ];
+        Aiming::new(&layers, rig(), look).unwrap().unwrap()
+    }
+
+    #[test]
+    fn a_deferred_look_ahead_knows_nothing_until_sampled_then_the_same() {
+        let exact = looking(4.0, 3, LookAhead::UpFront);
+        let deferred = looking(4.0, 3, LookAhead::Deferred);
+        let times = [0.5, 2.05, 3.0, 3.99, 5.0, 9.0];
+        // Unsampled, a dark head is not moved: it holds what its clips give.
+        assert!(times.iter().all(|t| deferred.lit.source(0, *t).is_none()));
+        // Stretches are sampled in any order.
+        let last = deferred.lit.stretches.len() - 1;
+        deferred.lit.sample(&deferred.rig, vec![last]).unwrap();
+        let rest = deferred.lit.missing(usize::MAX);
+        assert_eq!(rest.len(), last);
+        deferred.lit.sample(&deferred.rig, rest).unwrap();
+        for t in times {
+            assert_eq!(deferred.lit.source(0, t), exact.lit.source(0, t), "at {t}");
+        }
+        assert_eq!(exact.lit.source(0, 3.0), Some(4.0));
+    }
+
+    #[test]
+    fn an_edit_keeps_the_look_ahead_it_did_not_reach() {
+        let before = looking(4.0, 3, LookAhead::UpFront);
+        // The second wash moves from 4–6 s to 6–8 s.
+        let after = looking(6.0, 5, LookAhead::Deferred);
+        after.keep(&before);
+        let known = |t: f32| after.lit.lit_at(0, (t / LIT_STEP) as i64).is_some();
+        assert!(known(1.0) && known(3.0), "untouched stretches carry over");
+        assert!(!known(5.0), "where the wash was is sampled again");
+        assert!(!known(7.0), "and where it went");
+        // Sampling the rest gives what sampling it all would.
+        after
+            .lit
+            .sample(&after.rig, after.lit.missing(usize::MAX))
+            .unwrap();
+        let exact = looking(6.0, 5, LookAhead::UpFront);
+        for t in [1.0, 3.0, 5.0, 7.0, 9.0] {
+            assert_eq!(after.lit.source(0, t), exact.lit.source(0, t), "at {t}");
+        }
+        // Heads the table was not sampled for keep nothing of it.
+        let mut other = Rig::default();
+        other.insert("fx:1".into(), head(&pose([0.0; 3]), &mover(540, 270)));
+        let elsewhere = Lit::new(Vec::new(), &other);
+        elsewhere.keep(&before.lit);
+        assert!(elsewhere.stretches.iter().all(|s| s.get().is_none()));
     }
 
     #[test]

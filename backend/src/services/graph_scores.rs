@@ -18,8 +18,9 @@ pub(crate) async fn prepare_scene(
     controls: &crate::controls::ControlBanks,
     timing: Grid<'_>,
     score: &Score,
+    look: crate::eval::aim::LookAhead,
 ) -> Result<crate::eval::Scene, String> {
-    Ok(prepare_scene_data(
+    let SceneData { scene, rig, .. } = prepare_scene_data(
         access,
         fixtures_root,
         storage,
@@ -28,13 +29,15 @@ pub(crate) async fn prepare_scene(
         score,
         false,
     )
-    .await?
-    .scene)
+    .await?;
+    scene.aim(rig, look)
 }
 
-/// A compiled scene and the cells each clip lights.
+/// A compiled scene, the heads its clips aim, which it does not aim yet, and
+/// the cells each clip lights.
 struct SceneData {
     scene: crate::eval::Scene,
+    rig: crate::eval::aim::Rig,
     cells: std::collections::BTreeMap<String, Vec<luma_patterns::Cell>>,
 }
 
@@ -65,10 +68,13 @@ async fn prepare_scene_data(
         log::warn!("score clip left out of the scene: {error}");
         Ok(())
     };
+    // Clips are checked, prepared and compiled side by side: a score has
+    // hundreds, and each is independent of the rest.
+    use rayon::prelude::*;
     let score = &Score {
         clips: score
             .clips
-            .iter()
+            .par_iter()
             .filter(
                 |(id, clip)| match Score::validate_clip(&library, id, clip) {
                     Ok(()) => true,
@@ -84,6 +90,7 @@ async fn prepare_scene_data(
     if score.clips.is_empty() {
         return Ok(SceneData {
             scene: crate::eval::Scene::default(),
+            rig: Default::default(),
             cells: Default::default(),
         });
     }
@@ -92,10 +99,8 @@ async fn prepare_scene_data(
             .await?
             .ok_or("analyze the track before placing effects on its musical grid")?;
     let clock = grid.timeline().map_err(|error| error.to_string())?;
-    let mut compiled = Vec::new();
-    let mut clip_cells = std::collections::BTreeMap::new();
-    let mut prepared_clips = Vec::new();
-    let mut requests = Vec::new();
+    // Each clip's cells, read once per selection.
+    let mut selected = Vec::new();
     let mut domains = std::collections::BTreeMap::new();
     for (id, clip) in &score.clips {
         let elements = clip.graph.laser().map(|laser| laser.count());
@@ -119,18 +124,30 @@ async fn prepare_scene_data(
         if cells.is_empty() && !single {
             continue;
         }
-        let prepared = match luma_patterns::PreparedGraph::new(
-            &library,
-            &clip.graph,
-            luma_patterns::Frame {
-                cells: &cells,
-                features: None,
-                beat: clip.start,
-                clip_start: clip.start,
-                clip_duration: clip.duration,
-                seed: clip.seed,
-            },
-        ) {
+        selected.push((id, clip, cells));
+    }
+    let prepared: Vec<_> = selected
+        .into_par_iter()
+        .map(|(id, clip, cells)| {
+            let prepared = luma_patterns::PreparedGraph::new(
+                &library,
+                &clip.graph,
+                luma_patterns::Frame {
+                    cells: &cells,
+                    features: None,
+                    beat: clip.start,
+                    clip_start: clip.start,
+                    clip_duration: clip.duration,
+                    seed: clip.seed,
+                },
+            );
+            (id, clip, cells, prepared)
+        })
+        .collect();
+    let mut prepared_clips = Vec::new();
+    let mut requests = Vec::new();
+    for (id, clip, cells, prepared) in prepared {
+        let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 skip(format!("clip {id}: {error}"))?;
@@ -159,27 +176,62 @@ async fn prepare_scene_data(
         )
     };
     let controls = controls.venue(access.venue_id());
-    for (id, clip, cells, prepared) in prepared_clips {
-        let prepared = prepared.with_controls(controls.clone());
-        let prepared = match &features {
-            Some(features) => match prepared.with_features(features.clone()) {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    skip(format!("clip {id}: {error}"))?;
-                    continue;
-                }
-            },
-            None => prepared,
-        };
-        let plan =
-            match crate::eval::lighting::compile_clip(clip, clock.clone(), cells.clone(), prepared)
-            {
-                Ok(plan) => plan,
-                Err(error) => {
-                    skip(format!("clip {id}: {error}"))?;
-                    continue;
-                }
+    // What every clip is compiled from besides itself and its cells: the
+    // beat grid, and the track's audio when a clip listens to it.
+    let shared = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        serde_json::to_string(&grid)
+            .map_err(|error| error.to_string())?
+            .hash(&mut hasher);
+        features
+            .as_ref()
+            .map(|features| features.track_hash())
+            .hash(&mut hasher);
+        hasher.finish()
+    };
+    let plans: Vec<_> = prepared_clips
+        .into_par_iter()
+        .map(|(id, clip, cells, prepared)| {
+            let plan = || -> Result<crate::eval::Plan, String> {
+                let prepared = prepared.with_controls(controls.clone());
+                let prepared = match &features {
+                    Some(features) => prepared
+                        .with_features(features.clone())
+                        .map_err(|error| error.to_string())?,
+                    None => prepared,
+                };
+                let mut plan = crate::eval::lighting::compile_clip(
+                    clip,
+                    clock.clone(),
+                    cells.clone(),
+                    prepared,
+                )?;
+                plan.source = {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    shared.hash(&mut hasher);
+                    serde_json::to_string(&(clip, &cells))
+                        .map_err(|error| error.to_string())?
+                        .hash(&mut hasher);
+                    Some(hasher.finish())
+                };
+                Ok(plan)
             };
+            let plan = plan();
+            (id, clip, cells, plan)
+        })
+        .collect();
+    let mut compiled = Vec::new();
+    let mut clip_cells = std::collections::BTreeMap::new();
+    for (id, clip, cells, plan) in plans {
+        let plan = match plan {
+            Ok(plan) => plan,
+            Err(error) => {
+                skip(format!("clip {id}: {error}"))?;
+                continue;
+            }
+        };
         clip_cells.insert(id.clone(), cells);
         compiled.push(crate::eval::CompiledAnnotation {
             span: plan.span,
@@ -199,7 +251,8 @@ async fn prepare_scene_data(
         crate::eval::aim::Rig::load(access, fixtures_root, aimed).await?
     };
     Ok(SceneData {
-        scene: crate::eval::Scene::new(compiled).with_rig(rig)?,
+        scene: crate::eval::Scene::new(compiled),
+        rig,
         cells: clip_cells,
     })
 }
@@ -250,7 +303,11 @@ async fn prepare_single_clip(
         .ok_or_else(|| format!("unknown clip {clip_id}"))?;
     let mut single = score.clone();
     single.clips.retain(|id, _| id == clip_id);
-    let SceneData { scene, mut cells } = prepare_scene_data(
+    let SceneData {
+        scene,
+        rig,
+        mut cells,
+    } = prepare_scene_data(
         access,
         fixtures_root,
         storage,
@@ -260,6 +317,7 @@ async fn prepare_single_clip(
         true,
     )
     .await?;
+    let scene = scene.with_rig(rig)?;
     let cells = cells.remove(clip_id).unwrap_or_default();
     let span = if let Some(annotation) = scene.annotations.first() {
         annotation.span

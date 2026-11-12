@@ -9,6 +9,7 @@ use std::path::Path;
 
 use crate::controls::ControlBanks;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
+use crate::eval::aim::LookAhead;
 use crate::eval::Scene;
 use crate::render_engine::{Built, RenderEngine};
 use crate::storage::StorageRoot;
@@ -62,16 +63,24 @@ pub(crate) async fn install_score_scene(
     graph_score: Option<luma_patterns::Score>,
 ) -> Result<(), String> {
     let update = render_engine.begin_score_update(score_id);
-    let scene = build_score_scene(
+    // Light shows as soon as the clips compile. When each head is lit, which
+    // move in black looks ahead through, is sampled after, and only where an
+    // edit changed it: the scene on show already knows the rest.
+    let scene = score_scene(
         pool,
         storage,
         resource_root,
         controls,
         score_id,
         graph_score,
+        LookAhead::Deferred,
     )
     .await?;
-    render_engine.finish_update(update, Built::Scene(scene));
+    if let Some(showing) = render_engine.active_scene() {
+        scene.keep_look_ahead(&showing);
+    }
+    render_engine.finish_update(update, Built::Scene(scene.clone()));
+    scene.look_ahead();
     Ok(())
 }
 
@@ -85,6 +94,28 @@ pub async fn build_score_scene(
     controls: &ControlBanks,
     score_id: &str,
     graph_score: Option<luma_patterns::Score>,
+) -> Result<Scene, String> {
+    score_scene(
+        pool,
+        storage,
+        resource_root,
+        controls,
+        score_id,
+        graph_score,
+        LookAhead::UpFront,
+    )
+    .await
+}
+
+/// [`build_score_scene`], sampling when its heads are lit as `look` says.
+pub(crate) async fn score_scene(
+    pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &Path,
+    controls: &ControlBanks,
+    score_id: &str,
+    graph_score: Option<luma_patterns::Score>,
+    look: LookAhead,
 ) -> Result<Scene, String> {
     let (mut access, track_id) = score_scope(pool, score_id).await?;
     let score = match graph_score {
@@ -100,6 +131,7 @@ pub async fn build_score_scene(
         controls,
         crate::database::local::tracks::Grid::of_score(&track_id, score_id),
         &score,
+        look,
     )
     .await
 }
