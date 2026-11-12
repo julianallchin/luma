@@ -474,7 +474,9 @@ head: one position, one rank, one random draw.
 
 Setting `by`: `"fixture"` or `"group"`. Each fixture, or each venue group of
 the selection, becomes its own span. `space`, `shuffle` and `mirror` then
-work inside each span: one bar meter per bar, for example.
+work inside each span: one bar meter per bar, for example. A span is
+measured where its heads stand at the split, so `split(mirror(...))` makes
+every bar run 0 to 1 outward from the mirror, the two sides as images.
 
 `group.size`, `mirror.direction`, `mirror.at`, `space.direction`,
 `space.centre` and `audio.*_hz` can change over time, but not across heads.
