@@ -460,8 +460,8 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
     expect_ok(&out, "use helper");
     assert_eq!(out.repr.as_deref(), Some("[0.5, 0.5, 0.5]"));
 
-    // §22.5 — the analysis changes underneath the conversation. The next cell
-    // sees the new beats; the helper and `kicks` survive.
+    // §22.5 — the score moves to a newer grid underneath the conversation.
+    // The next cell sees the new beats; the helper and `kicks` survive.
     let reanalysed = crate::models::beat_grid::BeatGrid {
         beats: vec![0.0, 2.0, 4.0],
         downbeats: vec![0.5, 2.5],
@@ -475,6 +475,16 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
         &reanalysed,
         1,
     )
+    .await
+    .unwrap();
+    // Reanalysis alone leaves a score on the grid it was written against.
+    sqlx::query(
+        "UPDATE scores SET grid_id = (SELECT id FROM track_beats WHERE track_id = ?1
+                                      ORDER BY julianday(created_at) DESC, rowid DESC LIMIT 1)
+         WHERE track_id = ?1",
+    )
+    .bind(TRACK_ID)
+    .execute(&f.pool)
     .await
     .unwrap();
     let out = f
