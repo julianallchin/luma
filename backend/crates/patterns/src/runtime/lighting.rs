@@ -31,48 +31,67 @@ impl LightingSignal {
                 return Err(Error("Output time axes differ".into()));
             }
         }
-        let get = |key: &str, n, t, ch, default| {
-            signals.get(key).map(|v| v.at(n, t, ch)).unwrap_or(default)
-        };
-        let has_color = signals.contains_key("color");
-        let has_aim = signals.contains_key("aim");
-        // An aim's length is its weight; its direction is the unit vector.
-        let aim = |n, t| {
-            let v: [f64; 3] = std::array::from_fn(|ch| get("aim", n, t, ch, 0.0));
-            let length = crate::aim::dot(v, v).sqrt();
-            (crate::aim::unit(v), length.min(1.0))
-        };
-        let values = Array3::from_shape_fn((fixtures.len(), times, CHANNELS), |(n, t, ch)| {
+        // Each input is looked up once here, not once per sample.
+        let [color, pan, tilt, strobe, speed, aim, alpha] =
+            ["color", "pan", "tilt", "strobe", "speed", "aim", "alpha"].map(|key| signals.get(key));
+        let has_color = color.is_some();
+        let has_aim = aim.is_some();
+        let mut values = Array3::zeros((fixtures.len(), times, CHANNELS));
+        for ((n, t), mut row) in values
+            .lanes_mut(ndarray::Axis(2))
+            .into_iter()
+            .enumerate()
+            .map(|(i, row)| ((i / times, i % times), row))
+        {
+            let scalar =
+                |signal: Option<&Signal>, default: f64| signal.map_or(default, |v| v.at(n, t, 0));
             // Brightness is the applied color's peak channel. Master/group
             // intensity is applied by the compositor, so headroom above one
             // survives until then and an overdriven pattern is not flattened.
-            let brightness = if has_color {
-                (0..3)
-                    .map(|ch| get("color", n, t, ch, 0.0).max(0.0))
-                    .fold(0.0_f64, f64::max)
-            } else {
-                0.0
-            };
-            match ch {
-                0..=2 if has_color => {
+            let rgb = match color {
+                Some(color) => {
+                    let rgb: [f64; 3] = std::array::from_fn(|ch| color.at(n, t, ch).max(0.0));
+                    let brightness = rgb.into_iter().fold(0.0_f64, f64::max);
                     if brightness > 1e-5 {
-                        get("color", n, t, ch, 0.0).max(0.0) / brightness
+                        [
+                            rgb[0] / brightness,
+                            rgb[1] / brightness,
+                            rgb[2] / brightness,
+                            brightness,
+                        ]
                     } else {
-                        0.0
+                        [0.0, 0.0, 0.0, brightness]
                     }
                 }
-                0..=2 => 1.0,
-                3 => brightness,
-                4 => get("pan", n, t, 0, 0.0),
-                5 => get("tilt", n, t, 0, 0.0),
-                6 => get("strobe", n, t, 0, 0.0).clamp(0.0, 1.0),
-                7 => get("speed", n, t, 0, 1.0).clamp(0.0, 1.0),
-                8..=10 if has_aim => aim(n, t).0[ch - 8],
-                11 if has_aim => aim(n, t).1,
-                8..=10 => crate::aim::DOWN[ch - 8],
-                _ => get("alpha", n, t, 0, 1.0).clamp(0.0, 1.0),
-            }
-        });
+                None => [1.0, 1.0, 1.0, 0.0],
+            };
+            // An aim's length is its weight; its direction is the unit
+            // vector. Without one, the last channel is the clip's opacity.
+            let (direction, last) = match aim {
+                Some(aim) => {
+                    let v: [f64; 3] = std::array::from_fn(|ch| aim.at(n, t, ch));
+                    (crate::aim::unit(v), crate::aim::dot(v, v).sqrt().min(1.0))
+                }
+                None => (crate::aim::DOWN, scalar(alpha, 1.0).clamp(0.0, 1.0)),
+            };
+            let sample: [f64; CHANNELS] = [
+                rgb[0],
+                rgb[1],
+                rgb[2],
+                rgb[3],
+                scalar(pan, 0.0),
+                scalar(tilt, 0.0),
+                scalar(strobe, 0.0).clamp(0.0, 1.0),
+                scalar(speed, 1.0).clamp(0.0, 1.0),
+                direction[0],
+                direction[1],
+                direction[2],
+                last,
+            ];
+            row.iter_mut()
+                .zip(sample)
+                .for_each(|(slot, value)| *slot = value);
+        }
         Ok(Self {
             values: values.into(),
             fixtures: fixtures.to_vec().into(),
