@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::dispatch::AppServices;
 use crate::error::CommandError;
-use crate::models::tracks::{TrackImportFailure, TrackImportResult};
+use crate::models::tracks::{ImportRejection, TrackImportFailure, TrackImportResult};
 use crate::rekordbox::subprocess;
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
 use crate::services::tracks::{ImportRequest, LibraryTrack};
@@ -79,6 +79,8 @@ pub async fn rekordbox_import_tracks(
             return Err(TrackImportFailure {
                 message: format!("Rekordbox track with UUID {uuid} not found"),
                 source_id: uuid,
+                name: None,
+                reason: ImportRejection::Missing,
             });
         };
         Ok(ImportRequest::Library(LibraryTrack {
@@ -91,7 +93,6 @@ pub async fn rekordbox_import_tracks(
             title: row.title.clone(),
             artist: row.artist.clone(),
             album: row.album.clone(),
-            duration_seconds: row.duration_seconds,
             filename: row.filename.clone(),
         }))
     });

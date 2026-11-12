@@ -20,19 +20,46 @@ use crate::database::local::venue_access::{
 };
 use crate::events::{Event, Events};
 use crate::models::tracks::{
-    StageOutcome, TrackBrowserRow, TrackImportFailure, TrackImportPhase, TrackImportProgress,
-    TrackImportResult, TrackSummary,
+    ImportRejection, StageOutcome, TrackBrowserRow, TrackImportFailure, TrackImportPhase,
+    TrackImportProgress, TrackImportResult, TrackSummary, MAX_TRACK_DURATION_SECS,
 };
 use crate::preprocessing::concurrency::{analysis_worker_count, run_bounded_track_jobs};
 use crate::preprocessing::{scheduler, AnalysisGuard, AnalysisTaskGroup, WorkerEnvironment};
 use crate::storage::StorageRoot;
 
-/// Maximum track duration allowed for import (10 minutes).
-const MAX_TRACK_DURATION_SECS: f64 = 600.0;
+/// Why one song was not imported: the reason the dialog words, and the cause
+/// for the log. An error with no reason of its own is [`ImportRejection::Other`].
+#[derive(Debug)]
+pub struct Rejected {
+    pub reason: ImportRejection,
+    pub cause: String,
+}
+
+impl From<String> for Rejected {
+    fn from(cause: String) -> Self {
+        Self {
+            reason: ImportRejection::Other,
+            cause,
+        }
+    }
+}
+
+fn within_duration_limit(seconds: f64) -> Result<(), Rejected> {
+    if seconds <= MAX_TRACK_DURATION_SECS {
+        return Ok(());
+    }
+    Err(Rejected {
+        reason: ImportRejection::TooLong,
+        cause: format!(
+            "Track is too long ({} min). Maximum duration is {} minutes.",
+            (seconds / 60.0).ceil() as u32,
+            (MAX_TRACK_DURATION_SECS / 60.0) as u32
+        ),
+    })
+}
 
 /// A filesystem artifact created before its catalog row commits. Dropping the
-/// guard removes only that newly-created file; reused source audio is never
-/// wrapped. Once SQLite owns the path, `keep` transfers cleanup to the normal
+/// guard removes only that newly-created file. Once SQLite owns the path, `keep` transfers cleanup to the normal
 /// track deletion lifecycle.
 struct PendingImportFile {
     path: Option<PathBuf>,
@@ -96,54 +123,33 @@ pub async fn file_fast_import(
     storage: &StorageRoot,
     file_path: &str,
     uid: &str,
-) -> Result<(String, bool), String> {
-    storage.ensure_track_storage()?;
-    let tracks_dir = storage.tracks_dir();
-
+) -> Result<(String, bool), Rejected> {
     let source_path = Path::new(file_path);
     if !source_path.exists() {
-        return Err(format!("File does not exist: {}", file_path));
-    }
-
-    // Check duration before copying
-    if let Ok(probe) = Probe::open(source_path) {
-        if let Ok(tagged) = probe.read() {
-            let dur = tagged.properties().duration().as_secs_f64();
-            if dur > MAX_TRACK_DURATION_SECS {
-                let mins = (dur / 60.0).ceil() as u32;
-                return Err(format!(
-                    "Track is too long ({mins} min). Maximum duration is {} minutes.",
-                    (MAX_TRACK_DURATION_SECS / 60.0) as u32
-                ));
-            }
-        }
+        return Err(Rejected {
+            reason: ImportRejection::Missing,
+            cause: format!("File does not exist: {}", file_path),
+        });
     }
 
     let track_hash = compute_track_hash(source_path)?;
+    if let Some(id) = already_imported(pool, uid, &track_hash, None).await? {
+        return Ok((id, false));
+    }
+    let mut stored = StoredAudio::from_source(storage, source_path)?;
 
-    let extension = source_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("bin");
-    let dest_file_name = format!("{}.{}", Uuid::new_v4(), extension);
-    let dest_path = tracks_dir.join(&dest_file_name);
-    std::fs::copy(source_path, &dest_path)
-        .map_err(|e| format!("Failed to copy track file: {}", e))?;
-    let mut pending_audio = PendingImportFile::new(dest_path.clone());
-
-    let tagged_file = Probe::open(&dest_path)
-        .map_err(|e| format!("Failed to probe track file: {}", e))?
-        .read()
-        .map_err(|e| format!("Failed to read track metadata: {}", e))?;
-
-    let primary_tag = tagged_file.primary_tag();
-    let title = primary_tag.and_then(|tag| tag.title().map(|s| s.to_string()));
+    // Tags are a courtesy: a song without readable ones is named for its file.
+    let tagged_file = read_tagged(source_path).ok();
+    let primary_tag = tagged_file.as_ref().and_then(|file| file.primary_tag());
+    let title = primary_tag
+        .and_then(|tag| tag.title().map(|s| s.to_string()))
+        .filter(|title| !title.is_empty())
+        .or_else(|| file_stem(source_path));
     let artist = primary_tag.and_then(|tag| tag.artist().map(|s| s.to_string()));
     let album = primary_tag.and_then(|tag| tag.album().map(|s| s.to_string()));
     let track_number = primary_tag.and_then(|tag| tag.track()).map(|n| n as i64);
     let disc_number = primary_tag.and_then(|tag| tag.disk()).map(|n| n as i64);
-    let duration_seconds = Some(tagged_file.properties().duration().as_secs_f64());
-    let (album_art_path, album_art_mime) = extract_album_art(storage, &dest_path)?;
+    let (album_art_path, album_art_mime) = extract_album_art(storage, source_path)?;
     let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
 
     let basename = source_path
@@ -159,8 +165,8 @@ pub async fn file_fast_import(
         &album,
         track_number,
         disc_number,
-        duration_seconds,
-        &dest_path.to_string_lossy(),
+        Some(stored.duration_seconds),
+        &stored.path.to_string_lossy(),
         &album_art_path,
         &album_art_mime,
         uid,
@@ -170,7 +176,7 @@ pub async fn file_fast_import(
     )
     .await?;
     if is_new {
-        pending_audio.keep();
+        stored.file.keep();
         if let Some(art) = &mut pending_art {
             art.keep();
         }
@@ -179,11 +185,82 @@ pub async fn file_fast_import(
     Ok((id, is_new))
 }
 
+/// The song this import would only repeat, so it can stop before converting
+/// anything. See [`tracks_db::existing_track`].
+async fn already_imported(
+    pool: &SqlitePool,
+    uid: &str,
+    track_hash: &str,
+    source: Option<(&str, &str)>,
+) -> Result<Option<String>, String> {
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|error| format!("Failed to look up track: {error}"))?;
+    tracks_db::existing_track(&mut connection, uid, track_hash, source).await
+}
+
+/// A song's audio brought into the library's storage in the one format Luma
+/// keeps ([`crate::audio::stored`]), and how long it runs. The file is removed
+/// again unless the import that asked for it keeps it.
+struct StoredAudio {
+    path: PathBuf,
+    duration_seconds: f64,
+    file: PendingImportFile,
+}
+
+impl StoredAudio {
+    /// Convert `source` into storage. Audio ffmpeg cannot decode and audio
+    /// over the length limit are both turned away here, measured on the
+    /// converted file: what the source's own header claims is not trusted.
+    fn from_source(storage: &StorageRoot, source: &Path) -> Result<Self, Rejected> {
+        storage.ensure_track_storage()?;
+        let path = storage.tracks_dir().join(format!(
+            "{}.{}",
+            Uuid::new_v4(),
+            crate::audio::stored::EXTENSION
+        ));
+        // One second past the limit is enough to measure as over it.
+        let cap = MAX_TRACK_DURATION_SECS + 1.0;
+        crate::audio::stored::store(source, &path, Some(cap)).map_err(|cause| Rejected {
+            reason: ImportRejection::Unreadable,
+            cause,
+        })?;
+        let file = PendingImportFile::new(path.clone());
+        let duration_seconds = read_tagged(&path)
+            .map_err(|error| format!("Failed to measure stored audio: {error}"))?
+            .properties()
+            .duration()
+            .as_secs_f64();
+        within_duration_limit(duration_seconds)?;
+        Ok(Self {
+            path,
+            duration_seconds,
+            file,
+        })
+    }
+}
+
+/// What an untitled song is called: its file's name without the extension.
+fn file_stem(path: &Path) -> Option<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.to_string())
+}
+
+/// An audio file's tags and properties, with the format taken from what the
+/// file contains. Its extension is only the fallback: downloads are often AAC
+/// or Opus under an `.mp3` name, and lofty parses by extension unless asked
+/// to look.
+fn read_tagged(path: &Path) -> lofty::error::Result<lofty::file::TaggedFile> {
+    Probe::open(path)?.guess_file_type()?.read()
+}
+
 /// The cover embedded in an audio file's primary tag: the front cover, else
 /// the back, else one marked "other". `None` when there is none or the file
 /// cannot be parsed — a file without art is not an error.
 pub(crate) fn embedded_picture(path: &Path) -> Option<lofty::picture::Picture> {
-    let tagged_file = Probe::open(path).ok()?.read().ok()?;
+    let tagged_file = read_tagged(path).ok()?;
     tagged_file.primary_tag().and_then(|tag| {
         tag.pictures()
             .iter()
@@ -232,7 +309,6 @@ pub struct LibraryTrack {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
-    pub duration_seconds: Option<f64>,
     pub filename: Option<String>,
     /// The audio's path, or why the library cannot give one.
     pub audio_path: Result<PathBuf, String>,
@@ -340,11 +416,13 @@ impl Importer<'_> {
                     }
                     self.progress(&import, done + 1, Some(track_id), None, None);
                 }
-                Err(message) => {
-                    self.progress(&import, done + 1, None, name, Some(message.clone()));
+                Err(Rejected { reason, cause }) => {
+                    self.progress(&import, done + 1, None, name.clone(), Some(cause.clone()));
                     failures.push(TrackImportFailure {
                         source_id: request.source_id().to_string(),
-                        message,
+                        name,
+                        reason,
+                        message: cause,
                     });
                 }
             }
@@ -428,8 +506,9 @@ impl Importer<'_> {
     }
 }
 
-/// Insert a DJ-library row from the library's metadata. Hashes the audio but
-/// runs no analysis. Deduplicates by source id, then by content hash.
+/// Insert a DJ-library row from the library's metadata, with its audio
+/// converted into storage so the song no longer depends on where the library
+/// keeps it. Runs no analysis. Deduplicates by source id, then by content hash.
 /// Returns `(id, is_new)`.
 async fn library_fast_import(
     pool: &SqlitePool,
@@ -437,25 +516,23 @@ async fn library_fast_import(
     source_type: &str,
     track: &LibraryTrack,
     uid: &str,
-) -> Result<(String, bool), String> {
+) -> Result<(String, bool), Rejected> {
     let audio_path = match &track.audio_path {
         Ok(path) if path.exists() => path,
-        Ok(path) => return Err(format!("Audio file not found: {}", path.display())),
-        Err(message) => return Err(message.clone()),
-    };
-    if let Some(dur) = track.duration_seconds {
-        if dur > MAX_TRACK_DURATION_SECS {
-            return Err(format!(
-                "Track is too long ({} min). Maximum duration is {} minutes.",
-                (dur / 60.0).ceil() as u32,
-                (MAX_TRACK_DURATION_SECS / 60.0) as u32
-            ));
+        Ok(path) => {
+            return Err(Rejected {
+                reason: ImportRejection::Missing,
+                cause: format!("Audio file not found: {}", path.display()),
+            })
         }
-    }
-
-    storage.ensure_track_storage()?;
-
+        Err(message) => return Err(message.clone().into()),
+    };
     let track_hash = compute_track_hash(audio_path)?;
+    let source = Some((source_type, track.source_id.as_str()));
+    if let Some(id) = already_imported(pool, uid, &track_hash, source).await? {
+        return Ok((id, false));
+    }
+    let mut stored = StoredAudio::from_source(storage, audio_path)?;
 
     // Extract album art (reads just the tag header)
     let (album_art_path, album_art_mime) = extract_album_art(storage, audio_path)?;
@@ -464,13 +541,22 @@ async fn library_fast_import(
     let (id, is_new) = tracks_db::insert_track_record(
         pool,
         &track_hash,
-        &track.title,
+        &track
+            .title
+            .clone()
+            .filter(|title| !title.is_empty())
+            .or_else(|| {
+                track
+                    .filename
+                    .as_deref()
+                    .and_then(|name| file_stem(Path::new(name)))
+            }),
         &track.artist,
         &track.album,
         None, // track_number
         None, // disc_number
-        track.duration_seconds,
-        &audio_path.to_string_lossy(),
+        Some(stored.duration_seconds),
+        &stored.path.to_string_lossy(),
         &album_art_path,
         &album_art_mime,
         uid,
@@ -480,6 +566,7 @@ async fn library_fast_import(
     )
     .await?;
     if is_new {
+        stored.file.keep();
         if let Some(art) = &mut pending_art {
             art.keep();
         }
@@ -553,6 +640,26 @@ async fn run_background_analysis(
     import.complete(&events, summary);
 }
 
+/// Analyse a track again from its audio, in the background: every step
+/// reruns, and what the track has stays in place until a step rewrites it.
+pub fn reprocess_track(
+    pool: &SqlitePool,
+    storage: &StorageRoot,
+    workers: &WorkerEnvironment,
+    tasks: &AnalysisTaskGroup,
+    track_id: String,
+) -> Result<(), String> {
+    let (pool, storage, workers) = (pool.clone(), storage.clone(), workers.clone());
+    tasks.spawn(tasks.current_epoch()?, move |analysis| async move {
+        if let Err(error) =
+            scheduler::rerun_track(&pool, &storage, &workers, &track_id, &analysis).await
+        {
+            eprintln!("[preprocessing] reprocessing track {track_id} failed: {error}");
+        }
+    })?;
+    Ok(())
+}
+
 /// Backfill missing track metadata from file tags. Runs before any
 /// preprocessor; not part of the DAG.
 async fn backfill_metadata_gaps(pool: &SqlitePool, track_id: &str) -> Result<(), String> {
@@ -563,7 +670,7 @@ async fn backfill_metadata_gaps(pool: &SqlitePool, track_id: &str) -> Result<(),
     if !file_path.exists() {
         return Ok(());
     }
-    let tagged_file = Probe::open(file_path).ok().and_then(|p| p.read().ok());
+    let tagged_file = read_tagged(file_path).ok();
     if let Some(tf) = &tagged_file {
         let primary_tag = tf.primary_tag();
         let tag_title = primary_tag.and_then(|t| t.title().map(|s| s.to_string()));
@@ -640,26 +747,6 @@ pub async fn delete_track(
 ) -> Result<(), String> {
     recover_track_deletions(pool, storage).await?;
     let mut transaction = pool
-/// Analyse a track again from its audio, in the background: every step
-/// reruns, and what the track has stays in place until a step rewrites it.
-pub fn reprocess_track(
-    pool: &SqlitePool,
-    storage: &StorageRoot,
-    workers: &WorkerEnvironment,
-    tasks: &AnalysisTaskGroup,
-    track_id: String,
-) -> Result<(), String> {
-    let (pool, storage, workers) = (pool.clone(), storage.clone(), workers.clone());
-    tasks.spawn(tasks.current_epoch()?, move |analysis| async move {
-        if let Err(error) =
-            scheduler::rerun_track(&pool, &storage, &workers, &track_id, &analysis).await
-        {
-            eprintln!("[preprocessing] reprocessing track {track_id} failed: {error}");
-        }
-    })?;
-    Ok(())
-}
-
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|error| format!("Failed to begin track deletion: {error}"))?;
@@ -1195,26 +1282,6 @@ fn compute_track_hash(path: &Path) -> Result<String, String> {
 mod deletion_tests {
     use super::*;
 
-    fn write_wav(path: &Path) {
-        let frames = 8_000_u32;
-        let data_len = frames * 2;
-        let mut bytes = Vec::with_capacity((44 + data_len) as usize);
-        bytes.extend_from_slice(b"RIFF");
-        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
-        bytes.extend_from_slice(b"WAVEfmt ");
-        bytes.extend_from_slice(&16_u32.to_le_bytes());
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&8_000_u32.to_le_bytes());
-        bytes.extend_from_slice(&16_000_u32.to_le_bytes());
-        bytes.extend_from_slice(&2_u16.to_le_bytes());
-        bytes.extend_from_slice(&16_u16.to_le_bytes());
-        bytes.extend_from_slice(b"data");
-        bytes.extend_from_slice(&data_len.to_le_bytes());
-        bytes.resize((44 + data_len) as usize, 0);
-        std::fs::write(path, bytes).unwrap();
-    }
-
     #[tokio::test]
     async fn concurrent_file_imports_resolve_one_atomic_identity() {
         let directory = tempfile::tempdir().unwrap();
@@ -1226,7 +1293,7 @@ mod deletion_tests {
             .unwrap();
         let storage = StorageRoot::from_path(directory.path().to_path_buf());
         let source = directory.path().join("race.wav");
-        write_wav(&source);
+        crate::test_support::write_wav(&source, 1);
         let source = source.to_string_lossy().into_owned();
 
         let (left, right) = tokio::join!(
@@ -1248,6 +1315,92 @@ mod deletion_tests {
             .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
             .count();
         assert_eq!(managed_files, 1, "losing import leaked its copied audio");
+    }
+
+    /// A download is often one format under another's extension. What the
+    /// file contains decides how it is read.
+    #[tokio::test]
+    async fn a_file_named_for_another_format_imports() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::database::local::database::init_app_db_at(directory.path())
+            .await
+            .unwrap();
+        crate::database::local::auth::arm_write_admission(&db.0, Some("alice"))
+            .await
+            .unwrap();
+        let storage = StorageRoot::from_path(directory.path().to_path_buf());
+        let source = directory.path().join("really a wav.mp3");
+        crate::test_support::write_wav(&source, 1);
+
+        let (track_id, _) = file_fast_import(&db.0, &storage, &source.to_string_lossy(), "alice")
+            .await
+            .unwrap();
+        let track = tracks_db::get_track_by_id(&db.0, &track_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let duration = track.duration_seconds.unwrap();
+        assert!((duration - 1.0).abs() < 0.05, "{duration}");
+        // Whatever it arrived as, it is kept in the one stored format.
+        assert!(track.file_path.ends_with(".ogg"), "{}", track.file_path);
+        // It has no title tag, so it is called what its file is.
+        assert_eq!(track.title.as_deref(), Some("really a wav"));
+    }
+
+    /// Over the limit is refused, and refusing it leaves nothing behind.
+    #[tokio::test]
+    async fn a_song_over_the_length_limit_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::database::local::database::init_app_db_at(directory.path())
+            .await
+            .unwrap();
+        crate::database::local::auth::arm_write_admission(&db.0, Some("alice"))
+            .await
+            .unwrap();
+        let storage = StorageRoot::from_path(directory.path().to_path_buf());
+        let source = directory.path().join("mix.wav");
+        crate::test_support::write_wav(&source, MAX_TRACK_DURATION_SECS as u32 + 60);
+
+        let refused = file_fast_import(&db.0, &storage, &source.to_string_lossy(), "alice")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused.reason,
+            ImportRejection::TooLong,
+            "{}",
+            refused.cause
+        );
+        let left = std::fs::read_dir(storage.tracks_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .count();
+        assert_eq!(left, 0, "a refused import left audio in storage");
+    }
+
+    /// A file that is not audio is refused as such, whatever it is named.
+    #[tokio::test]
+    async fn a_file_that_is_not_audio_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::database::local::database::init_app_db_at(directory.path())
+            .await
+            .unwrap();
+        crate::database::local::auth::arm_write_admission(&db.0, Some("alice"))
+            .await
+            .unwrap();
+        let storage = StorageRoot::from_path(directory.path().to_path_buf());
+        let source = directory.path().join("notes.mp3");
+        std::fs::write(&source, "not audio at all").unwrap();
+
+        let refused = file_fast_import(&db.0, &storage, &source.to_string_lossy(), "alice")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused.reason,
+            ImportRejection::Unreadable,
+            "{}",
+            refused.cause
+        );
     }
 
     #[tokio::test]
