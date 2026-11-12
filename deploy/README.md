@@ -132,6 +132,16 @@ after it. A new migration adds its line here.
   there is no local migration
 - `20261111030434_track_art_read.sql` — any time; until it runs, venue
   members cannot download a shared track's cover art
+- `20261111120000_client_format.sql` — any time; refuses nothing until a
+  later migration raises `public.data_format()`. Before any migration that
+  does: a server without it takes writes from a build of any format
+- `20261111121000_terms_acceptance.sql` — before the release whose sign-in
+  shows the terms: that client cannot record an acceptance without it, so
+  nobody new gets past the terms page. Server only; there is no local
+  migration
+- `20261111235859_profiles_private.sql` — any time; until it runs, anyone
+  holding the app's public key can list every account id and display name.
+  Server only; there is no local migration
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an

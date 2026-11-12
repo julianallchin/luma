@@ -225,6 +225,8 @@ class VenueGroupTests(unittest.TestCase):
             calls.append((method, payload))
             row = {"id": "saved", "name": "back_movers", "origin": "manual",
                    "fixtures": [{"id": "f1", "label": "Mover", "heads": ["f1:0"], "head_count": 1}]}
+            if method == "venue.remove_group":
+                return {"name": "back_movers", "clips": 3, "scores": 1, "perform": 0}
             return {"group": row} if method == "venue.group" else {"groups": [row]}
         venue = Venue(record(), host_call=host, workspace=Path(tempfile.mkdtemp(prefix="luma-group-")))
         distribution = Distribution({"report": {"fixtures": [
@@ -243,6 +245,9 @@ class VenueGroupTests(unittest.TestCase):
         self.assertEqual(calls[-1][1]["fixtures"], [])
         venue.group("cells", [("f1", 0), "f2:3", ("f1", 0)])
         self.assertEqual(calls[-1][1]["fixtures"], ["f1:0", "f2:3"])
+        self.assertEqual(venue.remove_group(group),
+                         "removed group back_movers; 3 clips selected it and now light nothing there")
+        self.assertEqual(calls[-1], ("venue.remove_group", {"name": "back_movers"}))
         self.assertEqual(venue.generate_groups().names(), ("back_movers",))
         self.assertEqual(calls[-1], ("venue.generate_groups", {}))
 

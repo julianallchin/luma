@@ -1,5 +1,8 @@
-//! Sync, as the status bar says it — one of four states:
+//! Sync, as the status bar says it — one of five states:
 //!
+//! - `Update required`: this build is behind the server's data. Pressing it
+//!   checks for the update. The window itself shows
+//!   [`crate::update::required`] until the update is in or put off.
 //! - `Up to date`
 //! - `Syncing`: records, or media moving through storage
 //! - `Offline · 3 pending`: not an error; the changes upload when the
@@ -59,7 +62,9 @@ impl SyncState {
     fn observe(&mut self, status: SyncStatus, now: Instant) -> bool {
         let summary = status.summary();
         let hold = match summary {
-            SyncSummary::UpToDate | SyncSummary::NotSaved { .. } => None,
+            SyncSummary::UpToDate | SyncSummary::NotSaved { .. } | SyncSummary::UpdateRequired => {
+                None
+            }
             SyncSummary::Syncing if status.pending_uploads >= BACKLOG => None,
             SyncSummary::Syncing => Some(SYNCING_HOLD),
             SyncSummary::Offline { .. } => Some(OFFLINE_HOLD),
@@ -107,6 +112,7 @@ impl Luma {
             let result = pending.await;
             let Ok(wait) = this.update(cx, |this, cx| {
                 let state = &mut this.sync_status;
+                let required = state.status.update_required;
                 let changed = match result {
                     Ok(status) => {
                         state.read_error = None;
@@ -121,6 +127,9 @@ impl Luma {
                         false
                     }
                 };
+                if this.sync_status.status.update_required && !required {
+                    this.fetch_required_update();
+                }
                 if changed {
                     this.quit_sync_changed(cx);
                     cx.notify();
@@ -186,6 +195,10 @@ pub(crate) fn item(shell: &Luma, app: &Entity<Luma>) -> Option<crate::status_bar
     let state = &shell.sync_status;
     let mut item = crate::status_bar::Item::new("sync-status", state.shown.to_string());
     item.ok = state.shown == SyncSummary::UpToDate;
+    if state.shown == SyncSummary::UpdateRequired {
+        item.attention = true;
+        item.press = Some(|this, cx| this.check_for_updates(cx));
+    }
     if matches!(state.shown, SyncSummary::NotSaved { .. }) {
         item.attention = true;
         item.press = Some(|this, cx| {

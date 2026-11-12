@@ -14,6 +14,12 @@
 //! release since the running one, so a skipped release is not lost; after a
 //! channel switch, the release's own lines.
 //!
+//! An update the server requires is not a dialog. When sync reports that this
+//! build is behind the server's data, the window shows [`required`] in place
+//! of the app and the check runs whatever the `auto_update` setting says: the
+//! build cannot sync until it updates. "Not now" puts the screen away for
+//! this run, for someone in the middle of a show.
+//!
 //! The channel the updater follows is the `update_channel` setting, the
 //! build's own until someone chooses. Choosing the other checks it at once.
 
@@ -51,6 +57,9 @@ pub(crate) struct AutoUpdate {
     /// The version the ready dialog was raised for, so that a status the
     /// updater reports twice raises it once.
     announced: Option<String>,
+    /// Someone answered [`required`] with "Not now": the app shows for the
+    /// rest of this run.
+    pub(crate) put_off: bool,
 }
 
 /// The "update ready" dialog's state, in [`crate::shell::Overlay::UpdateReady`].
@@ -72,6 +81,7 @@ impl AutoUpdate {
             polling: false,
             channel_read: false,
             announced: None,
+            put_off: false,
         }
     }
 
@@ -188,6 +198,12 @@ impl Luma {
         self.open_about(cx);
     }
 
+    /// Sync found this build behind the server's data: fetch the update now,
+    /// polling or not, as a check someone asked for, so a failure is said.
+    pub(crate) fn fetch_required_update(&mut self) {
+        self.update.updater.check(true);
+    }
+
     /// Raise the ready dialog the first time a version is on disk. A dialog
     /// already up (or still playing its exit) is left alone; the shell calls
     /// this again each frame, so the ready dialog follows once it has gone.
@@ -201,6 +217,10 @@ impl Luma {
             return;
         };
         if self.update.announced.as_ref() == Some(version) || self.overlay.get().is_some() {
+            return;
+        }
+        // The required screen has the restart button already.
+        if self.sync_status.status.update_required && !self.update.put_off {
             return;
         }
         self.update.announced = Some(version.clone());
@@ -267,12 +287,79 @@ pub(crate) fn item(shell: &Luma) -> Option<crate::status_bar::Item> {
     Some(item)
 }
 
-/// What the About section says about updates, and the restart button once
-/// one is installed. Checking and downloading happen on their own; the
-/// menu's "Check for Updates…" only asks sooner.
-pub(crate) fn about(shell: &Luma, app: &Entity<Luma>) -> (Option<AnyElement>, Option<String>) {
+/// The window while this build is behind the server's data: what is wrong,
+/// how the update is coming along, and the way on.
+pub(crate) fn required(shell: &Luma, window: &Window, cx: &Context<Luma>) -> AnyElement {
+    const TITLE: &str = "Update Luma to continue";
+    const WHY: &str = "This version can no longer sync with your library.";
+    const PUT_OFF: &str = "Changes made before updating are not saved.";
+    let ready = matches!(shell.update.status, Status::Updated { .. });
+    let progress = progress(shell).unwrap_or_default();
+    let line = |text: &'static str| {
+        div()
+            .text_color(glass::ink(glass::TEXT_SECONDARY))
+            .child(text)
+            .agent_node(Role::Text, text)
+    };
+    let action = if ready {
+        luma_ui::button("Restart to Update", Enabled::Yes)
+            .id("required-restart")
+            .on_click(cx.listener(|this, _, _, cx| this.restart_to_update(cx)))
+            .agent_node(Role::Button, "Restart to Update")
+    } else {
+        luma_ui::button(
+            "Check Again",
+            Enabled::from(
+                !shell.update.status.busy() && shell.update.updater.unavailable().is_none(),
+            ),
+        )
+        .id("required-check")
+        .on_click(cx.listener(|this, _, _, _| this.fetch_required_update()))
+        .agent_node(Role::Button, "Check Again")
+    };
+    crate::signin::ground(
+        window,
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(12.))
+            .child(
+                div()
+                    .text_size(px(15.))
+                    .child(TITLE)
+                    .agent_node(Role::Text, TITLE),
+            )
+            .child(line(WHY))
+            .child(
+                div()
+                    .h(px(LINE))
+                    .text_color(glass::ink(glass::TEXT_SECONDARY))
+                    .child(progress.clone())
+                    .agent_node(Role::Text, progress),
+            )
+            .child(action)
+            .child(div().h(px(12.)))
+            .child(
+                luma_ui::button("Not Now", Enabled::Yes)
+                    .id("required-not-now")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.update.put_off = true;
+                        cx.notify();
+                    }))
+                    .agent_node(Role::Button, "Not Now"),
+            )
+            .child(line(PUT_OFF)),
+    )
+    .into_any_element()
+}
+
+/// What the updater is doing, in a sentence; nothing while it is idle.
+fn progress(shell: &Luma) -> Option<String> {
     let status = &shell.update.status;
-    let help = match (shell.update.updater.unavailable(), status) {
+    match (shell.update.updater.unavailable(), status) {
         (Some(reason), _) => Some(reason.to_string()),
         (None, Status::Checking) => Some("Checking for updates…".into()),
         (None, Status::Downloading { version }) => Some(format!("Downloading {version}…")),
@@ -284,7 +371,15 @@ pub(crate) fn about(shell: &Luma, app: &Entity<Luma>) -> (Option<AnyElement>, Op
         // The updater logged why; a person reads that it did not happen.
         (None, Status::Errored(_)) => Some("Could not check for updates.".into()),
         (None, Status::Idle) => None,
-    };
+    }
+}
+
+/// What the About section says about updates, and the restart button once
+/// one is installed. Checking and downloading happen on their own; the
+/// menu's "Check for Updates…" only asks sooner.
+pub(crate) fn about(shell: &Luma, app: &Entity<Luma>) -> (Option<AnyElement>, Option<String>) {
+    let status = &shell.update.status;
+    let help = progress(shell);
     let button = matches!(status, Status::Updated { .. }).then(|| {
         let restart = app.clone();
         luma_ui::button("Restart to Update", Enabled::Yes)

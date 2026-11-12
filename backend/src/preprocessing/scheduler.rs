@@ -362,6 +362,17 @@ fn reads_any(p: &dyn Preprocessor, artifacts: &HashSet<Artifact>) -> bool {
 // Public API
 // -----------------------------------------------------------------------------
 
+/// Which of a track's steps a run takes on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Plan {
+    /// The steps whose artifact is missing or stale and that are not in
+    /// failure backoff: an import, the startup reconcile.
+    Stale,
+    /// Every step, whatever the track already has and however recently a
+    /// step failed on it: someone asked for the analysis again.
+    Everything,
+}
+
 /// Plan + execute for a single track, one of the batch whose steps share
 /// `breaker`. Layers run sequentially; within each layer, siblings run
 /// concurrently. A failed preprocessor records its error and skips its
@@ -379,8 +390,17 @@ pub async fn run_for_track(
     report: Option<&StageReport>,
     breaker: &Breaker,
 ) -> Result<(), String> {
-    let result =
-        run_track_layers(pool, storage, workers, track_id, analysis, report, breaker).await;
+    let result = run_track_layers(
+        pool,
+        storage,
+        workers,
+        track_id,
+        analysis,
+        report,
+        breaker,
+        Plan::Stale,
+    )
+    .await;
     if let Some(report) = report.filter(|_| !analysis.is_cancelled()) {
         report.settle_rest(
             registry::dag().preprocessors().map(|p| p.name()),
@@ -393,6 +413,35 @@ pub async fn run_for_track(
     result
 }
 
+/// Run every step of one track again, on someone's request: the artifacts it
+/// has are rewritten in place as each step finishes, and a step in failure
+/// backoff gets a new try. On another principal's track that is the steps
+/// computed here; the owner's synced rows stand. The track shows as analysing
+/// while it runs.
+pub async fn rerun_track(
+    pool: &SqlitePool,
+    storage: &StorageRoot,
+    workers: &WorkerEnvironment,
+    track_id: &str,
+    analysis: &AnalysisGuard,
+) -> Result<(), String> {
+    let batch = analysis.activity().batch(&[track_id.to_owned()]);
+    let result = run_track_layers(
+        pool,
+        storage,
+        workers,
+        track_id,
+        analysis,
+        None,
+        &Breaker::default(),
+        Plan::Everything,
+    )
+    .await;
+    batch.finish(track_id);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_track_layers(
     pool: &SqlitePool,
     storage: &StorageRoot,
@@ -401,6 +450,7 @@ async fn run_track_layers(
     analysis: &AnalysisGuard,
     report: Option<&StageReport>,
     breaker: &Breaker,
+    plan: Plan,
 ) -> Result<(), String> {
     analysis.checkpoint()?;
     let Some(track) = tracks_db::get_track_by_id(pool, track_id).await? else {
@@ -454,13 +504,17 @@ async fn run_track_layers(
                 }
                 continue;
             }
-            if p.is_complete(&ctx, track_id).await? {
+            // Another principal's rows are not this device's to rewrite, so
+            // a rerun leaves them be and redoes what is computed here.
+            let authored = authors_synced || !writes_synced_rows(p.as_ref());
+            let redone = plan == Plan::Everything && authored;
+            if !redone && p.is_complete(&ctx, track_id).await? {
                 if let Some(report) = report {
                     report.settle(p.name(), StageOutcome::Skipped);
                 }
                 continue;
             }
-            if !authors_synced && writes_synced_rows(p.as_ref()) {
+            if !authored {
                 failed_artifacts.insert(p.output());
                 if let Some(report) = report {
                     report.settle(p.name(), StageOutcome::Skipped);
@@ -471,8 +525,8 @@ async fn run_track_layers(
             // the track is queued for another one. Its dependents wait with it,
             // and they are what keeps a track queued: nothing else stops a
             // failing upstream step from rerunning on every launch.
-            let fresh_input = reads_any(p.as_ref(), &produced);
-            if let Some(error) = held.get(p.name()).filter(|_| !fresh_input) {
+            let retried = redone || reads_any(p.as_ref(), &produced);
+            if let Some(error) = held.get(p.name()).filter(|_| !retried) {
                 // A cancelled run reports nothing; see `run_one`.
                 analysis.checkpoint()?;
                 eprintln!(
@@ -939,6 +993,42 @@ mod tests {
         );
 
         assert_runs_nothing(&services, &first).await;
+    }
+
+    /// Asked for again, a track's steps run whatever backoff holds them.
+    #[tokio::test]
+    async fn a_rerun_tries_the_steps_in_failure_backoff() {
+        let directory = tempfile::tempdir().unwrap();
+        let services = library(directory.path()).await;
+        let pool = &services.db.0;
+        let first: Vec<_> = registry::dag().layers()[0]
+            .iter()
+            .map(|p| p.name())
+            .collect();
+        hold(pool, &first).await;
+        let before = failure_rows(pool).await;
+        let epoch = services.analysis_tasks.current_epoch().unwrap();
+        let lease = services.analysis_tasks.lease(epoch).unwrap();
+
+        // Whether the steps succeed here is the environment's business.
+        let _ = rerun_track(
+            pool,
+            &services.storage,
+            &services.workers,
+            "t1",
+            &lease.guard(),
+        )
+        .await;
+
+        let after = failure_rows(pool).await;
+        for name in first {
+            assert!(
+                !after
+                    .iter()
+                    .any(|row| row.0 == name && before.contains(row)),
+                "{name} was passed by: its failure is as it was"
+            );
+        }
     }
 
     /// The case that reran a broken MERT on every track at every launch:

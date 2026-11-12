@@ -424,10 +424,13 @@ commands! {
     ) -> TrackImportResult;
 
     tracks::import_tracks(file_paths: Vec<String>) -> TrackImportResult;
+    tracks::reprocess_track(track_id: String) -> ();
 
     auth::current_account() -> Option<crate::database::local::auth::AuthAccount>;
     auth::send_login_code(email: String) -> ();
     auth::verify_login_code(email: String, code: String) -> String;
+    auth::terms_accepted() -> bool;
+    auth::accept_terms(version: i32) -> ();
     auth::get_session_item(key: String) -> Option<String>;
     auth::set_session_item(key: String, value: String) -> ();
     auth::remove_session_item(key: String) -> ();

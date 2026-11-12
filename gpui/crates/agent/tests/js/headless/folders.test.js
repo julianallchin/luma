@@ -73,3 +73,14 @@ test("a folder is made, named, filled from a song's menu, opened and deleted", (
     .find({ role: "row", label: "Aurora" }) !== undefined).toBe(true);
   expect(texts(gone)).toContain("All songs songs: 1");
 });
+
+test("a song's menu offers Reprocess, and choosing it closes the menu", () => {
+  nav.venue("Test Venue");
+  app.click(until("the song", (s) => songRows(s).length === 1 ? s : undefined)
+    .find({ role: "row", label: "Aurora" }), { button: "right" });
+  const menu = until("the song's menu", (s) => s.find({ role: "card", label: "Song folders" }));
+  app.click(menu.find({ role: "button", label: "Reprocess" }));
+  until("the menu gone", (s) => s.find({ role: "card", label: "Song folders" }) === undefined);
+  // The song is still there to work on while it is analysed again.
+  expect(songRows(app.snapshot()).length).toBe(1);
+});

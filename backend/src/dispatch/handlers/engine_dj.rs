@@ -12,7 +12,7 @@ use crate::dispatch::AppServices;
 use crate::engine_dj;
 use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist, EngineDjTrack};
 use crate::error::CommandError;
-use crate::models::tracks::{TrackImportFailure, TrackImportResult};
+use crate::models::tracks::{ImportRejection, TrackImportFailure, TrackImportResult};
 use crate::services::tracks::{ImportRequest, LibraryTrack};
 
 use super::tracks::importer;
@@ -120,6 +120,8 @@ pub async fn engine_dj_import_tracks(
             .find(|row| row.id == id)
             .ok_or_else(|| TrackImportFailure {
                 source_id: id.to_string(),
+                name: None,
+                reason: ImportRejection::Missing,
                 message: format!("Engine DJ track {id} not found"),
             })?;
         Ok(ImportRequest::Library(LibraryTrack {
@@ -127,7 +129,6 @@ pub async fn engine_dj_import_tracks(
             title: row.title.clone(),
             artist: row.artist.clone(),
             album: row.album.clone(),
-            duration_seconds: row.length,
             filename: Some(row.filename.clone()),
             audio_path: Ok(engine_dj::resolve_engine_path(&library_path, &row.path)),
         }))

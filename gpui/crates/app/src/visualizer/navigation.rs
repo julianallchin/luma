@@ -50,6 +50,9 @@ pub(super) struct Fly {
     keys: FlyKeys,
     /// The previous frame's step, which the next one measures its time from.
     last: Instant,
+    /// How long the keys have been held, in seconds: the fly speeds up over
+    /// it, and starts over once every key is let go.
+    held: f32,
     /// Whether the camera moved or turned. A right click that did neither
     /// leaves the camera exactly as it was.
     moved: bool,
@@ -259,6 +262,7 @@ impl Visualizer {
             self.fly = Some(Fly {
                 keys: FlyKeys::default(),
                 last: Instant::now(),
+                held: 0.0,
                 moved: false,
                 lock_asked: false,
                 locked: false,
@@ -316,11 +320,13 @@ impl Visualizer {
         fly.last = now;
         let keys = FlyKeys { fast, ..fly.keys };
         if !keys.moving() {
+            fly.held = 0.0;
             return;
         }
         fly.moved = true;
+        let speed = navigate::fly_speed(fly.held) * self.fly_speed;
+        fly.held += dt;
         self.toured(tour::Move::Fly);
-        let speed = navigate::fly_speed(&self.framing) * self.fly_speed;
         self.camera.fly(keys, speed, dt, self.framing.floor_z());
     }
 
@@ -485,6 +491,35 @@ mod tests {
         );
         state.end_drag();
         assert!(state.input_redraws());
+    }
+
+    /// A fly gathers pace while the keys are held and starts over once they
+    /// are let go, whatever the rig's size.
+    #[test]
+    fn a_fly_speeds_up_while_the_keys_are_held() {
+        let mut state = visualizer(None, empty_pick(Camera::default()));
+        state.begin_drag(Drag::Fly, gpui::point(px(400.), px(300.)));
+        let mut now = Instant::now();
+        state.fly_tick(now, false);
+        let mut step = |state: &mut Visualizer| {
+            let from = state.camera.position();
+            now += Duration::from_millis(16);
+            state.fly_tick(now, false);
+            state.camera.position().distance(from)
+        };
+        assert!(state.fly_key("w", true));
+        let first = step(&mut state);
+        for _ in 0..60 {
+            step(&mut state);
+        }
+        let later = step(&mut state);
+        assert!(first > 0.0 && later > first, "{first} then {later}");
+
+        assert!(state.fly_key("w", false));
+        step(&mut state);
+        assert!(state.fly_key("w", true));
+        let again = step(&mut state);
+        assert!((again - first).abs() < first * 1e-3, "{first} then {again}");
     }
 
     /// A wheel that does not travel leaves the camera and draws no pivot,

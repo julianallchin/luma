@@ -59,3 +59,23 @@ pub(crate) fn golden_text(mut value: serde_json::Value) -> String {
     out.push('\n');
     out
 }
+
+/// Write `seconds` of silence to `path` as a WAV: 8 kHz, mono, 16-bit.
+pub(crate) fn write_wav(path: &Path, seconds: u32) {
+    let data_len = seconds * 16_000;
+    let mut bytes = Vec::with_capacity((44 + data_len) as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&8_000_u32.to_le_bytes());
+    bytes.extend_from_slice(&16_000_u32.to_le_bytes());
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&16_u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_len.to_le_bytes());
+    bytes.resize((44 + data_len) as usize, 0);
+    std::fs::write(path, bytes).unwrap();
+}

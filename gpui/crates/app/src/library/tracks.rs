@@ -43,6 +43,17 @@ impl Library {
         }
     }
 
+    /// Analyse a track again, in the background.
+    pub fn reprocess_track(
+        &self,
+        track_id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let track_id = track_id.to_owned();
+        self.call("reprocess_track", |services| async move {
+            handlers::tracks::reprocess_track(&services, track_id).await
+        })
+    }
+
     /// The track browser's rows for `venue_id`, carrying that venue's
     /// annotation counts.
     pub fn tracks(

@@ -151,7 +151,10 @@ pub fn rows_for(
                 turn: ix,
                 kind: RowKind::Prompt,
                 version: version(
-                    fnv1a(FNV_OFFSET, prompt_text(message).as_bytes()),
+                    fnv1a(
+                        fnv1a(FNV_OFFSET, prompt_text(message).as_bytes()),
+                        attached(message).as_bytes(),
+                    ),
                     streaming,
                 ),
             }),
@@ -739,6 +742,13 @@ fn prompt_text(message: &AgentChatMessage) -> String {
         .join("\n")
 }
 
+/// What the editor attached to a user turn, as one line: `Playhead 17.2.3 ·
+/// Selection 17.1.1–21.1.1 · 3 clips · 2 hand edits`. Empty when the message
+/// carried no context.
+fn attached(message: &AgentChatMessage) -> String {
+    luma_lib::agent::context_labels(message).join("  ·  ")
+}
+
 /// What one block paints, as plain text — what the automation tree reports for
 /// it. Derived from the parsed tree rather than from the source so the node
 /// says what is on screen, not what the markdown said.
@@ -886,10 +896,19 @@ pub fn row(
     let (body, plain) = match key.kind {
         RowKind::Prompt => {
             let text = prompt_text(message);
+            let attached = attached(message);
             (
                 div()
-                    .opacity(if ctx.flying { 0.0 } else { 1.0 })
-                    .child(user_bubble(&text, &turn.key, theme))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .opacity(if ctx.flying { 0.0 } else { 1.0 })
+                            .child(user_bubble(&text, &turn.key, theme)),
+                    )
+                    .when(!attached.is_empty(), |row| {
+                        row.child(attached_note(attached, theme))
+                    })
                     .into_any_element(),
                 text,
             )
@@ -1066,6 +1085,30 @@ pub(crate) fn user_bubble(text: &str, turn_key: &SharedString, theme: &Theme) ->
                 .text_color(theme.text)
                 .child(div().relative().child(underlay).child(styled)),
         )
+        .into_any_element()
+}
+
+/// What the editor sent along with a prompt, under its bubble: one faint
+/// line at the bubble's right edge. It says what the agent was shown; it is
+/// not part of what the user said, so it is small and never selectable.
+fn attached_note(attached: String, theme: &Theme) -> AnyElement {
+    div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .justify_end()
+        .pt(px(theme::SPACE_XS))
+        .pr(px(theme::SPACE_SM))
+        .child(
+            div()
+                .max_w(px(theme::MAX_CONTENT_WIDTH * theme::BUBBLE_WIDTH_SHARE))
+                .min_w_0()
+                .text_size(px(11.0))
+                .line_height(px(16.0))
+                .text_color(theme.text_muted.opacity(0.55))
+                .child(SharedString::from(attached)),
+        )
+        .agent_node(NodeRole::Text, "Attached editor context")
         .into_any_element()
 }
 

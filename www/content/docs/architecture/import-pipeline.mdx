@@ -17,15 +17,23 @@ A request is one of two kinds:
 
 | Request | Behavior |
 |---------|----------|
-| `ImportRequest::File` | Copies the file into the managed tracks directory with a new UUID name. Reads tags with `lofty`. Extracts album art. |
-| `ImportRequest::Library` | Imports an Engine DJ or rekordbox row with the library's metadata, reading the audio where the library keeps it. |
+| `ImportRequest::File` | Reads tags with `lofty` and extracts album art. A song with no title tag is named for its file. |
+| `ImportRequest::Library` | Imports an Engine DJ or rekordbox row with the library's metadata. |
 
-- A file import rejects tracks longer than 10 minutes.
-- Every path computes a content hash of the audio file.
+- Every import converts the audio to Ogg Opus in the managed tracks directory
+  (`audio::stored`). That is the only copy Luma keeps: sync uploads the same
+  bytes, and a DJ library can move or be unplugged afterwards. The source's
+  extension is not trusted; ffmpeg reads what the file contains.
+- Every import rejects tracks longer than 10 minutes, measured on the
+  converted audio. Conversion stops just past the limit.
+- Every path computes a content hash of the source file, and stops before
+  converting when the library already has that song.
+- Songs imported before this are converted by the media sync pass
+  (`sync/legacy_audio.rs`, which says when it can be deleted).
 - The DJ paths match an existing track by source id first, then by content
   hash.
 
-Audio is decoded once, with ffmpeg (symphonia as fallback), to stereo at
+Audio is decoded once, with ffmpeg, to stereo at
 48 kHz (`audio::SAMPLE_RATE`). Every `.pcm` cache is at that rate; a cache at
 any other rate is re-decoded. Playback converts to the output device's rate in
 its output stream, never on disk.
