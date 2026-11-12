@@ -139,6 +139,9 @@ after it. A new migration adds its line here.
   shows the terms: that client cannot record an acceptance without it, so
   nobody new gets past the terms page. Server only; there is no local
   migration
+- `20261111130000_profiles_private.sql` — any time; until it runs, anyone
+  holding the app's public key can list every account id and display name.
+  Server only; there is no local migration
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an
