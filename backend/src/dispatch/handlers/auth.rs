@@ -562,6 +562,11 @@ async fn wipe_signed_in_projection(
     // Venue rows are a sealed local cache, not an ephemeral session
     // projection, and they survive logout. Remove only catalog leaves nothing
     // else depends on; another cached principal's rows are never touched.
+    //
+    // This empties a cache: the songs stay on the server. Left uploading, the
+    // delete would be queued and sent at the next sign-in, removing them from
+    // the account.
+    crate::sync::triggers::local_only(&mut **transaction).await?;
     sqlx::query(
         "DELETE FROM tracks
          WHERE uid = ?
@@ -572,6 +577,7 @@ async fn wipe_signed_in_projection(
     .execute(&mut **transaction)
     .await
     .map_err(|error| format!("Failed to remove signed-in catalog projection: {error}"))?;
+    crate::sync::triggers::uploading(&mut **transaction).await?;
     sqlx::query(
         "UPDATE auth_write_admission SET maintenance = 0
          WHERE singleton = 1 AND maintenance = 1 AND accepting = 0",
@@ -633,6 +639,80 @@ mod tests {
             1,
             "signing out must not destroy a venue"
         );
+    }
+
+    /// Signing out empties this device's copy and tells the server nothing:
+    /// a song with no score is still the account's. The next write on the
+    /// same connection is an edit again.
+    #[tokio::test]
+    async fn sign_out_uploads_no_deletes() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(directory.path().join("wipe.db"))
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        {
+            // The one connection, with the upload queue on it, as the app's
+            // writers have.
+            let mut connection = pool.acquire().await.unwrap();
+            sqlx::raw_sql(
+                "CREATE TEMP TABLE powersync_crud (seq INTEGER PRIMARY KEY AUTOINCREMENT, \
+                 op TEXT, id TEXT, type TEXT, data TEXT, metadata TEXT);",
+            )
+            .execute(&mut *connection)
+            .await
+            .unwrap();
+            crate::sync::triggers::install(&mut connection)
+                .await
+                .unwrap();
+        }
+        for statement in [
+            "INSERT INTO tracks (id, uid, track_hash, file_path) VALUES ('loose', 'alice', 'l', '/l')",
+            "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json) VALUES ('loose', 'alice', '[]', '[]')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+
+        wipe_database_pool(&pool, "alice").await.unwrap();
+
+        let deletes: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM powersync_crud WHERE op = 'DELETE'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(deletes, 0, "signing out deleted the account's songs");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tracks")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('ven', 'alice', 'Basement')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let later: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM powersync_crud WHERE type = 'venues'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(later, 1, "an edit after signing out was not queued");
     }
 
     /// The admission gate is who this device may write as.
