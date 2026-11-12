@@ -10,6 +10,11 @@ the drop *blooms* instead of punching. If you find yourself planning strobes,
 re-listen; if the snare is artillery and the bass is snarling, you're in
 `heavy-bass` territory.
 
+Read `reading-music-into-light` first. It is how a sound becomes a look;
+this adds what is particular to the style. What follows are the habits of
+the genre and what to listen for, not instructions: the track in front of
+you decides.
+
 ## The one idea
 
 Light the swells. This music is built from chords that inflate and release —
@@ -27,8 +32,9 @@ riding the top. Your job is to make the room inhale and exhale with them.
 
 ## Feel
 
-- The drop is the *widest* moment, not the hardest. Everything on, but soft
-  edges — full rig at a warm sustain beats full rig strobing.
+- The drop is the *widest* moment, not the hardest. Wide can be most of the
+  rig at a warm sustain with soft edges; it does not have to be all of it,
+  and it does not have to be bright.
 - Vocal chops are sparkle. Small bright accents on a secondary group, following
   the chop rhythm loosely — decoration, not structure.
 - The bass still moves (`luma.music.modulation`). A slow 1–2 Hz undulation

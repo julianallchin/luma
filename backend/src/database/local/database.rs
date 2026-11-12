@@ -11,7 +11,7 @@ use std::path::Path;
 /// library whose `user_version` differs clears its synced tables at startup,
 /// keeping its upload queue, and PowerSync downloads them again — so no code
 /// ever converts a local row. Migrations set the version their schema reads.
-pub const PROJECTION_VERSION: i64 = 1;
+pub const PROJECTION_VERSION: i64 = 2;
 
 /// `SqlitePool` is itself a shared handle, so cloning `Db` hands out another
 /// reference to the same pool, never a second pool.

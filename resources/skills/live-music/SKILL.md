@@ -8,6 +8,11 @@ A live band is a live band for a reason. People came for the music, and the
 lighting's job is to make the room feel right while staying out of the way. If
 you're proud of how much the lights are doing, you've already failed this one.
 
+Read `reading-music-into-light` first. It is how a sound becomes a look;
+this adds what is particular to the style. What follows are the habits of
+the genre and what to listen for, not instructions: the track in front of
+you decides.
+
 ## The one idea
 
 Work at section level, not beat level. Verses, choruses, solos, the quiet

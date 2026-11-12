@@ -19,6 +19,7 @@ use crate::services::groups::GroupNames;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+use super::hand_edits;
 use super::transcript::{AgentChatMessage, AgentChatPart};
 use super::{TurnContext, UserPrompt};
 
@@ -43,6 +44,26 @@ pub struct EditorState {
     /// How many more clips matched than [`Self::clips`] holds.
     #[serde(default)]
     pub clips_omitted: usize,
+    /// The clips the user changed by hand since the agent's last reply, at
+    /// most [`MAX_CLIPS`]. The turn fills this in when the message arrives:
+    /// the editor does not know what the agent last saw.
+    #[serde(default)]
+    pub hand_edits: Vec<HandEdit>,
+    #[serde(default)]
+    pub hand_edits_omitted: usize,
+}
+
+/// One clip the user changed by hand, where it stands now, or stood when it
+/// was removed.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HandEdit {
+    pub id: String,
+    pub name: String,
+    pub start: TimePoint,
+    pub end: TimePoint,
+    /// `added`, `removed`, or what changed: `moved, look`.
+    pub change: String,
 }
 
 /// A time on the track, and where it falls in the beat grid when the track
@@ -164,7 +185,35 @@ impl EditorState {
                 })
                 .collect(),
             clips_omitted,
+            hand_edits: Vec::new(),
+            hand_edits_omitted: 0,
         }
+    }
+
+    /// Record what the user changed by hand since the agent's last reply.
+    /// Nothing is recorded without a grid: a clip's place is in beats.
+    pub fn note_hand_edits(&mut self, edits: Vec<hand_edits::Edit>, grid: Option<&BeatGrid>) {
+        let Some(bars) = grid.and_then(Bars::new) else {
+            return;
+        };
+        self.hand_edits_omitted = edits.len().saturating_sub(MAX_CLIPS);
+        self.hand_edits = edits
+            .into_iter()
+            .take(MAX_CLIPS)
+            .filter_map(|edit| {
+                Some(HandEdit {
+                    start: bars.at_beat(edit.start)?,
+                    end: bars.at_beat(edit.end)?,
+                    id: edit.id,
+                    name: edit.name,
+                    change: match edit.change {
+                        hand_edits::Change::Added => "added".into(),
+                        hand_edits::Change::Removed => "removed".into(),
+                        hand_edits::Change::Changed(what) => what.join(", "),
+                    },
+                })
+            })
+            .collect();
     }
 }
 
@@ -470,7 +519,9 @@ fn holds(cell: &Cell, patterns: &[PerformPattern], groups: &GroupNames) -> Strin
         CellContent::Group { label, group } if label.is_empty() => {
             format!("group {}", called(groups, group))
         }
-        CellContent::Group { label, group } => format!("group {label:?}, {}", called(groups, group)),
+        CellContent::Group { label, group } => {
+            format!("group {label:?}, {}", called(groups, group))
+        }
     }
 }
 
@@ -533,7 +584,18 @@ impl Bars {
     }
 
     fn at(&self, seconds: f64) -> Option<BarBeat> {
-        let beat = self.timeline.beat_at(seconds).ok()?;
+        Some(self.position(self.timeline.beat_at(seconds).ok()?))
+    }
+
+    /// A place given in beats, as a clip stores its start, as a time.
+    fn at_beat(&self, beat: f64) -> Option<TimePoint> {
+        Some(TimePoint {
+            seconds: self.timeline.seconds_at(beat).ok()?,
+            bar: Some(self.position(beat)),
+        })
+    }
+
+    fn position(&self, beat: f64) -> BarBeat {
         let mut bar = self.bar_at(beat);
         // Rounded to what is shown (a hundredth of a 16th) first, so the end
         // of a bar never prints as 16th 5 of its last beat.
@@ -542,10 +604,10 @@ impl Bars {
             bar += 1;
             within = 0.0;
         }
-        Some(BarBeat {
+        BarBeat {
             bar,
             beat: within + 1.0,
-        })
+        }
     }
 }
 
@@ -558,6 +620,12 @@ pub fn of_message(message: &AgentChatMessage) -> Option<TurnContext> {
         }
         _ => None,
     })
+}
+
+/// [`labels`] for a stored user row; empty when it carries no context.
+#[must_use]
+pub fn labels_of(message: &AgentChatMessage) -> Vec<String> {
+    of_message(message).as_ref().map(labels).unwrap_or_default()
 }
 
 /// The hidden part that stores `context` on a user row.
@@ -714,10 +782,9 @@ fn render_editor(out: &mut String, editor: &EditorState) {
         }
     };
     let total = editor.clips.len() + editor.clips_omitted;
-    if total == 0 {
-        return;
+    if total > 0 {
+        let _ = writeln!(out, "{heading} ({total}):");
     }
-    let _ = writeln!(out, "{heading} ({total}):");
     for clip in &editor.clips {
         let z = clip.z.map(|z| format!(" z {z}")).unwrap_or_default();
         let _ = writeln!(
@@ -733,6 +800,70 @@ fn render_editor(out: &mut String, editor: &EditorState) {
     if editor.clips_omitted > 0 {
         let _ = writeln!(out, "…and {} more", editor.clips_omitted);
     }
+    let edited = editor.hand_edits.len() + editor.hand_edits_omitted;
+    if edited == 0 {
+        return;
+    }
+    let _ = writeln!(out, "Changed by hand since your last reply ({edited}):");
+    for edit in &editor.hand_edits {
+        let _ = writeln!(
+            out,
+            "- {} {:?} {}: {}",
+            edit.id,
+            edit.name,
+            range(edit.start, edit.end),
+            edit.change
+        );
+    }
+    if editor.hand_edits_omitted > 0 {
+        let _ = writeln!(out, "…and {} more", editor.hand_edits_omitted);
+    }
+}
+
+/// What a message carried, as a few short labels for the chat to show under
+/// it: the playhead, the cursor or selection, the clips there and what was
+/// changed by hand; or the Perform page, the selected cell and what plays.
+#[must_use]
+pub fn labels(context: &TurnContext) -> Vec<String> {
+    let place = |at: TimePoint| at.bar.map_or_else(|| seconds(at), bar);
+    let count =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let mut labels = Vec::new();
+    if let Some(editor) = &context.editor {
+        labels.push(format!("Playhead {}", place(editor.playhead)));
+        match &editor.cursor {
+            Some(EditorCursor {
+                start,
+                end: Some(end),
+                ..
+            }) => {
+                labels.push(format!("Selection {}–{}", place(*start), place(*end)));
+            }
+            Some(cursor) => labels.push(format!("Cursor {}", place(cursor.start))),
+            None => {}
+        }
+        let clips = editor.clips.len() + editor.clips_omitted;
+        if clips > 0 {
+            labels.push(count(clips, "clip", "clips"));
+        }
+        let edits = editor.hand_edits.len() + editor.hand_edits_omitted;
+        if edits > 0 {
+            labels.push(count(edits, "hand edit", "hand edits"));
+        }
+    }
+    if let Some(perform) = &context.perform {
+        if let Some(page) = &perform.page {
+            labels.push(format!("Page {}", page.name));
+        }
+        if perform.selected.is_some() {
+            labels.push("Selected cell".into());
+        }
+        let playing = perform.playing.len() + perform.playing_omitted;
+        if playing > 0 {
+            labels.push(format!("{playing} playing"));
+        }
+    }
+    labels
 }
 
 fn seconds(at: TimePoint) -> String {
@@ -867,6 +998,38 @@ mod tests {
              Cursor: none\n\
              </editor-context>"
         );
+    }
+
+    #[test]
+    fn hand_edits_are_told_to_the_model_and_counted_in_the_labels() {
+        let grid = grid();
+        let mut editor = EditorState::capture(3.0, None, [], Some(&grid));
+        assert_eq!(labels(&track_context(editor.clone())), ["Playhead 2.1.1"]);
+        let edit = |id: &str, start: f64, change| hand_edits::Edit {
+            id: id.into(),
+            name: format!("Clip {id}"),
+            start,
+            end: start + 4.0,
+            change,
+        };
+        editor.note_hand_edits(
+            vec![
+                edit("a", 0.0, hand_edits::Change::Added),
+                edit("b", 4.0, hand_edits::Change::Changed(vec!["moved", "look"])),
+            ],
+            Some(&grid),
+        );
+        let context = track_context(editor);
+        let text = render(&context);
+        assert!(
+            text.contains(
+                "Changed by hand since your last reply (2):\n\
+                 - a \"Clip a\" 1.00 s to 3.00 s (1.1.1-2.1.1): added\n\
+                 - b \"Clip b\" 3.00 s to 5.00 s (2.1.1-3.1.1): moved, look\n"
+            ),
+            "{text}"
+        );
+        assert_eq!(labels(&context), ["Playhead 2.1.1", "2 hand edits"]);
     }
 
     #[test]
@@ -1069,7 +1232,10 @@ mod tests {
             0,
             Some(&selected),
             &patterns,
-            &[group("group-front", "front_wash"), group("group-back", "back")],
+            &[
+                group("group-front", "front_wash"),
+                group("group-back", "back"),
+            ],
             Some(&live),
         );
         assert_eq!(view.playing.len(), 1, "only the pattern whose pad is on");

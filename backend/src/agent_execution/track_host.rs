@@ -54,6 +54,7 @@ impl From<&TrackEditScope> for TrackScope {
 }
 
 mod score;
+mod scores;
 
 const SAMPLES_PER_BEAT: f64 = 16.0;
 const FALLBACK_SAMPLES_PER_SECOND: f64 = 32.0;
@@ -215,6 +216,9 @@ impl HostCallHandler for TrackHost {
                     | "track.clip_check"
             ) {
                 return self.score_call(method, payload, context).await;
+            }
+            if matches!(method, "track.scores_find" | "track.scores_open") {
+                return supervise(self.scores_call(method, payload), context, limit).await;
             }
             let _ = (payload, limit);
             Err(HostCallError::new(

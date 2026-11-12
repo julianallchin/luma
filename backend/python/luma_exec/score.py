@@ -512,7 +512,8 @@ class Edit:
 
         Writes only the clips this edit changed against the score it captured,
         so a clip someone else saved meanwhile stays. Advances luma.track and
-        returns the score as saved. A subagent saves into its own draft, which
+        returns the score as saved, which prints as a short receipt: what
+        changed and what the score now holds. A subagent saves into its own draft, which
         its parent merges per clip when the child is done.
         """
         self._open()
@@ -520,7 +521,7 @@ class Edit:
                                    {"base": self._base, "candidate": self.candidate})
         self._track._advance(result)
         self._closed = True
-        return result
+        return Applied(result, self._base["clips"])
 
     def diff(self, full=False):
         """What this edit changes against the score it captured.
@@ -585,6 +586,35 @@ class Diff(str):
 
 
 #: At most this many clip lines in edit.diff(); full=True has every clip.
+# A score with more layers than this is hard to edit by hand.
+_MANY_LAYERS = 12
+
+
+class Applied(dict):
+    """The score as saved. It prints as a receipt, not as its clips."""
+
+    def __init__(self, score, before):
+        super().__init__(score)
+        clips = score.get("clips") or {}
+        self._changes = (len(clips.keys() - before.keys()), len(before.keys() - clips.keys()),
+                         sum(1 for id in clips.keys() & before.keys() if clips[id] != before[id]))
+
+    def __repr__(self):
+        clips = (self.get("clips") or {}).values()
+        added, removed, changed = self._changes
+        graphs = {json.dumps(clip.get("graph"), sort_keys=True) for clip in clips}
+        layers = {clip.get("z_index", 0) for clip in clips}
+        reactive = sum(1 for clip in clips if any(
+            node.get("kind") == "audio" for node in ((clip.get("graph") or {}).get("nodes") or {}).values()))
+        lines = [f"applied: +{added} added, ~{changed} changed, -{removed} removed",
+                 f"the score now has {len(clips)} clips of {len(graphs)} distinct graphs on {len(layers)} layers"]
+        if len(layers) > _MANY_LAYERS:
+            lines.append(f"warning: {len(layers)} layers; clips of one look belong on one z")
+        if reactive:
+            lines.append(f"warning: {reactive} clips follow audio(); use it only when the user asked for a reactive look")
+        return "\n".join(lines)
+
+
 _DIFF_LINES = 200
 
 

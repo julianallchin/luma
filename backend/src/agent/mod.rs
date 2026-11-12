@@ -27,6 +27,7 @@
 pub(crate) mod context;
 pub mod engine;
 pub mod figures;
+mod hand_edits;
 pub mod model;
 pub mod skills;
 pub mod subagent;
@@ -34,8 +35,10 @@ pub mod tools;
 pub mod transcript;
 mod turn;
 
+pub use context::labels_of as context_labels;
 pub use context::{
-    BarBeat, ClipSpan, CursorSpan, EditorClip, EditorCursor, EditorState, PerformView, TimePoint,
+    BarBeat, ClipSpan, CursorSpan, EditorClip, EditorCursor, EditorState, HandEdit, PerformView,
+    TimePoint,
 };
 pub use transcript::{
     apply, to_model_messages, AgentChatMessage, AgentChatPart, Applied, RequestUsage, Role,
@@ -415,7 +418,7 @@ impl ThreadScope {
 }
 
 /// Host-selected context for one turn. `None` explicitly means nothing is open.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnContext {
     pub scope: Option<ThreadScope>,
@@ -562,6 +565,13 @@ pub enum TurnEvent {
         user_id: String,
         text: String,
         next_id: String,
+    },
+    /// What the editor showed when the user row `id` was sent, as its stored
+    /// row carries it: the model reads it from the fold, and a host shows
+    /// what was attached.
+    ContextAttached {
+        id: String,
+        context: Box<TurnContext>,
     },
     /// The assistant row is closed and durable.
     MessageEnded {

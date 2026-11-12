@@ -103,6 +103,20 @@ pub async fn toured(dir: &Path, principal: &str) {
     state.0.close().await;
 }
 
+/// Leave the terms page owed to `principal`, as it is to an account that
+/// quit on the page — see `luma_app`'s `terms`.
+pub async fn owes_terms(dir: &Path, principal: &str) {
+    let state = luma_lib::database::local::state::init_state_db_at(dir)
+        .await
+        .expect("failed to open the fixture state database");
+    sqlx::query("INSERT INTO auth_session (key, value) VALUES (?, '1')")
+        .bind(format!("terms_pending:{principal}"))
+        .execute(&state.0)
+        .await
+        .expect("failed to seed the owed terms");
+    state.0.close().await;
+}
+
 async fn seed_as(dir: &Path, stored: Stored, principal: &str) {
     let state = luma_lib::database::local::state::init_state_db_at(dir)
         .await

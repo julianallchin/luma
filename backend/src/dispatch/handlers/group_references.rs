@@ -23,7 +23,7 @@ pub async fn venue_group_usage(
     Ok(usage(&mut access).await?)
 }
 
-async fn usage(access: &mut impl AuthorizedVenue) -> Result<Vec<GroupUsage>, String> {
+pub(crate) async fn usage(access: &mut impl AuthorizedVenue) -> Result<Vec<GroupUsage>, String> {
     let mut used = BTreeMap::<String, GroupUsage>::new();
 
     let venue = access.venue_id().to_owned();

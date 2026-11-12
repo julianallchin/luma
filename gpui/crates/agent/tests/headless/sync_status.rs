@@ -1,4 +1,5 @@
-//! Sync says one of four things, and only a refusal opens.
+//! Sync says one of five things; only a refusal opens, and a build too old
+//! to sync is told so in place of the app.
 use super::support::Fixture;
 use gpui_agent::Mode;
 use luma_lib::models::sync::{SyncRefusal, SyncStatus};
@@ -84,5 +85,44 @@ fn sync_status_reads_in_four_states_and_only_a_refusal_opens() {
     assert!(
         status.lock().unwrap().refused.is_empty(),
         "Dismiss reached the library"
+    );
+}
+
+/// A build behind the server's data is told so in place of the app, with
+/// what it costs to carry on; put off, the app is back and the status bar
+/// keeps saying it.
+#[test]
+fn a_required_update_stands_in_for_the_app_until_it_is_put_off() {
+    let status = Arc::new(Mutex::new(SyncStatus {
+        connected: true,
+        ..Default::default()
+    }));
+    let mut harness = Fixture::new("sync-update-required", 4, vec![])
+        .with_sync_status(status.clone())
+        .open(Mode::Headless);
+    let script = format!(
+        "{}\n{}",
+        super::support::NAV,
+        r#"
+        nav.trackEditor("Test Venue", "Aurora");
+        until("in sync", s => s.find({role: "text", label: "Up to date"}));
+        true;
+    "#
+    );
+    harness.run(&script, Duration::from_secs(30));
+
+    status.lock().unwrap().update_required = true;
+    step(
+        &mut harness,
+        r#"
+        const asked = until("the update is asked for", s =>
+            s.find({role: "text", label: "Update Luma to continue"})
+            && s.find({role: "text", label: "Changes made before updating are not saved."})
+            && !s.find({role: "text", label: "Up to date"}));
+        app.click(asked.find({role: "button", label: "Not Now"}));
+        until("the app is back, still saying so", s =>
+            s.find({role: "button", label: "Update required"})
+            && !s.find({role: "text", label: "Update Luma to continue"}));
+    "#,
     );
 }
