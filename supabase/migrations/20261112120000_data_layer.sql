@@ -532,6 +532,71 @@ begin
 end;
 $$;
 
+-- A delete used to be its own verb with its own policy. It is an update now,
+-- so on the two tables where deleting was held more tightly than editing,
+-- the update has to hold the flag as tightly.
+--
+-- A venue: members edit the row, and only its owner deletes it or brings it
+-- back.
+create or replace function public.guard_venue_door() returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+    -- Outside a request (the SQL editor, a migration) there is no caller.
+    if auth.uid() is null then
+        return new;
+    end if;
+    if new.uid is distinct from old.uid then
+        raise exception 'a venue''s owner cannot be changed'
+            using errcode = '42501';
+    end if;
+    if new.share_code is distinct from old.share_code and old.uid is distinct from auth.uid() then
+        raise exception 'only the venue''s owner can change its share code'
+            using errcode = '42501';
+    end if;
+    if new.deleted_at is distinct from old.deleted_at and old.uid is distinct from auth.uid() then
+        raise exception 'only the venue''s owner can delete it or bring it back'
+            using errcode = '42501';
+    end if;
+    return new;
+end;
+$$;
+
+-- A membership: it had no update policy at all, being made by `join_venue`
+-- and deleted by the member or the venue's owner. Those two may now flag it,
+-- and that is the whole of what an update may do: no other column changes,
+-- and a member who was removed does not clear the flag and walk back in.
+create policy venue_members_update on public.venue_members
+    for update to authenticated
+    using (uid = auth.uid() or public.owns_venue(venue_id))
+    with check (uid = auth.uid() or public.owns_venue(venue_id));
+
+create trigger venue_members_keep_written before update on public.venue_members
+    for each row execute function public.keep_written();
+
+create or replace function public.guard_membership() returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+    if auth.uid() is not null
+       and old.deleted_at is not null and new.deleted_at is null
+       and not public.owns_venue(old.venue_id)
+    then
+        raise exception 'only the venue''s owner can restore a membership'
+            using errcode = '42501';
+    end if;
+    return new;
+end;
+$$;
+revoke all on function public.guard_membership() from public, anon, authenticated;
+
+create trigger venue_members_guard before update on public.venue_members
+    for each row execute function public.guard_membership();
+
 -- ---------------------------------------------------------------------------
 -- History.
 -- ---------------------------------------------------------------------------

@@ -50,6 +50,10 @@ transport underneath.
 - An edit that reaches the server after the row was flagged changes no row.
   The connector records that as "not saved", as it does any refused write.
 - A second delete of a flagged row succeeds and keeps the first stamp.
+- Where deleting was held more tightly than editing, the flag is held as
+  tightly. Members edit a venue's row, and only its owner flags or revives
+  it. A membership is flagged by its member or the venue's owner, revived
+  only by the owner, and changed in no other way.
 
 ## Reads on the server
 
