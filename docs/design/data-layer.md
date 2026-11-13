@@ -11,7 +11,7 @@ transport underneath.
 
 | Kind | Tables | Rule |
 |---|---|---|
-| Source | `feedback`, `venues`, `venue_members`, `fixtures`, `fixture_groups`, `fixture_group_members`, `venue_nodes`, `venue_node_params`, `venue_constraints`, `folders`, `folder_tracks`, `laser_limits`, `perform_patterns`, `perform_layouts`, `perform_controllers`, `control_bindings`, `tracks`, `track_beats`, `track_beat_validations`, `scores`, `clips`, `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` | The contract below |
+| Source | `feedback`, `agent_thread_usage`, `venues`, `venue_members`, `fixtures`, `fixture_groups`, `fixture_group_members`, `venue_nodes`, `venue_node_params`, `venue_constraints`, `folders`, `folder_tracks`, `laser_limits`, `perform_patterns`, `perform_layouts`, `perform_controllers`, `control_bindings`, `tracks`, `track_beats`, `track_beat_validations`, `scores`, `clips`, `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` | The contract below |
 | Derived | `track_stems`, `track_roots`, `track_drum_onsets`, `track_bar_classifications`, `track_genres`, and the local-only waveforms and embeddings | A cache: no flag, no history, deleted for real, rebuilt from audio |
 | Scratch | `drafts` | As before: private, hard-deleted |
 
@@ -124,6 +124,12 @@ The client sends these as request headers: `x-luma-actor`, `x-luma-thread`,
   verdict is its author's alone, there is one per person and target among
   live rows, and it is kept when its clip is deleted. Its history is in the
   score's scope.
+- `agent_thread_usage` is a source table: what a conversation cost so far
+  (tokens by kind, the price where the writer was told one, time, subagents
+  started), one live row a thread, written after each step of a turn as
+  `app:usage`. Its history in the thread's scope is the spend step by step,
+  each entry naming the model that ran. `thread_id` is not a foreign key:
+  a hosted session's thread can be deleted before its price is known.
 - `scores.copied_from_score_id` names the score a duplicate was made from,
   so a copy's clips are not read as work done twice.
 - `profiles.roles`, `profiles.role_other` and `profiles.experience` are what

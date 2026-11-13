@@ -1068,6 +1068,69 @@ async fn the_record_keeps_the_build_the_venue_version_and_a_verdict() {
         "made, changed and taken back are all in the score's history"
     );
 
+    // What a conversation cost follows the account too, and the record has
+    // it step by step, as the app's write and not the person's.
+    use crate::database::local::agent_threads::{record_thread_usage, thread_usage};
+    use crate::models::agent_threads::AgentThreadUsage;
+    let thread = unique("thread");
+    sqlx::query(
+        "INSERT INTO agent_threads (id, uid, agent_kind, subject_kind, subject_id, title)
+         VALUES (?, ?, 'track', 'none', NULL, 'Costly')",
+    )
+    .bind(&thread)
+    .bind(USER)
+    .execute(&a.sql)
+    .await
+    .expect("thread");
+    let mut spend = AgentThreadUsage {
+        thread_id: thread.clone(),
+        model: Some("claude-opus-5-5".into()),
+        turns: 1,
+        input_tokens: 1200,
+        output_tokens: 80,
+        cost_usd: Some(0.02),
+        ..AgentThreadUsage::default()
+    };
+    record_thread_usage(&a.sql, &spend).await.expect("usage");
+    spend.turns = 2;
+    spend.output_tokens = 200;
+    record_thread_usage(&a.sql, &spend)
+        .await
+        .expect("more usage");
+    settles(
+        &b.sql,
+        &format!(
+            "SELECT group_concat(turns || ':' || output_tokens) FROM agent_thread_usage
+             WHERE thread_id = '{thread}'"
+        ),
+        "2:200",
+        "the conversation's cost did not reach the other device",
+    )
+    .await;
+    // The other device goes on from the same totals.
+    let seeded = thread_usage(&b.sql, &thread)
+        .await
+        .expect("read")
+        .expect("a row");
+    assert_eq!(seeded.cost_usd, Some(0.02));
+    let steps: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "select op, actor_type, actor, after ->> 'output_tokens' from public.history
+         where table_name = 'agent_thread_usage' and scope_id = $1 order by seq",
+    )
+    .bind(&thread)
+    .fetch_all(&admin)
+    .await
+    .expect("usage history");
+    let step = |op: &str, tokens: &str| {
+        (
+            op.to_owned(),
+            "app".to_owned(),
+            "app:usage".to_owned(),
+            Some(tokens.to_owned()),
+        )
+    };
+    assert_eq!(steps, [step("insert", "80"), step("update", "200")]);
+
     a.close().await;
     b.close().await;
 }

@@ -1150,6 +1150,11 @@ pub async fn thread_usage(
 /// spawned it only learns the price afterwards. The ledger outlives the thread
 /// the same way `authored_revisions` does.
 ///
+/// The row syncs, so it has an id of its own, made with it and kept, and an
+/// owner: the thread's, or the signed-in account when the thread is gone. It
+/// uploads as the app's write in the thread's conversation, not the
+/// person's, so the server's history of it is the spend step by step.
+///
 /// # Errors
 ///
 /// If the upsert fails.
@@ -1157,12 +1162,27 @@ pub async fn record_thread_usage(
     pool: &SqlitePool,
     usage: &AgentThreadUsage,
 ) -> Result<(), String> {
+    use crate::sync::triggers::{AttributedWrite, Attribution};
+
+    let mut write = AttributedWrite::begin(
+        pool,
+        Attribution {
+            thread: Some(&usage.thread_id),
+            ..Attribution::actor("app:usage")
+        },
+    )
+    .await?;
     sqlx::query(
         "INSERT INTO agent_thread_usage
-             (thread_id, model, turns, input_tokens, output_tokens,
+             (id, uid, thread_id, model, turns, input_tokens, output_tokens,
               cache_creation_tokens, cache_read_tokens, cost_usd, duration_ms, subagents)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?1,
+                 COALESCE((SELECT uid FROM agent_threads WHERE id = ?2),
+                          (SELECT active_uid FROM auth_write_admission WHERE singleton = 1)),
+                 ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(thread_id) DO UPDATE SET
+             id = COALESCE(agent_thread_usage.id, excluded.id),
+             uid = COALESCE(agent_thread_usage.uid, excluded.uid),
              model = excluded.model,
              turns = excluded.turns,
              input_tokens = excluded.input_tokens,
@@ -1174,6 +1194,7 @@ pub async fn record_thread_usage(
              subagents = excluded.subagents,
              recorded_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')",
     )
+    .bind(uuid::Uuid::new_v4().to_string())
     .bind(&usage.thread_id)
     .bind(usage.model.as_deref())
     .bind(usage.turns)
@@ -1184,10 +1205,10 @@ pub async fn record_thread_usage(
     .bind(usage.cost_usd)
     .bind(usage.duration_ms)
     .bind(usage.subagents)
-    .execute(pool)
+    .execute(write.connection())
     .await
     .map_err(|error| format!("Failed to record agent thread usage: {error}"))?;
-    Ok(())
+    write.commit().await
 }
 
 /// Change only this principal's active conversation. Runtime selection is

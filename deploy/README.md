@@ -186,6 +186,10 @@ after it. A new migration adds its line here.
   older clients are unaffected and the data format does not change. Then
   redeploy `powersync/sync-config.yaml`, which now names `feedback`; until
   it is deployed a verdict does not reach the account's other devices
+- `20261113130000_agent_thread_usage.sql` — before shipping the client that
+  syncs what a conversation cost: until it runs, that client's usage rows
+  are refused and listed as not saved after every agent step. Additive. Then
+  redeploy `powersync/sync-config.yaml`, which now names `agent_thread_usage`
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an

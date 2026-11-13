@@ -623,6 +623,28 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     )
     .slot(&["thread_id"]),
     table!(
+        "agent_thread_usage",
+        Source,
+        "@.id",
+        "uid",
+        [
+            "id",
+            "uid",
+            "thread_id",
+            "model",
+            "turns",
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_tokens",
+            "cache_read_tokens",
+            "cost_usd",
+            "duration_ms",
+            "subagents",
+            "recorded_at"
+        ]
+    )
+    .slot(&["thread_id"]),
+    table!(
         "feedback",
         Source,
         "@.id",
@@ -694,9 +716,12 @@ pub fn column_expression(column: &str) -> &'static str {
         }
         "universe" | "address" | "num_channels" | "track_number" | "disc_number" | "head_index"
         | "display_order" | "z_index" | "processor_version" | "beats_per_bar" | "depth"
-        | "message_count" | "rating" => "CAST(? AS INTEGER)",
+        | "message_count" | "rating" | "turns" | "input_tokens" | "output_tokens"
+        | "cache_creation_tokens" | "cache_read_tokens" | "duration_ms" | "subagents" => {
+            "CAST(? AS INTEGER)"
+        }
         "axis_lr" | "axis_fb" | "axis_ab" | "roll" | "value" | "duration_seconds" | "bpm"
-        | "downbeat_offset" | "start" | "duration" => "CAST(? AS REAL)",
+        | "downbeat_offset" | "start" | "duration" | "cost_usd" => "CAST(? AS REAL)",
         _ => "?",
     }
 }

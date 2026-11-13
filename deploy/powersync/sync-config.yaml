@@ -57,6 +57,7 @@ streams:
       - SELECT * FROM agent_threads WHERE uid = auth.user_id() AND deleted_at IS NULL
       - SELECT * FROM agent_thread_messages WHERE uid = auth.user_id() AND deleted_at IS NULL
       - SELECT * FROM agent_thread_transcript_heads WHERE uid = auth.user_id() AND deleted_at IS NULL
+      - SELECT * FROM agent_thread_usage WHERE uid = auth.user_id() AND deleted_at IS NULL
       - SELECT * FROM feedback WHERE uid = auth.user_id() AND deleted_at IS NULL
       - SELECT * FROM drafts WHERE uid = auth.user_id()
       # A score with no venue is private authoring; it still needs its rows.
