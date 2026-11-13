@@ -1,19 +1,31 @@
 # Luma
 
-Lighting control that records a show's intent, so one show plays on any rig in any venue.
+Lights that know the song. Luma listens to your music and builds the light
+show with you, with no lighting experience needed.
 
-<img src="www/public/screenshots/hero.webp" alt="Luma in Arrange mode: a song's score under the stage, lit head-on, with the agent chat on the left." />
+<img src="www/public/screenshots/hero.webp" alt="Luma in Arrange: the agent's notes on the score it wrote at the left, the stage lit in red under two white beams, and the score's clips in lanes under the song's waveform." />
 
 A console records DMX for one room's fixtures. Luma records patterns aimed at
 named groups (`front_wash`, `back_movers`), and each venue says which of its
 fixtures those groups hold. Build the rig, arrange a score on a song's
 timeline, and play it live along with a DJ.
 
+Or ask. An agent sits in every window: it listens to the song, writes the
+score, and tells you what it did.
+
+- **A 3D visualizer** with haze and beams, to see a show before the rig exists
+- **Nearly 900 fixtures** modelled in 3D, driven over Art-Net or USB DMX
+- **Lasers**: real projectors through an Ether Dream DAC
+- **Follows the DJ** over Pro DJ Link, StageLinQ or Rekordbox
+- **Free**, with the source here
+
 ## Download
 
-Get the latest release for Apple silicon Macs or Linux x86_64 from
-[GitHub Releases](https://github.com/lumashow/luma/releases/latest). An
-installed app updates itself.
+- **Apple silicon Mac**: [Luma-aarch64.dmg](https://github.com/lumashow/luma/releases/latest/download/Luma-aarch64.dmg)
+- **Linux x86_64**: `curl -fsSL https://github.com/lumashow/luma/releases/latest/download/install.sh | sh`
+
+An installed app updates itself. Every build is on
+[GitHub Releases](https://github.com/lumashow/luma/releases).
 
 ## Build from source
 
@@ -32,11 +44,10 @@ profiles, and the test harness.
 
 ## Docs
 
-- [luma.show/docs](https://luma.show/docs/user-guide/why-luma): the user
-  guide, the [architecture](https://luma.show/docs/architecture/overview) and
-  the [node reference](https://luma.show/docs/node-reference)
+- [luma.show/docs](https://luma.show/docs): using the app, in five short
+  pages, and the [node reference](https://luma.show/docs/node-reference)
 - [AGENTS.md](AGENTS.md): the conventions for working in this repository
-- [docs/README.md](docs/README.md): how each system works
+- [docs/README.md](docs/README.md): the architecture, and how each system works
 - [RELEASING.md](RELEASING.md): releases and the nightly build
 
 ## Tests

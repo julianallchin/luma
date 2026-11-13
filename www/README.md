@@ -5,6 +5,8 @@ is a Next.js app with Fumadocs.
 
 - Pages and layouts: `src/app/` (`(marketing)` and `(docs)`).
 - Documentation content: `content/docs/`.
+- Icons: `src/app/favicon.ico`, `icon.png` and `apple-icon.png`, cut from the
+  app's own icon (`assets/app/icon.png`).
 
 Use Bun:
 

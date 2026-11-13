@@ -7,11 +7,12 @@ export default function Layout({ children }: { children: ReactNode }) {
 		<DocsLayout
 			tree={source.pageTree}
 			nav={{
-				title: <span className="text-xl font-bold tracking-tighter">LUMA</span>,
+				title: <span className="font-serif text-2xl">Luma</span>,
 				url: "/",
 			}}
+			themeSwitch={{ enabled: false }}
 			sidebar={{
-				defaultOpenLevel: 1,
+				defaultOpenLevel: 0,
 			}}
 		>
 			{children}
