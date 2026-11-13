@@ -107,6 +107,8 @@ midir = "0.9"
 # `src/sync/two_device_tests.rs` acts on the test stack's Postgres as an admin
 # would, which no client path can.
 sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "sqlite", "postgres"] }
+# Paused time, for tests of what a timer does without waiting it out.
+tokio = { version = "1", features = ["test-util"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The MIDI thread runs its run loop: CoreMIDI reports ports plugged in there

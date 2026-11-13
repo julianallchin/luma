@@ -208,7 +208,13 @@ impl Session {
                     let uuid = frame["uuid"].as_str().unwrap_or_default();
                     let mut steers = self.steers.lock().expect("steers");
                     if let Some(at) = steers.iter().position(|id| id == uuid) {
-                        return Ok(Event::Steered(steers.drain(..=at).collect()));
+                        let steered = steers.drain(..=at).collect();
+                        // The held turn end was this steer's boundary: the
+                        // run goes on, however quiet its tools are.
+                        if steers.is_empty() {
+                            self.held = None;
+                        }
+                        return Ok(Event::Steered(steered));
                     }
                 }
                 "stream_event" => {
@@ -913,6 +919,64 @@ send({'type':'result','is_error':False,'result':'darker it is','usage':{'input_t
         assert!(matches!(session.next().await.unwrap(), Event::Usage(_)));
         assert!(
             matches!(session.next().await.unwrap(), Event::FinalAnswer(text) if text == "darker it is")
+        );
+        assert!(matches!(session.next().await.unwrap(), Event::Done));
+    }
+
+    /// Once a steer's replay has placed it, the interrupted turn's held end
+    /// is spent: a tool that then runs in silence does not end the run.
+    #[tokio::test]
+    async fn a_quiet_tool_after_a_steer_does_not_end_the_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let script = r#"
+import json,sys
+read=lambda: json.loads(sys.stdin.readline())
+def send(x): print(json.dumps(x),flush=True)
+assert read()['request']['subtype']=='initialize'
+send({'type':'control_response','response':{'request_id':'initialize','subtype':'success','response':{}}})
+assert read()['type']=='user'
+send({'type':'system','subtype':'init','session_id':'native'})
+steer=read()
+send({'type':'result','subtype':'error_during_execution','is_error':True,'errors':['interrupted']})
+send({'type':'user','uuid':'s1','isReplay':True,'parent_tool_use_id':None,'message':steer['message']})
+send({'type':'control_request','request_id':'call','request':{'subtype':'mcp_message','server_name':'luma','message':{'id':2,'method':'tools/call','params':{'name':'echo','arguments':{}}}}})
+assert read()['response']['response']['mcp_response']['id']==2
+send({'type':'result','is_error':False,'result':'done','usage':{}})
+"#;
+        let mut command = tokio::process::Command::new("python3");
+        command.args(["-c", script]);
+        let request = super::super::tests::request(super::super::Engine::Claude, temp.path());
+        let mut session = Session::connect(request, Process::start(command).unwrap())
+            .await
+            .unwrap();
+        let steerer = session.steerer();
+        assert!(matches!(
+            session.next().await.unwrap(),
+            Event::Session { .. }
+        ));
+        steerer.steer("s1", &["darker".into()], true).await.unwrap();
+        assert!(matches!(session.next().await.unwrap(), Event::Usage(_)));
+        assert!(matches!(session.next().await.unwrap(), Event::Steered(ids) if ids == ["s1"]));
+        let Event::Tool { reply, .. } = session.next().await.unwrap() else {
+            panic!("tool")
+        };
+        // The CLI says nothing while the tool runs, for longer than a held
+        // turn end waits.
+        tokio::time::pause();
+        assert!(
+            tokio::time::timeout(HELD_RESULT_SETTLE * 2, session.next())
+                .await
+                .is_err(),
+            "the run ended under a running tool"
+        );
+        tokio::time::resume();
+        session
+            .reply(reply, ToolOutcome::Content(vec![]))
+            .await
+            .unwrap();
+        assert!(matches!(session.next().await.unwrap(), Event::Usage(_)));
+        assert!(
+            matches!(session.next().await.unwrap(), Event::FinalAnswer(text) if text == "done")
         );
         assert!(matches!(session.next().await.unwrap(), Event::Done));
     }
