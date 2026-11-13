@@ -29,10 +29,11 @@ use crate::{float, glass, ladder, radius, Control, Enabled};
 /// as a pile of differently-sized parts.
 pub const WIDTH: f32 = 380.0;
 
-/// The capsule's height. [`radius::PILL`] is exactly half of it, which is what
-/// makes the shape a capsule rather than a rounded box — change one and the
-/// other stops being a semicircle.
-pub const HEIGHT: f32 = 52.0;
+/// The capsule's height, on every page of the gate: a step above a
+/// [`choice`], so a page's one action leads without standing a head taller
+/// than what it sits among. [`radius::PILL`] is at least half of it, which
+/// is what makes the shape a capsule rather than a rounded box.
+pub const HEIGHT: f32 = 42.0;
 
 /// Between two capsules in the stack.
 pub const GAP: f32 = 16.0;
@@ -41,9 +42,10 @@ pub const GAP: f32 = 16.0;
 /// the stack is one group, and the heading is not part of it.
 pub const HEAD_GAP: f32 = 24.0;
 
-/// The label size a capsule carries — one step above the card tier's 13, because
-/// a capsule is a target the eye lands on with nothing else competing.
-const LABEL: f32 = 14.5;
+/// The label size a capsule carries: a half step above the card tier's 13,
+/// and the size a [`choice`] carries, so a page of choices and the capsule
+/// under them are one scale.
+const LABEL: f32 = 13.5;
 
 /// The shared box. Geometry once, so the three capsules cannot drift apart in
 /// anything but colour.
@@ -100,6 +102,39 @@ pub fn secondary(label: impl Into<SharedString>) -> Div {
         .hover(|style| style.bg(glass::ink(0.06)))
         .child(label.into())
 }
+
+/// One answer among several on a gate page: a small capsule that is either
+/// taken or not. Taken is [`primary`]'s white plate, so a choice reads from
+/// across the room; not taken is [`secondary`]'s outline. Sized to its
+/// label, so a row of them wraps.
+///
+/// The caller adds the `.id()` and the click.
+pub fn choice(label: impl Into<SharedString>, taken: bool) -> Div {
+    let shape = div()
+        .h(px(CHOICE_HEIGHT))
+        .px(px(16.0))
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .rounded(px(radius::PILL))
+        .text_size(px(LABEL))
+        .cursor_pointer();
+    if taken {
+        float::btn_primary_paint(shape)
+    } else {
+        shape
+            .border_1()
+            .border_color(glass::hairline(0.22))
+            .text_color(ladder::foreground_alpha(0.92))
+            .font_weight(FontWeight::MEDIUM)
+            .hover(|style| style.bg(glass::ink(0.08)))
+    }
+    .child(label.into())
+}
+
+/// How tall a [`choice`] stands.
+pub const CHOICE_HEIGHT: f32 = 36.0;
 
 /// The capsule a [`crate::text_input::TextInput`] is dropped into: recessed
 /// fill, one hairline, and the padding that puts the caret where a label would

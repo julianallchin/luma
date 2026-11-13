@@ -159,19 +159,26 @@ impl Luma {
     pub(crate) fn enter(&mut self, cx: &mut Context<Self>) {
         self.restoring_venue = true;
         let pending = self.library.get_session_item(&self.account_key(PENDING));
+        let questions = self
+            .library
+            .get_session_item(&self.account_key(crate::about_you::PENDING));
         cx.notify();
         cx.spawn(async move |this, cx| {
             // A store that cannot be read owes nothing: the server was asked
             // at the sign-in, and a launch must not hang on this.
             let owed = pending.await.ok().flatten().is_some();
+            let questions_owed = questions.await.ok().flatten().is_some();
             this.update(cx, |this, cx| {
                 if this.left_the_gate() {
                     return;
                 }
                 if owed {
                     this.show_terms(cx);
+                } else if questions_owed {
+                    this.show_about_you(false, cx);
                 } else {
                     this.restore_venue(cx);
+                    this.note_about_you_owed(cx);
                 }
             })
             .ok();
@@ -239,7 +246,7 @@ impl Luma {
     }
 
     /// The server holds this account's acceptance: forget that the page was
-    /// owed, and go on to the account's venue.
+    /// owed, and go on to the questions it may still be owed, then its venue.
     fn terms_settled(&mut self, key: &str, cx: &mut Context<Self>) {
         self.terms = None;
         let clear = self.library.remove_session_item(key);
@@ -249,7 +256,7 @@ impl Luma {
             }
         })
         .detach();
-        self.restore_venue_once_synced(cx);
+        self.enter_past_terms(cx);
     }
 
     fn accept_terms(&mut self, cx: &mut Context<Self>) {

@@ -155,6 +155,45 @@ impl Library {
         })
     }
 
+    /// Whether the signed-in account has been asked about itself, as the
+    /// server records it. A library that talks to no server has nobody to
+    /// ask and nothing to record, so it answers that it has.
+    pub fn about_you_asked(&self) -> impl Future<Output = Result<bool, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.about_you_fixture.clone().zip(self.user_id());
+        let cloud = self.cloud;
+        self.call("profile_background", move |services| async move {
+            #[cfg(feature = "agent")]
+            if let Some((pending, account)) = fixture {
+                return Ok(!pending.lock().unwrap().contains(&account));
+            }
+            if !cloud {
+                return Ok(true);
+            }
+            Ok(handlers::auth::profile_background(&services)
+                .await?
+                .is_some())
+        })
+    }
+
+    /// Record what the signed-in account says about itself. An empty answer
+    /// is a skip, which the server records as asked.
+    pub fn answer_about_you(
+        &self,
+        background: handlers::auth::ProfileBackground,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.about_you_fixture.clone().zip(self.user_id());
+        self.call("set_profile_background", move |services| async move {
+            #[cfg(feature = "agent")]
+            if let Some((pending, account)) = fixture {
+                pending.lock().unwrap().remove(&account);
+                return Ok(());
+            }
+            handlers::auth::set_profile_background(&services, background).await
+        })
+    }
+
     /// Whether this library talks to the cloud at all — the one thing the
     /// status bar's sync item is conditioned on.
     pub(crate) fn cloud_sync_enabled(&self) -> bool {

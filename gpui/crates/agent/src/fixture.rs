@@ -210,6 +210,10 @@ pub struct Fixture {
     /// Open with the terms page still owed to the signed-in account, as it
     /// is to one that quit on the page: the launch lands back on it.
     terms_owed: bool,
+    /// The addresses in `accounts` that have yet to be asked about
+    /// themselves: signing in as one lands on the "About you" page once the
+    /// terms are settled. Every other account has been asked.
+    about_you_pending: Vec<String>,
     /// Files written into the library directory after the rows, by path
     /// relative to it: a fixture definition with a second mode over the rig's
     /// (`fixtures/Luma/Mover.qxf`), say.
@@ -394,6 +398,7 @@ impl Default for Fixture {
             accounts: HashMap::new(),
             terms_pending: Vec::new(),
             terms_owed: false,
+            about_you_pending: Vec::new(),
             files: HashMap::new(),
             assets: HashMap::new(),
             library: None,
@@ -483,6 +488,11 @@ impl Fixture {
             .filter_map(|address| self.accounts.get(address).cloned())
             .collect();
         let terms_owed = self.terms_owed;
+        let about_you_pending: std::collections::HashSet<String> = self
+            .about_you_pending
+            .iter()
+            .filter_map(|address| self.accounts.get(address).cloned())
+            .collect();
         let model = self.model.clone();
         let model_cadence = self.model_cadence;
         let tools = self.tools.clone();
@@ -525,6 +535,7 @@ impl Fixture {
                 // Whoever can reach the terms page needs somewhere to accept.
                 if !accounts.is_empty() || terms_owed {
                     library.set_terms_fixture(terms_pending.clone());
+                    library.set_about_you_fixture(about_you_pending.clone());
                 }
                 if let Some(steps) = &model {
                     library.set_agent_model(Arc::new(agent::model(steps, model_cadence)));

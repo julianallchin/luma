@@ -227,6 +227,10 @@ pub struct Library {
     /// place — see [`Library::set_terms_fixture`].
     #[cfg(feature = "agent")]
     terms_fixture: Option<Arc<Mutex<std::collections::HashSet<String>>>>,
+    /// The accounts that have yet to be asked about themselves, in the
+    /// server's place — see [`Library::set_about_you_fixture`].
+    #[cfg(feature = "agent")]
+    about_you_fixture: Option<Arc<Mutex<std::collections::HashSet<String>>>>,
     /// Fires when the backend learns the session is revoked; see
     /// [`Library::session_revoked`].
     session_revoked: tokio::sync::broadcast::Sender<()>,
@@ -475,6 +479,8 @@ impl Library {
             sign_in_fixture: None,
             #[cfg(feature = "agent")]
             terms_fixture: None,
+            #[cfg(feature = "agent")]
+            about_you_fixture: None,
             session_revoked,
             replica_changed,
             sync_shutdown,

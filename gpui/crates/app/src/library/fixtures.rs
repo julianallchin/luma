@@ -301,6 +301,12 @@ impl Library {
         self.terms_fixture = Some(Arc::new(Mutex::new(pending)));
     }
 
+    /// Answer for the server about the profile questions: the principals in
+    /// `pending` have yet to be asked, and everyone else has.
+    pub fn set_about_you_fixture(&mut self, pending: std::collections::HashSet<String>) {
+        self.about_you_fixture = Some(Arc::new(Mutex::new(pending)));
+    }
+
     /// Supply live sync snapshots to the harness without enabling networking.
     pub fn set_sync_status_fixture(
         &mut self,

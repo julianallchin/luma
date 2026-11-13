@@ -39,6 +39,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
+mod about_you;
 mod add_tracks;
 mod agent;
 mod background_work;
@@ -216,6 +217,9 @@ pub struct Luma {
     /// The terms page, while the signed-in account still owes an acceptance:
     /// up instead of the shell, like the sign-in screen.
     pub(crate) terms: Option<terms::Terms>,
+    /// The "About you" page, while the account has yet to be asked its two
+    /// questions: up instead of the shell, after the terms.
+    pub(crate) about_you: Option<about_you::AboutYou>,
     /// A lapsed session is being asked online whether it still proves anyone;
     /// the window shows [`signin::splash`] until it answers.
     pub(crate) refreshing_session: bool,
@@ -287,13 +291,13 @@ pub struct Luma {
     /// The `dmx_output_enabled` setting, as last read: what the status bar
     /// says about output.
     pub(crate) dmx_output: bool,
+    /// Whether laser output is on, as last heard: what the status bar says.
+    /// It is off at every launch.
+    pub(crate) laser_output: bool,
     /// Whether this shell has taken the window's close button and the app's
     /// quit — see [`Luma::guard_quit`].
     pub(crate) quit_guarded: bool,
     /// Session items changed but not yet written, by key: what a quit must
-    /// Whether laser output is on, as last heard: what the status bar says.
-    /// It is off at every launch.
-    pub(crate) laser_output: bool,
     /// write before the debounce would have — see [`session_store`].
     pub(crate) unsaved_session: std::collections::BTreeMap<String, String>,
 }
@@ -341,6 +345,7 @@ impl Luma {
             score_editor_split: luma_ui::split::SplitFraction::new(0.65, 300., 240.),
             sign_in: None,
             terms: None,
+            about_you: None,
             refreshing_session: false,
             sync_status: sync_status::SyncState::default(),
             background: background_work::BackgroundState::default(),
@@ -368,12 +373,12 @@ impl Luma {
             venue_selection_generation: 0,
             hdr_output_allowed: true,
             dmx_output: false,
+            laser_output: false,
             quit_guarded: false,
             unsaved_session: Default::default(),
         };
         // Which door the app opens on. Nothing opens without a principal: a
         // stored session that still proves one goes straight in; one that
-            laser_output: false,
         // stopped proving anyone (see `Library::lapsed`) is asked online
         // whether it can be made to, behind a splash; anything else is the
         // gate. The gate is a first screen, not a failure, and it lands on
@@ -503,6 +508,9 @@ impl Render for Luma {
         }
         if self.terms.is_some() {
             return terms::screen(self, window, cx);
+        }
+        if self.about_you.is_some() {
+            return about_you::screen(self, window, cx);
         }
         // A window with no venue *is* the venue picker: keep the overlay up
         // while no venue is open and nothing else is up.
