@@ -154,6 +154,14 @@ commands! {
     agent_threads::agent_thread_set_actor(thread_id: String, actor: String) -> ();
     agent_threads::agent_thread_delete(thread_id: String) -> ();
 
+    feedback::set_feedback(
+        target: crate::database::local::feedback::Target,
+        verdict: Option<crate::database::local::feedback::Verdict>,
+        note: Option<String>,
+    ) -> ();
+    feedback::thread_feedback(thread_id: String) -> Vec<crate::database::local::feedback::Feedback>;
+    feedback::score_clip_feedback(score_id: String) -> Vec<crate::database::local::feedback::Feedback>;
+
     agent_execution::run_python_cell(
         thread_id: String,
         turn_message_id: String,
@@ -192,14 +200,6 @@ commands! {
     folders::delete_folder(folder_id: String) -> ();
     folders::set_folder_track(folder_id: String, track_id: String, linked: bool) -> ();
     lasers::get_laser_rig(venue_id: String) -> crate::laser::LaserRig;
-
-    groups::generate_venue_groups(venue_id: String) -> ();
-    groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, added: Vec<String>, removed: Vec<String>) -> ();
-    groups::list_groups(venue_id: String) -> Vec<FixtureGroup>;
-    groups::delete_group(id: String) -> ();
-    groups::list_group_tree(venue_id: String) -> Vec<GroupTreeNode>;
-    groups::highlight_selection(
-        venue_id: String,
     lasers::set_laser_window(venue_id: String, window: Option<crate::laser::Window>) -> ();
     lasers::set_laser_settings(
         venue_id: String,
@@ -225,6 +225,14 @@ commands! {
         projector_id: String,
         points: Option<Vec<[f64; 2]>>,
     ) -> ();
+
+    groups::generate_venue_groups(venue_id: String) -> ();
+    groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, added: Vec<String>, removed: Vec<String>) -> ();
+    groups::list_groups(venue_id: String) -> Vec<FixtureGroup>;
+    groups::delete_group(id: String) -> ();
+    groups::list_group_tree(venue_id: String) -> Vec<GroupTreeNode>;
+    groups::highlight_selection(
+        venue_id: String,
         selection: Selection,
     ) -> UniverseState;
 
@@ -454,6 +462,8 @@ commands! {
     auth::verify_login_code(email: String, code: String) -> String;
     auth::terms_accepted() -> bool;
     auth::accept_terms(version: i32) -> ();
+    auth::profile_background() -> Option<handlers::auth::ProfileBackground>;
+    auth::set_profile_background(background: handlers::auth::ProfileBackground) -> ();
     auth::get_session_item(key: String) -> Option<String>;
     auth::set_session_item(key: String, value: String) -> ();
     auth::remove_session_item(key: String) -> ();

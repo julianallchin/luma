@@ -5,7 +5,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` fails when it is stale and
 rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 
-**152 commands** across **27 domains**
+**157 commands** across **28 domains**
 
 ## Domains
 
@@ -13,13 +13,14 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | --- | ---: | --- |
 | `agent_execution` | 2 | `backend/src/dispatch/handlers/agent_execution.rs` |
 | `agent_threads` | 6 | `backend/src/dispatch/handlers/agent_threads.rs` |
-| `auth` | 9 | `backend/src/dispatch/handlers/auth.rs` |
+| `auth` | 11 | `backend/src/dispatch/handlers/auth.rs` |
 | `background` | 1 | `backend/src/dispatch/handlers/background.rs` |
 | `composable_patterns` | 2 | `backend/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `backend/src/dispatch/handlers/compositor.rs` |
 | `controls` | 1 | `backend/src/dispatch/handlers/controls.rs` |
 | `distribute` | 3 | `backend/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `backend/src/dispatch/handlers/engine_dj.rs` |
+| `feedback` | 3 | `backend/src/dispatch/handlers/feedback.rs` |
 | `fixtures` | 12 | `backend/src/dispatch/handlers/fixtures.rs` |
 | `folders` | 5 | `backend/src/dispatch/handlers/folders.rs` |
 | `group_references` | 1 | `backend/src/dispatch/handlers/group_references.rs` |
@@ -38,7 +39,7 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 11 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **152** | |
+| **total** | **157** | |
 
 ## Commands
 
@@ -71,6 +72,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `verify_login_code` | `email: String`<br>`code: String` | `String` |
 | `terms_accepted` | — | `bool` |
 | `accept_terms` | `version: i32` | `()` |
+| `profile_background` | — | `Option<handlers::auth::ProfileBackground>` |
+| `set_profile_background` | `background: handlers::auth::ProfileBackground` | `()` |
 | `get_session_item` | `key: String` | `Option<String>` |
 | `set_session_item` | `key: String`<br>`value: String` | `()` |
 | `remove_session_item` | `key: String` | `()` |
@@ -121,6 +124,14 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `engine_dj_search_tracks` | `libraryPath: String`<br>`query: String` | `Vec<EngineDjTrack>` |
 | `engine_dj_default_library_path` | — | `String` |
 | `engine_dj_import_tracks` | `libraryPath: String`<br>`trackIds: Vec<i64>` | `TrackImportResult` |
+
+### `feedback`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `set_feedback` | `target: crate::database::local::feedback::Target`<br>`verdict: Option<crate::database::local::feedback::Verdict>`<br>`note: Option<String>` | `()` |
+| `thread_feedback` | `threadId: String` | `Vec<crate::database::local::feedback::Feedback>` |
+| `score_clip_feedback` | `scoreId: String` | `Vec<crate::database::local::feedback::Feedback>` |
 
 ### `fixtures`
 
@@ -195,26 +206,15 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `get_laser_rig` | `venueId: String` | `crate::laser::LaserRig` |
-
-### `output`
-
-| Command | Arguments | Returns |
-| --- | --- | --- |
-| `list_output_devices` | — | `Vec<OutputDevice>` |
-| `list_routes` | — | `Vec<DmxRoute>` |
-| `bind_route` | `universe: i64`<br>`deviceKind: DeviceKind`<br>`deviceId: String`<br>`port: i64`<br>`deviceName: Option<String>`<br>`address: Option<String>` | `()` |
-| `unbind_route` | `universe: i64`<br>`deviceKind: DeviceKind`<br>`deviceId: String`<br>`port: i64` | `()` |
-
-### `perform`
 | `set_laser_window` | `venueId: String`<br>`window: Option<crate::laser::Window>` | `()` |
 | `set_laser_settings` | `venueId: String`<br>`projectorId: Option<String>`<br>`settings: BTreeMap<String, f64>` | `()` |
 | `set_laser_own` | `venueId: String`<br>`projectorId: String`<br>`own: bool` | `()` |
 | `set_laser_limit` | `venueId: String`<br>`projectorId: String`<br>`points: Option<Vec<[f64; 2]>>` | `()` |
 
+### `output`
+
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `perform_start` | `venueId: String`<br>`source: PerformSource` | `()` |
-| `perform_stop` | — | `()` |
 | `list_laser_devices` | — | `Vec<crate::models::lasers::LaserDevice>` |
 | `list_laser_routes` | — | `Vec<crate::models::lasers::LaserRoute>` |
 | `bind_laser_route` | `fixtureId: String`<br>`deviceKind: crate::models::lasers::LaserDeviceKind`<br>`deviceId: String`<br>`deviceName: Option<String>`<br>`address: Option<String>` | `()` |
@@ -222,6 +222,17 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_laser_output` | — | `crate::models::lasers::LaserOutput` |
 | `set_laser_output` | `on: bool` | `crate::models::lasers::LaserOutput` |
 | `set_laser_test` | `projectorId: Option<String>` | `crate::models::lasers::LaserOutput` |
+| `list_output_devices` | — | `Vec<OutputDevice>` |
+| `list_routes` | — | `Vec<DmxRoute>` |
+| `bind_route` | `universe: i64`<br>`deviceKind: DeviceKind`<br>`deviceId: String`<br>`port: i64`<br>`deviceName: Option<String>`<br>`address: Option<String>` | `()` |
+| `unbind_route` | `universe: i64`<br>`deviceKind: DeviceKind`<br>`deviceId: String`<br>`port: i64` | `()` |
+
+### `perform`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `perform_start` | `venueId: String`<br>`source: PerformSource` | `()` |
+| `perform_stop` | — | `()` |
 | `perform_state` | — | `PerformState` |
 | `perform_set_latency` | `latencyMs: f32` | `()` |
 | `list_perform_patterns` | `venueId: String` | `Vec<PerformPattern>` |

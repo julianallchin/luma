@@ -56,6 +56,9 @@ const ACTOR_HEADER: &str = "x-luma-actor";
 /// The header naming the changes a request's rows were made together with.
 const GROUP_HEADER: &str = "x-luma-group";
 
+/// The header naming the build that sends the request ([`crate::build`]).
+const BUILD_HEADER: &str = "x-luma-build";
+
 /// The parts of an entry's attribution that only the entry can supply, and
 /// the header each travels in. The fourth part, `group`, always travels: see
 /// [`attributed`].
@@ -512,7 +515,7 @@ pub(super) async fn server_format(
 }
 
 /// Put the entry's attribution on its request: one header per part it has,
-/// and its change group always.
+/// and its change group and this build always.
 ///
 /// The metadata is the object the upload triggers wrote. Anything else is an
 /// entry nobody attributed, which is the signed-in person's. An entry that
@@ -533,13 +536,15 @@ fn attributed(
             builder = builder.header(header, value);
         }
     }
-    builder.header(
-        GROUP_HEADER,
-        attribution
-            .get("group")
-            .and_then(Value::as_str)
-            .unwrap_or(group),
-    )
+    builder
+        .header(
+            GROUP_HEADER,
+            attribution
+                .get("group")
+                .and_then(Value::as_str)
+                .unwrap_or(group),
+        )
+        .header(BUILD_HEADER, crate::build())
 }
 
 /// The moment a delete is uploaded, as the server's `timestamptz` reads it.
@@ -864,6 +869,7 @@ mod tests {
         assert_eq!(request.headers()[ACTOR_HEADER], "claude-opus-5-5");
         assert_eq!(request.headers()["x-luma-thread"], "thread-1");
         assert_eq!(request.headers()[GROUP_HEADER], "group-1");
+        assert_eq!(request.headers()[BUILD_HEADER], crate::build());
         assert!(
             request.headers().get("x-luma-message").is_none(),
             "a part the write does not have sends no header"

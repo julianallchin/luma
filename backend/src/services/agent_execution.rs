@@ -360,11 +360,17 @@ pub async fn run_python_cell_inner(
     // What this cell writes is the thread's actor's doing, in this
     // conversation, on the turn that ran it. Every cell of the turn names the
     // same message, so history reads the whole turn as one group of changes.
-    let attribution = crate::sync::triggers::TurnAttribution::turn(
+    let mut attribution = crate::sync::triggers::TurnAttribution::turn(
         thread.actor.as_deref(),
         &thread_id,
         turn_message_id.as_deref(),
     );
+    // A subagent's writes are part of what the person asked for.
+    if thread.parent_thread_id.is_some() {
+        attribution.group = crate::agent::subagent::person_turn(pool, &thread_id)
+            .await?
+            .or(attribution.group);
+    }
     // A room is renderable whenever one is in scope, whether or not this thread
     // may edit a track in it — a graph agent working against a venue still gets
     // to look at it. When a score *is* pinned, that score is what lights it.

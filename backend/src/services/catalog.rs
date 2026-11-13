@@ -106,10 +106,11 @@ pub async fn duplicate_score(
     let copy_id = Uuid::new_v4().to_string();
     let source = get_score(&mut access, score_id).await?;
     // The copied clips are in the beats of the source's grid, so the copy
-    // names the same one.
+    // names the same one. It names its source too: the record would
+    // otherwise read the copy's clips as work somebody did again.
     sqlx::query(
-        "INSERT INTO scores (id, uid, track_id, venue_id, name, grid_id)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO scores (id, uid, track_id, venue_id, name, grid_id, copied_from_score_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&copy_id)
     .bind(&owner)
@@ -117,6 +118,7 @@ pub async fn duplicate_score(
     .bind(&source.venue_id)
     .bind(name)
     .bind(&source.grid_id)
+    .bind(score_id)
     .execute(access.connection())
     .await
     .map_err(|error| format!("insert the copy: {error}"))?;

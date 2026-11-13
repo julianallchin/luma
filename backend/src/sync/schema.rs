@@ -424,7 +424,8 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
             "created_at",
             "updated_at",
             "authored_at",
-            "grid_id"
+            "grid_id",
+            "copied_from_score_id"
         ]
     ),
     table!(
@@ -622,6 +623,24 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
     )
     .slot(&["thread_id"]),
     table!(
+        "feedback",
+        Source,
+        "@.id",
+        "uid",
+        [
+            "id",
+            "uid",
+            "score_id",
+            "thread_id",
+            "message_id",
+            "clip_id",
+            "rating",
+            "note",
+            "created_at",
+            "updated_at"
+        ]
+    ),
+    table!(
         "drafts",
         Scratch,
         "@.id",
@@ -675,7 +694,7 @@ pub fn column_expression(column: &str) -> &'static str {
         }
         "universe" | "address" | "num_channels" | "track_number" | "disc_number" | "head_index"
         | "display_order" | "z_index" | "processor_version" | "beats_per_bar" | "depth"
-        | "message_count" => "CAST(? AS INTEGER)",
+        | "message_count" | "rating" => "CAST(? AS INTEGER)",
         "axis_lr" | "axis_fb" | "axis_ab" | "roll" | "value" | "duration_seconds" | "bpm"
         | "downbeat_offset" | "start" | "duration" => "CAST(? AS REAL)",
         _ => "?",

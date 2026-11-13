@@ -316,6 +316,17 @@ mod tests {
         };
         assert_eq!(by_start(&copied), by_start(&clips));
         assert_eq!(stored(&services, &id).await, clips);
+        let source: Option<String> =
+            sqlx::query_scalar("SELECT copied_from_score_id FROM scores WHERE id = ?")
+                .bind(&copy_id)
+                .fetch_one(&services.db.0)
+                .await
+                .unwrap();
+        assert_eq!(
+            source.as_deref(),
+            Some(id.as_str()),
+            "a copy names its source"
+        );
 
         // An edit to the copy leaves the source alone: the clips are its own.
         edit(

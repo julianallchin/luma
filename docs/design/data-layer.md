@@ -11,7 +11,7 @@ transport underneath.
 
 | Kind | Tables | Rule |
 |---|---|---|
-| Source | `venues`, `venue_members`, `fixtures`, `fixture_groups`, `fixture_group_members`, `venue_nodes`, `venue_node_params`, `venue_constraints`, `folders`, `folder_tracks`, `laser_limits`, `perform_patterns`, `perform_layouts`, `perform_controllers`, `control_bindings`, `tracks`, `track_beats`, `track_beat_validations`, `scores`, `clips`, `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` | The contract below |
+| Source | `feedback`, `venues`, `venue_members`, `fixtures`, `fixture_groups`, `fixture_group_members`, `venue_nodes`, `venue_node_params`, `venue_constraints`, `folders`, `folder_tracks`, `laser_limits`, `perform_patterns`, `perform_layouts`, `perform_controllers`, `control_bindings`, `tracks`, `track_beats`, `track_beat_validations`, `scores`, `clips`, `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` | The contract below |
 | Derived | `track_stems`, `track_roots`, `track_drum_onsets`, `track_bar_classifications`, `track_genres`, and the local-only waveforms and embeddings | A cache: no flag, no history, deleted for real, rebuilt from audio |
 | Scratch | `drafts` | As before: private, hard-deleted |
 
@@ -89,7 +89,8 @@ table except the three conversation tables, whose messages are their own
 record.
 
 `seq, table_name, row_id, op, before, after, actor_type, actor, thread_id,
-message_id, change_group_id, scope_id, at, schema_version, uid`
+message_id, change_group_id, scope_id, at, schema_version, uid, client_build,
+venue_seq`
 
 - `actor_type` is `person`, `agent`, `migration`, `app` or `admin`. `actor`
   is `user:<uid>`, a model id or MCP client label, `migration:<file>`,
@@ -101,9 +102,36 @@ message_id, change_group_id, scope_id, at, schema_version, uid`
 - `scope_id` is the score, venue or track the row belongs to. Entries in one
   scope are in commit order, so a version of a score or venue is a `seq`.
 - A flag change is an `update` with full `before` and `after`.
+- A subagent's writes carry its own thread and message, and the change group
+  of the turn it works for: the message a person sent at the top of its line
+  of parents. One request reads as one group however far down the work went.
+- `client_build` is the app version that sent the write, with its commit for
+  a release or a nightly. A prompt, a tool list and the analysis versions
+  all ship in a build, so this stands for them.
+- `venue_seq`, on an entry for a score or a clip, is the newest entry of the
+  score's venue when it was written. A clip names groups by id, and what
+  those ids held is the venue at that `seq`. It is the server's venue: an
+  edit made offline may have been made against an older one.
 
 The client sends these as request headers: `x-luma-actor`, `x-luma-thread`,
-`x-luma-message`, `x-luma-group`, with `x-luma-format`.
+`x-luma-message`, `x-luma-group`, `x-luma-build`, with `x-luma-format`.
+
+## What people say
+
+- `feedback` is a source table: a person's verdict (`rating`, 1 or -1) on an
+  agent's turn or on one clip. A turn is named by the message that started
+  it, the same `message_id` history records against what the turn wrote. A
+  verdict is its author's alone, there is one per person and target among
+  live rows, and it is kept when its clip is deleted. Its history is in the
+  score's scope.
+- `scores.copied_from_score_id` names the score a duplicate was made from,
+  so a copy's clips are not read as work done twice.
+- `profiles.roles`, `profiles.role_other` and `profiles.experience` are what
+  an account said about itself on the "About you" page, which follows the
+  terms: every role that fits, its own word for "other", and how often it
+  has programmed lights. They are reached through `profile_background` and
+  `set_profile_background`, never synced, and a change is a history entry
+  in the profile's own scope. A skip is recorded as asked, with no answers.
 
 ## Migrations
 

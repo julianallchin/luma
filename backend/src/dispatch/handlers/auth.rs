@@ -133,6 +133,54 @@ pub async fn accept_terms(services: &AppServices, version: i32) -> Result<(), Co
     Ok(())
 }
 
+/// What an account says about itself: the work it does with light, and how
+/// much of it. The words are the server's fixed ones
+/// (`supabase/migrations/20261113120000_provenance.sql`); `role_other` is
+/// the account's own, for the role `other`. Everything empty is an account
+/// that skipped the questions.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProfileBackground {
+    #[serde(default)]
+    pub roles: Vec<String>,
+    pub role_other: Option<String>,
+    pub experience: Option<String>,
+}
+
+/// What the signed-in account has said about itself, or `None` if it has not
+/// been asked — see `public.profile_background`.
+///
+/// # Errors
+///
+/// If nobody is signed in, or the server could not be asked.
+pub async fn profile_background(
+    services: &AppServices,
+) -> Result<Option<ProfileBackground>, CommandError> {
+    terms_rpc(services, "profile_background", serde_json::json!({})).await
+}
+
+/// Record what the signed-in account says about itself. An empty answer is
+/// a skip, and the account is not asked again.
+///
+/// # Errors
+///
+/// If nobody is signed in, or the server did not record it.
+pub async fn set_profile_background(
+    services: &AppServices,
+    background: ProfileBackground,
+) -> Result<(), CommandError> {
+    let _: serde_json::Value = terms_rpc(
+        services,
+        "set_profile_background",
+        serde_json::json!({
+            "roles": background.roles,
+            "role_other": background.role_other,
+            "experience": background.experience,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
 async fn terms_rpc<T: serde::de::DeserializeOwned>(
     services: &AppServices,
     function: &str,

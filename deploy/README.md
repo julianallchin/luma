@@ -179,6 +179,13 @@ after it. A new migration adds its line here.
   downloads again. Then redeploy `powersync/sync-config.yaml`, which stops
   naming `laser_zones`. The table is left in place, unread; a later
   migration drops it
+- `20261113120000_provenance.sql` — before shipping the client that writes
+  feedback and a copy's source: until it runs, that client's verdicts and
+  duplicated scores are refused and listed as not saved, and its "About you"
+  page cannot record an answer (it lets the account through). Additive, so
+  older clients are unaffected and the data format does not change. Then
+  redeploy `powersync/sync-config.yaml`, which now names `feedback`; until
+  it is deployed a verdict does not reach the account's other devices
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an

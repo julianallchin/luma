@@ -418,16 +418,47 @@ async fn merge_draft(pool: &sqlx::SqlitePool, child_thread_id: &str) -> Result<(
     let Some((draft, score_id, actor, message)) = found else {
         return Ok(());
     };
-    let attribution = crate::sync::triggers::TurnAttribution::turn(
+    let mut attribution = crate::sync::triggers::TurnAttribution::turn(
         actor.as_deref(),
         child_thread_id,
         message.as_deref(),
     );
+    attribution.group = person_turn(pool, child_thread_id)
+        .await?
+        .or(attribution.group);
     let mut access =
         VenueAccess::<Write>::write_as(pool, VenueResource::Score(&score_id), attribution.get())
             .await?;
     drafts::merge(access.connection(), &draft).await?;
     access.commit().await
+}
+
+/// The message that started the turn `child_thread_id` is working for: the
+/// newest a principal wrote in the conversation at the top of its line of
+/// parents. It is the change group of everything the turn's children write,
+/// so history reads one request as one group however far down the work went.
+/// `None` for a thread that has no parent, whose own turn already is that.
+pub(crate) async fn person_turn(
+    pool: &sqlx::SqlitePool,
+    child_thread_id: &str,
+) -> Result<Option<String>, String> {
+    sqlx::query_scalar(
+        "WITH RECURSIVE line(id, parent) AS (
+             SELECT id, parent_thread_id FROM agent_threads WHERE id = ?1
+             UNION ALL
+             SELECT thread.id, thread.parent_thread_id
+               FROM agent_threads thread JOIN line ON thread.id = line.parent)
+         SELECT message.id
+           FROM line JOIN agent_thread_messages message
+             ON message.created_in_thread_id = line.id
+          WHERE line.parent IS NULL AND line.id <> ?1
+            AND message.role IN ('user', 'session')
+          ORDER BY message.depth DESC LIMIT 1",
+    )
+    .bind(child_thread_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("could not find the turn this thread works for: {error}"))
 }
 
 /// Close a failed child's draft. A failure to close is not worth failing the
