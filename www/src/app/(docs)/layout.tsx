@@ -39,7 +39,10 @@ export default function DocsRootLayout({
 			className={`dark ${inter.variable} ${newsreader.variable} ${jetbrainsMono.variable}`}
 		>
 			<body className="flex min-h-screen flex-col antialiased">
-				<RootProvider theme={{ enabled: false }}>{children}</RootProvider>
+				{/* Five pages need no search, and a static site has no search route. */}
+				<RootProvider theme={{ enabled: false }} search={{ enabled: false }}>
+					{children}
+				</RootProvider>
 			</body>
 		</html>
 	);
