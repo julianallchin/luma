@@ -190,6 +190,10 @@ after it. A new migration adds its line here.
   syncs what a conversation cost: until it runs, that client's usage rows
   are refused and listed as not saved after every agent step. Additive. Then
   redeploy `powersync/sync-config.yaml`, which now names `agent_thread_usage`
+- `20261113140000_profile_background_answers.sql` — any time; production
+  already has it, run by hand when 0.9.0 shipped. Until it runs, 0.9.0's
+  "About you" page records an answer and then says it could not. Server
+  only; there is no local migration
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an
