@@ -270,18 +270,18 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
     );
     let mut metered = |intensity: f32, haze: f32, look: Look| shot(intensity, haze, look).0;
 
-    // A dim cue: the beam at a quarter, in light haze. It is past what the
-    // exposure opens for, so a dimmer one meters the same.
-    let dark_room = metered(0.25, 0.05, auto);
+    // A cue almost out: the beam at a hundredth, in light haze. It is past
+    // what the exposure opens for, so a dimmer one meters the same.
+    let dark_room = metered(0.01, 0.05, auto);
     assert_eq!(
         dark_room,
-        metered(0.125, 0.05, auto),
+        metered(0.005, 0.05, auto),
         "a dark room stops at the clamp"
     );
 
     // Compensation is added after the clamp, so it still moves a dark room.
     let lifted = metered(
-        0.25,
+        0.01,
         0.05,
         Look {
             exposure: Exposure {
@@ -350,9 +350,9 @@ fn a_sudden_light_closes_the_exposure_only_as_far_as_a_pupil() {
     };
     let dark = |time: f32| Frame {
         time,
-        ..hazy_frame(0.25, 0.4, 0.05, auto)
+        ..hazy_frame(0.01, 0.4, 0.05, auto)
     };
-    // The same beam a thousand times brighter, down the camera's throat.
+    // The same beam many thousand times brighter, down the camera's throat.
     let blinding = |time: f32| Frame {
         time,
         ..hazy_frame(4000.0, 1.0, 0.3, auto)
