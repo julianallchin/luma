@@ -164,7 +164,7 @@ Group names are automatically normalized to snake_case: lowercase, spaces/hyphen
 
 ## Documentation
 
-- [User Guide](https://luma.show/docs/user-guide/why-luma) — Why Luma exists, venues, groups & tags, patterns, annotations, performing
+- [User docs](https://luma.show/docs) — Start here, Rig, Arrange, Live and Lasers (`www/content/docs/`). Five short pages, kept short on purpose: the agent in the app answers the rest
 - [Node Reference](https://luma.show/docs/node-reference) — Pattern graph nodes, one generated page per category: coordinates, values, heads, outputs, lasers and presets
-- [Architecture](https://luma.show/docs/architecture/overview) — Node graph engine, compositor, DMX pipeline, fixture system, selection system, database, import pipeline, design decisions
-- [Glossary](https://luma.show/docs/glossary) — Canonical terms used throughout the codebase
+- [Architecture](docs/README.md) — Node graph engine, compositor, DMX pipeline, fixture system, selection system, database, import pipeline, design decisions
+- [Glossary](docs/glossary.md) — Canonical terms used throughout the codebase

@@ -1,0 +1,52 @@
+---
+title: Live
+description: Follow the DJ's decks, play each song's score on the beat, and busk the rest from pads and faders.
+---
+
+Live (key `3`) follows the DJ and plays each song's score as it is mixed in.
+Under the stage is the venue's **Perform set**: pages of pads and faders for
+everything a score did not plan.
+
+## Decks
+
+**Add source** in the deck panel connects one:
+
+| Source | Follows | Notes |
+|--------|---------|-------|
+| **Pro DJ Link** | Pioneer CDJs | Luma takes a player number. Give it one no real deck uses. |
+| **StageLinQ** | Denon DJ and Engine DJ | Nothing to set up. |
+| **Rekordbox** | rekordbox on this computer | Through [rkbx_link](https://github.com/grufkork/rkbx_link). Turn on `osc.msg.n/time` in its config, and load tracks after Luma is listening. |
+| **Virtual** | Luma's own player | For practising. **Choose song** plays any song in your library. |
+
+Luma matches what each deck loads against your library and plays that song's
+score. Two decks blend by their volume. With no deck, the Perform set runs
+on a tapped tempo.
+
+## The Perform set
+
+A pad turns a pattern on and off, or flashes it while held. Beside the pads
+sit group cells, color lists, faders, tap tempo and the master.
+
+- **Tap a group, then a pad**, and the pattern plays on that group. With no
+  group chosen, it plays where it was made to.
+- **Tap a color** to set the color under everything.
+- **Clear** chooses nothing. Hold it to let every effect go.
+
+**Edit layout** arranges the grid. In it, **Busk page** builds a whole page
+from your rig: groups, colors, effects, movement, strobes and the master. Or
+ask Live's chat for the page you want.
+
+## Controllers
+
+Any MIDI device, and anything that sends OSC to UDP port 8000, can play the
+set. In **Edit layout**, select a cell, press **Learn**, and move the fader
+or press the key.
+
+For a controller with pad lights, press **Set up with the agent**. The chat
+lights the pads one at a time, asks what you see, and writes the mapping.
+
+## Going live
+
+Turn on **Enable DMX Output** in **Settings → DMX Output**. It is the same
+switch [Rig](/docs/rig#output) describes, and **Max Brightness** beside it
+caps the whole rig.

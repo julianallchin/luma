@@ -1,0 +1,73 @@
+---
+title: Rig
+description: "Build a venue once: the stage, the fixtures, the patch and the groups that scores aim at."
+---
+
+A venue is one physical room: its fixtures, their DMX addresses, where they
+hang, and the groups they belong to. Rig (key `1`) is where you build it.
+Everything else in Luma is written against groups, so this is the only part
+tied to a room.
+
+Ask the venue's chat to do any of this for you, from "hang eight movers on
+the back truss" to a whole rig from a description.
+
+## The stage
+
+- **A** opens the add dialog: **Fixtures** or **Stage pieces**. Tab switches
+  between them.
+- Place a piece, such as a truss. Then choose a fixture and click the truss
+  to lay a row along it, or click the floor to stand one light there.
+- **W** moves and **E** rotates. **⌘D** duplicates. **F** frames the
+  selection. **⌘Z** undoes.
+- Deleting a piece deletes the lights on it.
+
+Positions matter. A chase travels across a group by where its lights really
+are, so the same clip works on 8 fixtures or 80.
+
+## The patch
+
+Every light you place gets a row in the patch table. Set its **Mode** to the
+mode set on the real fixture, then press **Auto patch** to address the lot.
+Addresses you set by hand are kept.
+
+Switch the page from **Fixtures** to **Patch** to see each universe as a grid
+and drag fixtures to new addresses.
+
+## Groups
+
+A score never names a fixture. It names groups, such as `front_wash` or
+`back_movers`, and plays on whatever is in them.
+
+- **Generate from stage** makes a starting set by role and position.
+- **New group** makes one from the fixtures you have selected.
+- Renaming a group breaks nothing. Deleting one leaves the clips that aimed
+  at it lighting nothing, and Luma tells you how many there are first.
+
+Names are snake_case, and `all` is taken: it means every fixture. Use the
+same names in every venue, so you and the agent ask for the same thing
+everywhere.
+
+## Output
+
+Luma sends DMX to Art-Net nodes and to the SoundSwitch Micro DMX Interface
+and Control One.
+
+1. On the venue page, open **Output** and give each universe a port with
+   **Add output**. A universe with no output is not sent.
+2. Turn on **Enable DMX Output** in **Settings → DMX Output**. **Max
+   Brightness** there caps everything.
+
+## Sharing
+
+The venue's name in the title bar opens the venue menu. **Share** makes an
+invite code, and **Join with code…** takes one. Anyone with the code can
+open and edit the venue.
+
+A score belongs to whoever made it. Everyone else can play it, and
+**Duplicate** it to get a copy of their own.
+
+## The view
+
+The camera button on the stage opens **View settings**: indoor or outdoor,
+haze, the grid and the render scale. Haze and environment belong to the
+venue. The rest belongs to this computer.

@@ -1,0 +1,63 @@
+---
+title: Arrange
+description: "Add songs, then write a score: clips on a song's timeline, each aimed at a group."
+---
+
+Arrange (key `2`) is a song's timeline under the stage. You place **clips**
+on it. The clips of one song in one venue are a **score**.
+
+The fastest way to a score is to ask for one. The score's chat listens to
+the song, writes the clips and explains its choices. Then ask for changes:
+"hold the big hit for the second drop", "less strobe in the verse".
+
+![Arrange: the agent's notes on a score at the left, the lit stage, and the score's clips in lanes under the song's waveform.](/screenshots/arrange.webp)
+
+## Songs
+
+**⌘P** opens the song list: folders, songs, and each song's scores. **Add
+songs** adds a song from your library to this venue, and **Import tracks**
+brings in new ones from Rekordbox, Engine DJ, files or a folder. A song can
+be up to 10 minutes long.
+
+Luma analyzes each song in the background: beats and bars, stems, chords and
+drum hits. The status bar shows progress.
+
+## Scores
+
+A score belongs to one song and one venue, and a song can have many. **New
+score** is in the song list and in the score menu in the title bar. A score
+is its author's to edit. Anyone else in the venue can play it or duplicate
+it.
+
+## Clips
+
+**Add pattern**, or a right-click on the timeline, opens the pattern list
+with a live preview of each preset on your venue. The clip lands at the
+playhead, or fills the span you selected.
+
+A clip has:
+
+- a **selection**: `all`, one group, or several, written `front_wash | back_movers`
+- a start and a length, in beats
+- a **blend mode**, which says how it combines with the clips under it
+- its own **graph**, which says what it does
+
+Clips stack in lanes. A color clip changes only color, an aim clip only
+where movers point, a strobe clip only strobe, so the three layer freely.
+
+## The graph
+
+Double-click a clip to open its graph: a few node cards wired left to right
+into one output. Each input has a chip that says where its value comes from.
+Change **Value** to **Over time**, **Over space**, **Audio** or **Random**
+and Luma wires in the node for you.
+
+A preset is only a starting graph. Once it is in a clip, it is that clip's to
+change. The [node reference](/docs/node-reference) lists every node and
+preset.
+
+## Playing and exporting
+
+**Space** plays and pauses. **F** follows the playhead, **H** fits every
+lane, and **⌘L** loops the selection. **Export show** records the score as a
+video.

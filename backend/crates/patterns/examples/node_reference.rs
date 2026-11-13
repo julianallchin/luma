@@ -659,7 +659,7 @@ fn index() -> String {
     );
     let outputs = kinds_from(Kind::is_output);
     writeln!(out, "Every clip owns one small graph. A graph has 1 to {MAX_NODES} nodes of {} kinds. Exactly one node is the output: {outputs}. Every node has one output wire, and a wire goes into an input of another node. Every node must feed the output, directly or through other nodes. The stored graph is JSON, version {VERSION}.\n", Kind::ALL.len()).unwrap();
-    writeln!(out, "To build and edit graphs in the app, see [Clips and Presets](/docs/user-guide/patterns).\n").unwrap();
+    writeln!(out, "To build and edit graphs in the app, see [Arrange](/docs/arrange#the-graph).\n").unwrap();
 
     writeln!(out, "## Inputs and settings\n").unwrap();
     writeln!(out, "An input holds a value, a wire from another node, or nothing. Nothing is the only default: each node's table says what an empty input means. A choice, such as a space's `kind`, is a setting. A setting is never wired.\n").unwrap();
