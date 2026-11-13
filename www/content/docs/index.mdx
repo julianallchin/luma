@@ -1,44 +1,71 @@
 ---
-title: Luma Documentation
-description: Documentation for Luma, a lighting application that makes light shows portable between venues.
+title: Start here
+description: What Luma is, how to get it running, and where to ask when you are stuck.
 ---
 
-# Welcome to Luma
+Luma listens to your music and builds the light show with you. You do not
+need to know lighting: build the room, pick a song, and ask.
 
-Luma is a native desktop application for lighting control. A light show in Luma does not name DMX channels. It names groups of fixtures and musical events. Each venue maps those names to its own fixtures.
+Under the hood, a show never names a DMX channel. A clip says "pulse
+`front_wash` on every fourth beat", and the venue says which of its fixtures
+are in `front_wash`. Add or swap lights and every clip follows. To take a
+show to another room, ask the agent to refit it.
 
-## How It Works
+## Install
 
-Luma keeps two kinds of data apart:
+On an Apple silicon Mac,
+[download Luma](https://github.com/lumashow/luma/releases/latest/download/Luma-aarch64.dmg)
+and drag it to Applications.
 
-1. **Your library.** Tracks, scores, clips and pattern graphs. This data does not refer to DMX addresses.
-2. **Venues.** A venue records the fixtures in one room, their DMX addresses, their positions and their groups.
+On Linux x86_64, paste this in a terminal:
 
-A score belongs to one track and one venue. Its clips select the venue's groups, not fixtures. When the score plays, Luma lights the fixtures that are in those groups.
+```sh
+curl -fsSL https://github.com/lumashow/luma/releases/latest/download/install.sh | sh
+```
 
-A window shows one venue in one of three modes: **Rig** builds the room, **Arrange** edits a score on its track's timeline, and **Live** follows the DJ and plays the venue's live patterns.
+Either way it updates itself from then on. There is no Windows or Intel Mac
+build yet.
 
-## Getting Started
+Sign in when it opens. You need an account to import songs and make changes,
+and it keeps your library in sync across your computers.
 
-<Cards>
-  <Card title="Why Luma" href="/docs/user-guide/why-luma" description="The problem Luma solves" />
-  <Card title="The Window" href="/docs/user-guide/the-window" description="Modes, the venue menu, the agent panel and the song list" />
-  <Card title="Define Your Venue" href="/docs/user-guide/venues" description="Patch fixtures and build the stage" />
-  <Card title="Groups" href="/docs/user-guide/groups-and-tags" description="Name sets of fixtures so scores can target them" />
-  <Card title="Clips and Presets" href="/docs/user-guide/patterns" description="What a clip plays and how to edit its graph" />
-  <Card title="Live" href="/docs/user-guide/performing" description="Follow the decks and play the Perform set" />
-</Cards>
+## Ask the agent
 
-## Explore the Docs
+The panel on the left of the window is a chat. It can build a rig, write a
+score for a song, lay out a page of pads, and tell you what it did and why.
+Rig, each score and Live have a chat of their own.
 
-### User Guide
-The guide follows the workflow from venue setup to a finished score. Start with [Why Luma](/docs/user-guide/why-luma).
+These docs are short because of it. When you want to know how something
+works, ask.
 
-### Node Reference
-The [node reference](/docs/node-reference) lists every node kind a clip graph is built from, with its inputs, settings and output. The [presets](/docs/node-reference/presets) page lists the shipped presets.
+The agent runs on a Claude Code subscription, a Codex subscription or an API
+key. Choose one in **Settings → AI** (**⌘,**).
 
-### Architecture
-The [architecture pages](/docs/architecture/overview) describe the internals for developers.
+## Three modes
 
-### Glossary
-The [glossary](/docs/glossary) defines the terms that the code and these pages use.
+A window shows one venue. Switch modes with the switch in the title bar or
+the keys `1`, `2` and `3`. Switching stops nothing: playback, loops and chats
+carry on.
+
+| Mode | Key | What you do there |
+|------|-----|-------------------|
+| [Rig](/docs/rig) | `1` | Build the room: the stage, the fixtures, the patch and the groups. |
+| [Arrange](/docs/arrange) | `2` | Write a score on a song's timeline. |
+| [Live](/docs/live) | `3` | Follow the DJ and play. |
+
+## Your first show
+
+1. **Make a venue.** It opens in Rig. Press **A** to add trusses and
+   fixtures, then **Auto patch** and **Generate from stage** for a starting
+   set of groups.
+2. **Add a song.** **⌘P** opens the song list. **Add songs** imports from
+   Rekordbox, Engine DJ or files. Luma analyzes it in the background.
+3. **Write a score.** Open the song, choose **New score**, and ask the agent
+   for one, or add clips yourself with **Add pattern**.
+4. **Play it.** Press `3`. With no decks connected, the **Virtual** source
+   plays any song from your library.
+
+## Keys
+
+Every shortcut is listed in **Settings → Shortcuts**, where you can change
+it. Escape closes the innermost thing that is open. On Linux, read ⌘ as Ctrl.

@@ -1,0 +1,56 @@
+---
+title: Lasers
+description: "Laser projectors through a DAC: set them up, aim the window, and turn output on safely."
+---
+
+Luma draws beam shows for laser projectors driven through an
+[Ether Dream](https://ether-dream.com) DAC. A laser clip says which figures
+to draw, where and in what color. Luma works out the points for each
+projector.
+
+DMX party lasers are ordinary fixtures and need none of this.
+
+## Projectors
+
+Add a **Laser Projector** in Rig like any fixture. It has no DMX address.
+Rig's **Lasers** tab then asks what your projectors are: a **Preset** (1, 3,
+5 or 10 W RGB) to start from, the **Scan angle**, the **Scanner** speed and
+a **Power cap**.
+
+Each projector has a row of its own:
+
+- **DAC**: the box on the network that plays it. With none, it draws on
+  screen only.
+- **Limit**: an outline in its scan. Light outside it is blanked.
+- **Test**: draws the window's edge and a cross, at a quarter of the capped
+  power.
+
+## The window
+
+A venue has one **window**: the range of directions its lasers draw in, for
+example 5° to 25° up and 20° either side. Every projector shares it, so six
+projectors draw six parallel fans. Drag it on the Lasers tab, or ask the
+venue's chat to set it.
+
+## Laser clips
+
+A laser clip draws **figures**: beams, lines, rings, polygons and grids.
+Start from a laser preset such as Beam fan, Ring or Liquid sky in **Add
+pattern**. Laser clips either add to the ones under them or morph them into
+their own shapes.
+
+The stage shows the beams as a projector would draw them, corners rounded by
+the scanner and scattered in the haze.
+
+## Output
+
+Choose each projector's DAC, then turn on **Laser output** at the top of the
+Lasers tab. It is off every time Luma starts, and the status bar says when
+it is on.
+
+A projector's row shows how many times a second it draws the picture. Under
+25 it flickers: the clip is asking for more than the scanner can draw.
+
+You are responsible for running lasers safely and legally. Set each
+projector's limit and power cap before turning output on, and keep the
+projector's own interlock and emergency stop in reach.

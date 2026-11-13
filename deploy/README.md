@@ -28,6 +28,12 @@ before a release, run what the job runs from the repository root:
 `scripts/release/check_migrations.py` on the files it lists, then the push
 without `--dry-run`.
 
+A function the app calls is called through PostgREST before it ships, on
+the test stack (`test-stack/run.py`). What the app receives is what
+PostgREST makes of the function's return type, and neither a test fixture
+nor Postgres on its own shows that: 0.9.0's "About you" page was tested
+both ways and still read a function that returns nothing as a failure.
+
 ### Expand, then contract
 
 A client keeps running for weeks after a newer release ships, so a migration
@@ -190,6 +196,10 @@ after it. A new migration adds its line here.
   syncs what a conversation cost: until it runs, that client's usage rows
   are refused and listed as not saved after every agent step. Additive. Then
   redeploy `powersync/sync-config.yaml`, which now names `agent_thread_usage`
+- `20261113140000_profile_background_answers.sql` — any time; production
+  already has it, run by hand when 0.9.0 shipped. Until it runs, 0.9.0's
+  "About you" page records an answer and then says it could not. Server
+  only; there is no local migration
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an

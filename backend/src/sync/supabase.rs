@@ -144,6 +144,14 @@ impl Postgrest {
 
     /// `POST /rpc/<function>` with named `args`, decoded as `T`.
     ///
+    /// A function that returns nothing answers with an empty body, which is
+    /// read here as JSON `null`: decode it as `()` or an `Option`. It was
+    /// once read as a failure, so 0.9.0 told people an answer the server had
+    /// recorded could not be recorded
+    /// (`supabase/migrations/20261113140000_profile_background_answers.sql`).
+    /// A test fixture and bare Postgres both hide this; only a call through
+    /// PostgREST shows what a function's reply is.
+    ///
     /// # Errors
     ///
     /// [`SyncError::Network`] when the server could not be reached, and
@@ -179,7 +187,11 @@ impl Postgrest {
                 message: body,
             });
         }
-        serde_json::from_str(body.trim()).map_err(|error| SyncError::Api {
+        let reply = match body.trim() {
+            "" => "null",
+            reply => reply,
+        };
+        serde_json::from_str(reply).map_err(|error| SyncError::Api {
             status: status.as_u16(),
             message: format!("unexpected {function} response {body:?}: {error}"),
         })

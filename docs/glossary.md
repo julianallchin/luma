@@ -1,7 +1,4 @@
----
-title: Glossary
-description: Terms used in the Luma code and documentation
----
+# Glossary
 
 This page defines the terms that the Luma code and documentation use.
 
@@ -25,7 +22,7 @@ Library                                  Venue
 
 ## Mode
 
-One of the three ways a window shows its venue: **Rig** (the stage builder, patch and groups), **Arrange** (one score's timeline) and **Live** (the decks and the Perform set). See [The Window](/docs/user-guide/the-window).
+One of the three ways a window shows its venue: **Rig** (the stage builder, patch and groups), **Arrange** (one score's timeline) and **Live** (the decks and the Perform set). See [The Window](https://luma.show/docs).
 
 ## Venue
 
@@ -45,7 +42,7 @@ A set of 512 DMX channels. A venue can use more than one universe.
 
 ## Group
 
-A named set of fixtures in one venue. A score selects fixtures by group, not by fixture id. Group names are snake_case. They must match `[a-z][a-z0-9_]*` and cannot be `all`. See [Groups](/docs/user-guide/groups-and-tags).
+A named set of fixtures in one venue. A score selects fixtures by group, not by fixture id. Group names are snake_case. They must match `[a-z][a-z0-9_]*` and cannot be `all`. See [Groups](https://luma.show/docs/rig).
 
 ## Selection
 
@@ -65,7 +62,7 @@ One placement of a clip graph on a score's timeline. A clip has a name, a start 
 
 ## Clip Graph
 
-The small graph that a clip owns. It has 1 to 64 nodes of 19 kinds, and exactly one of them is the output node. See the [node reference](/docs/node-reference).
+The small graph that a clip owns. It has 1 to 64 nodes of 19 kinds, and exactly one of them is the output node. See the [node reference](https://luma.show/docs/node-reference).
 
 ## Output Node
 
@@ -73,11 +70,11 @@ The node of a clip graph that says what the clip does: `color` (color, brightnes
 
 ## Preset
 
-A shipped clip graph with a name and a blend mode, such as Chase or Rainbow. Adding a preset copies its graph into the new clip. See [Clips and Presets](/docs/user-guide/patterns).
+A shipped clip graph with a name and a blend mode, such as Chase or Rainbow. Adding a preset copies its graph into the new clip. See [Clips and Presets](https://luma.show/docs/arrange).
 
 ## Perform Set
 
-A venue's live patterns: clip graphs with no timeline, laid out on pages of a grid and played from pads, faders and controllers in Live mode. See [Live](/docs/user-guide/performing).
+A venue's live patterns: clip graphs with no timeline, laid out on pages of a grid and played from pads, faders and controllers in Live mode. See [Live](https://luma.show/docs/live).
 
 ## Controller
 
@@ -85,7 +82,7 @@ A MIDI device a venue knows by its port name, with an optional profile that says
 
 ## Laser Window
 
-The range of directions in a venue that its laser clips draw in, shared by every laser projector. A laser clip draws on a canvas from −1 to 1 that maps onto the window. See [Lasers](/docs/user-guide/lasers).
+The range of directions in a venue that its laser clips draw in, shared by every laser projector. A laser clip draws on a canvas from −1 to 1 that maps onto the window. See [Lasers](https://luma.show/docs/lasers).
 
 ## Kernel Graph
 
@@ -97,7 +94,7 @@ The value that flows on a kernel graph's wire. A signal is a three-dimensional a
 
 ## Blend Mode
 
-How a clip combines with the clips below it. Light has seven modes; see the [blend mode table](/docs/architecture/compositor#blend-modes). An aim clip takes **replace** or **offset**: offset turns the aim under the clip by the aim node's yaw and pitch. A laser clip takes **replace** or **add**.
+How a clip combines with the clips below it. Light has seven modes; see the [blend mode table](design/compositor.md#blend-modes). An aim clip takes **replace** or **offset**: offset turns the aim under the clip by the aim node's yaw and pitch. A laser clip takes **replace** or **add**.
 
 ## PrimitiveState
 

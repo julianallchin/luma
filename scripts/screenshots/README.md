@@ -42,3 +42,15 @@ https://unsplash.com/photos/r4qdM8iD5WY, under the
 attribution required (given here anyway). It is cropped to the beams and
 resized to 2400 pixels wide; the same credit is in the file's JPEG comment.
 A replacement must carry a licence as free, and no identifiable faces.
+
+## What the site uses now
+
+The landing page and README were redone by hand and do not come from this
+pipeline yet. `www/public/screenshots/arrange.webp` is one capture of a real
+library, uncomposed, with the stage's frame-rate card painted out: the page
+draws its corners and shadow in CSS.
+`hero.webp` is that capture over a dusk painting, for the README and link
+previews. `www/public/dusk.png` is the same painting at 800 by 500 in eight
+of its own colours, ordered-dithered, its ground faded to the page's black
+(`#0e0e0e`, the app window's own). Running `capture` overwrites `hero.webp` and `arrange.webp` and
+writes four images nothing uses.

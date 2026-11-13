@@ -481,7 +481,7 @@ impl Luma {
     /// then, an account with venues looks like one with none.
     pub(crate) fn restore_venue_once_synced(&mut self, cx: &mut Context<Self>) {
         if !self.library.cloud_sync_enabled() {
-            return self.restore_venue(cx);
+            return self.restore_venue_after(true, cx);
         }
         self.restoring_venue = true;
         let started = Instant::now();
@@ -498,7 +498,7 @@ impl Luma {
                     return None;
                 }
                 if caught_up || started.elapsed() >= FIRST_SYNC_LIMIT {
-                    this.restore_venue(cx);
+                    this.restore_venue_after(true, cx);
                     return None;
                 }
                 Some(this.library.debounce(Duration::from_millis(200)))
@@ -515,7 +515,20 @@ impl Luma {
 
     /// Restore behind the startup splash; only reveal the picker when a
     /// choice or an error needs the user’s attention.
+    ///
+    /// A library that sync has not finished filling is not shown as it
+    /// stands. A build at a new data format clears its copy and downloads it
+    /// again, so the launch after such an update finds no venues, or not the
+    /// one that was open: the splash holds for the download, as it does
+    /// after a sign-in, and an ordinary launch, whose venues are on disk,
+    /// does not wait at all.
     pub(crate) fn restore_venue(&mut self, cx: &mut Context<Self>) {
+        self.restore_venue_after(false, cx);
+    }
+
+    /// [`Self::restore_venue`], `waited` saying the first download has been
+    /// waited for already, so what is here now is what there is to show.
+    fn restore_venue_after(&mut self, waited: bool, cx: &mut Context<Self>) {
         self.restoring_venue = true;
         let generation = self.next_venue_picker_generation();
         self.overlay
@@ -594,6 +607,13 @@ impl Luma {
                 if let Some(venue) = restore {
                     this.overlay = luma_ui::dialog::Popup::default();
                     this.open_venue(venue, cx);
+                    return;
+                }
+                // Nothing to open yet, and the download is still coming:
+                // what is missing may only be on its way.
+                if !waited && !complete && (rows.is_empty() || remembered.is_some()) {
+                    this.overlay = luma_ui::dialog::Popup::default();
+                    this.restore_venue_once_synced(cx);
                     return;
                 }
                 if remembered.is_some() && complete {

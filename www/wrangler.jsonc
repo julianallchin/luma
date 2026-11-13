@@ -1,0 +1,11 @@
+// luma.show on Cloudflare: the static build in `out/`, with no Worker code.
+// `bun run build`, then `bunx wrangler deploy`.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "luma-www",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./out",
+    "not_found_handling": "404-page"
+  }
+}

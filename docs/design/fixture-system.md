@@ -1,7 +1,4 @@
----
-title: Fixture Definition System
-description: QLC+ fixture definitions, channel types, head layout and the fixture library
----
+# Fixture Definition System
 
 Luma uses fixture definitions in the QLC+ format. The fixture system reads
 these definitions and computes the position of each head on a fixture.
@@ -28,7 +25,7 @@ The parser reads:
 - **Type**: the fixture's kind, such as `Moving Head`, `Strobe` or
   `Laser Projector`. Group generation reads it to give a fixture its role. A
   `Laser Projector` has no cells: its heads are the elements a laser clip
-  draws on it, and the [laser solver](/docs/user-guide/lasers) turns them into
+  draws on it, and the [laser solver](https://luma.show/docs/lasers) turns them into
   its point stream.
 
 ## Channel types
@@ -43,7 +40,7 @@ The parser reads:
    Speed, Gobo, Prism, Effect, Maintenance or Nothing.
 3. With no group, it reads the channel name.
 
-The [DMX pipeline](/docs/architecture/dmx-pipeline) uses these types to map
+The [DMX pipeline](dmx-pipeline.md) uses these types to map
 lighting states to channels.
 
 ## Head layout

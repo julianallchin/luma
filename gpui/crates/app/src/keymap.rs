@@ -186,7 +186,7 @@ actions!(
         About,
         /// Ask the updater now rather than at the next hourly poll.
         CheckForUpdates,
-        /// Open the user guide on luma.show.
+        /// Open the docs on luma.show.
         OpenDocs,
         /// The add-track dialog, over the open venue.
         AddSongs,
@@ -520,7 +520,7 @@ pub(crate) fn from_table(binding: &KeyBinding) -> bool {
 }
 
 /// Where the user guide lives: the Help menu's one item.
-const DOCS_URL: &str = "https://luma.show/docs/user-guide/why-luma";
+const DOCS_URL: &str = "https://luma.show/docs";
 
 /// The menu bar: the standard macOS menus, holding only what this app does.
 ///

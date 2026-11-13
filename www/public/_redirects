@@ -1,0 +1,5 @@
+# Pages the site had before the docs were cut down. Installed copies of the
+# app still open the first of these from Help.
+/docs/user-guide/* /docs 301
+/docs/architecture/* https://github.com/lumashow/luma/blob/main/docs/README.md 301
+/docs/glossary https://github.com/lumashow/luma/blob/main/docs/glossary.md 301

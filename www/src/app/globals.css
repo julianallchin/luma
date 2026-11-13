@@ -5,39 +5,39 @@
 @theme inline {
   --font-sans: var(--font-inter);
   --font-mono: var(--font-jetbrains-mono);
-
-  --radius-xs: 0px;
-  --radius-sm: 0px;
-  --radius-md: 0px;
-  --radius-lg: 0px;
-  --radius-xl: 0px;
-  --radius-2xl: 0px;
-  --radius-3xl: 0px;
-  --radius-4xl: 0px;
-  --radius-full: 0px;
+  --font-serif: var(--font-newsreader), "Iowan Old Style", "Palatino", Georgia, serif;
 }
 
-/* Override fumadocs theme with Luma's dark palette (OKLCH from App.css) */
+/* The docs wear the landing page's colours: the app window's black for the
+   ground and the painting's ember for links (see (marketing)/marketing.css). */
 .dark {
-  --color-fd-background: oklch(0.1867 0 0);              /* #181818 */
-  --color-fd-foreground: oklch(0.9189 0 0);              /* #e4e4e4 */
-  --color-fd-primary: oklch(0.7746 0.0622 217.469);      /* #88c0d0 */
-  --color-fd-primary-foreground: oklch(0 0 0);            /* black */
-  --color-fd-muted: oklch(0.2935 0.0018 286.29);         /* #262626 */
-  --color-fd-muted-foreground: oklch(0.5693 0 0);        /* #777777 */
-  --color-fd-popover: oklch(0.1913 0 0);                 /* #141414 */
-  --color-fd-popover-foreground: oklch(0.9189 0 0);      /* #e4e4e4 */
-  --color-fd-card: oklch(0.245 0 197.03);                /* #242424 */
-  --color-fd-card-foreground: oklch(0.9189 0 0);         /* #e4e4e4 */
-  --color-fd-border: oklch(0.3677 0 0);                  /* #2a2a2a */
-  --color-fd-secondary: oklch(0.1913 0 0);               /* #141414 */
-  --color-fd-secondary-foreground: oklch(0.9189 0 0);    /* #e4e4e4 */
-  --color-fd-accent: oklch(0.2935 0.0018 286.29);        /* #262626 */
-  --color-fd-accent-foreground: oklch(0.9189 0 0);       /* #e4e4e4 */
-  --color-fd-ring: oklch(0.7746 0.0622 217.469);         /* #88c0d0 */
+  --color-fd-background: #0e0e0e;
+  --color-fd-foreground: #e8e6e1;
+  --color-fd-primary: #e3a076;
+  --color-fd-primary-foreground: #0e0e0e;
+  --color-fd-muted: #181818;
+  --color-fd-muted-foreground: #8c8c8c;
+  --color-fd-popover: #141414;
+  --color-fd-popover-foreground: #e8e6e1;
+  --color-fd-card: #181818;
+  --color-fd-card-foreground: #e8e6e1;
+  --color-fd-border: #272727;
+  --color-fd-secondary: #181818;
+  --color-fd-secondary-foreground: #e8e6e1;
+  --color-fd-accent: #202020;
+  --color-fd-accent-foreground: #fbfaf7;
+  --color-fd-ring: #e3a076;
 }
 
 article {
-  max-width: 800px;
+  max-width: 720px;
 }
 
+/* A page's title is set like the landing page's headline. */
+article > h1 {
+  font-family: var(--font-serif);
+  font-size: 2.75rem;
+  font-weight: 400;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}

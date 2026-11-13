@@ -1,7 +1,4 @@
----
-title: Selection System
-description: Group references, cells, positions in a clip graph and rig UV
----
+# Selection System
 
 The selection system turns a selection into a list of fixture heads. A
 selection names groups of the score's venue, never fixtures.
@@ -76,7 +73,7 @@ A `space` node turns the cells into a coordinate per head. Its `kind` is
 0–1 across the clip's selection. A `split` node makes each fixture or each
 group its own span, and a `mirror` node folds the heads across a plane. A
 negative direction runs the other way. See the
-[node reference](/docs/node-reference/coordinates#space).
+[node reference](https://luma.show/docs/node-reference/coordinates#space).
 
 ## Rig UV
 
