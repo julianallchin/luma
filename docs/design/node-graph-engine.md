@@ -1,7 +1,4 @@
----
-title: Node Graph Engine
-description: Scores, graph definitions, typed signals, validation, preparation and musical time
----
+# Node Graph Engine
 
 The pattern graph engine is the crate `luma-patterns` in
 `backend/crates/patterns`. It has no database, UI or playback-device state. It
@@ -28,7 +25,7 @@ A `Clip` has these fields:
 | `graph` | The clip's own `ClipGraph` |
 
 In the database a score is rows in `scores` and `clips`.
-See [Database](/docs/architecture/database).
+See [Database](database.md).
 
 ## Clip graphs
 
@@ -42,7 +39,7 @@ one node is the output: `color`, `aim`, `strobe` or `laser`. The spec is
 definition per kind: its inputs with type, unit and range, its settings with
 their options, and what its output wire carries. The editor, the Python
 builders and the checker all read them. The
-[Node Reference](/docs/node-reference) is generated from them.
+[Node Reference](https://luma.show/docs/node-reference) is generated from them.
 
 `clip_graph::check` checks a graph in five steps: the graph (version, node
 count, ids, one output, no loop, every node feeding the output), each node's
@@ -146,6 +143,6 @@ gamut mapping.
   selections and the beat grid of one authorized read. It converts each clip
   span from beats to seconds with `BeatTimeline::seconds_at`.
 
-See [Compositor](/docs/architecture/compositor) for how clips combine, and
-[Selection System](/docs/architecture/selection-system) for how cells are
+See [Compositor](compositor.md) for how clips combine, and
+[Selection System](selection-system.md) for how cells are
 resolved.

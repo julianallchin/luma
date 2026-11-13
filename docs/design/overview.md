@@ -1,7 +1,4 @@
----
-title: Architecture Overview
-description: Native desktop stack, shared backend, and repository organization
----
+# Architecture Overview
 
 Luma is a native Rust desktop app. The UI uses GPUI. The shared backend owns
 persistence, audio analysis, pattern evaluation, agents, sync and lighting
@@ -28,7 +25,7 @@ The library database is `luma.db` in the platform app config directory:
 
 Venues, tracks, groups, patterns and scores are rows in this database. There
 is no per-venue project file. The auth session is in a separate `state.db` in
-the same directory. See [Database](/docs/architecture/database).
+the same directory. See [Database](database.md).
 
 ## Repository organization
 

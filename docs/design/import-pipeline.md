@@ -1,7 +1,4 @@
----
-title: Import Pipeline
-description: Track import, the preprocessing DAG, Python workers and DJ equipment integration
----
+# Import Pipeline
 
 The import pipeline adds tracks to the library, analyzes their audio and
 connects to DJ equipment.

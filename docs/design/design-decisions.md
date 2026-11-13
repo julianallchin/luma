@@ -1,7 +1,4 @@
----
-title: Design Decisions
-description: Main architectural choices and the reasons for them
----
+# Design Decisions
 
 This page lists the main architectural choices in Luma and the reason for each.
 
@@ -15,7 +12,7 @@ groups instead:
 
 A selection holds group ids, not names, so renaming a group changes no score.
 Changing the fixtures in a group changes what every clip that selects it
-lights. See [Selection System](/docs/architecture/selection-system).
+lights. See [Selection System](selection-system.md).
 
 ## One small graph per clip
 
@@ -81,4 +78,4 @@ A device is a cache of live rows. The server is the permanent record:
 
 Venues and their fixtures and groups sync like other rows. Venue members can
 read and edit a shared venue; a score in it is edited by its author and read by the rest, who duplicate it to change it. Where each universe goes is the local `dmx_routes`
-table, because the DMX hardware belongs to one machine; it does not sync. See [Database](/docs/architecture/database).
+table, because the DMX hardware belongs to one machine; it does not sync. See [Database](database.md).

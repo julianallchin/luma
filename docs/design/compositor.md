@@ -1,7 +1,4 @@
----
-title: Compositor
-description: Scenes, per-frame compositing, blend modes and perform-mode mixing
----
+# Compositor
 
 The compositor combines the clips of one score into one lighting state per
 fixture head. It evaluates each frame on request. It does not store a
@@ -133,4 +130,4 @@ reads: faders, buttons, chosen groups, list values and the tapped tempo.
 Every input writes there, so an on-screen pad, a MIDI key and an OSC message
 are the same press.
 
-See [Live](/docs/user-guide/performing).
+See [Live](https://luma.show/docs/live).

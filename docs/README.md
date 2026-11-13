@@ -1,17 +1,27 @@
 # Docs
 
-How Luma's systems work and why. User-facing docs are the website (`www/`);
-build and test know-how is in [gpui/BUILD.md](../gpui/BUILD.md) and each crate's
-README. A doc says at its top whether it is built; where a doc and the code
+How Luma's systems work and why. User-facing docs are the website (`www/`),
+kept short on purpose; build and test know-how is in
+[gpui/BUILD.md](../gpui/BUILD.md) and each crate's README. A doc says at its top whether it is built; where a doc and the code
 disagree, the code is right and the doc needs fixing.
 
 `specs/` hold contracts code is checked against; `design/` holds how a system
 works and the decisions behind it.
 
+## Start here
+
+- [design/overview.md](design/overview.md) — the stack, where the data lives, and the repository layout
+- [design/design-decisions.md](design/design-decisions.md) — the main architectural choices and the reasons for them
+- [glossary.md](glossary.md) — the terms the code and the docs use
+
 ## Patterns and playback
 
 - [specs/clip-graphs.md](specs/clip-graphs.md) — every clip is a small typed graph: node kinds, types, checks, lowering
 - [specs/composable-patterns.md](specs/composable-patterns.md) — the evaluation and persistence contract under clip graphs
+- [design/node-graph-engine.md](design/node-graph-engine.md) — scores, clip graphs, typed signals, validation, preparation and musical time
+- [design/compositor.md](design/compositor.md) — scenes, per-frame compositing, blend modes and Live mixing
+- [design/selection-system.md](design/selection-system.md) — group references, cells, positions in a clip graph and rig UV
+- [design/dmx-pipeline.md](design/dmx-pipeline.md) — lighting state to DMX channel values, strobe, color wheels, Art-Net and USB output
 - [specs/aim.md](specs/aim.md) — the room frame, the pan/tilt solver, moving in black, motor lag
 - [design/lasers.md](design/lasers.md) — beam shows from laser projectors: settings, the window, figures, the solver, DAC output
 - [design/laser-hardware.md](design/laser-hardware.md) — bringing a projector and its DAC up on the bench: what is unverified, and writing a driver
@@ -26,6 +36,7 @@ works and the decisions behind it.
 - [specs/venue-builder-gauntlet.md](specs/venue-builder-gauntlet.md) — the acceptance contract for the venue graph's rig building
 - [design/editor-core.md](design/editor-core.md) — the stage builder's editor kernel: selection, input, tools
 - [design/fixture-library.md](design/fixture-library.md) — the Luma fixture library: `lib:` fixtures, how they load, draw and drive, and what is still lowered
+- [design/fixture-system.md](design/fixture-system.md) — QLC+ fixture definitions, channel types and head layout
 
 ## Rendering
 
@@ -53,5 +64,7 @@ works and the decisions behind it.
 
 - [design/sync.md](design/sync.md) — PowerSync row sync, uploads, media transfer
 - [design/data-layer.md](design/data-layer.md) — source and derived tables, soft deletes, ids, the history log
+- [design/database.md](design/database.md) — the local SQLite database, migrations, row sync, deletes, history and media
 - [design/genre-model.md](design/genre-model.md) — the genre model: how its weights arrive
 - [backend/src/preprocessing/README.md](../backend/src/preprocessing/README.md) — the track analysis DAG
+- [design/import-pipeline.md](design/import-pipeline.md) — track import, Python workers, and the StageLinQ and Pro DJ Link integrations

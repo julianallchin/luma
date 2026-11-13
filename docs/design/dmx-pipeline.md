@@ -1,7 +1,4 @@
----
-title: DMX Output Pipeline
-description: Lighting state to DMX channel values, strobe handling, color wheels, and output over Art-Net and USB
----
+# DMX Output Pipeline
 
 The DMX pipeline converts lighting states into DMX values and sends them to
 Art-Net nodes and USB DMX dongles.

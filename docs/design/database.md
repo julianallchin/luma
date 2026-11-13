@@ -1,7 +1,4 @@
----
-title: Database
-description: Local SQLite database, migrations, row sync with PowerSync, deletes, history and media transfer
----
+# Database
 
 Luma keeps all library data in one SQLite database, `luma.db`. Venues,
 fixtures, groups, tracks, scores and patterns are rows in this database. The
