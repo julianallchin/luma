@@ -33,6 +33,10 @@ use super::{
     UserPrompt,
 };
 use crate::database::local::agent_threads as db;
+use crate::database::local::scores::get_score;
+use crate::database::local::venue_access::{
+    AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
+};
 use crate::models::agent_threads::{AgentThread, CreateAgentThreadInput};
 use crate::services::drafts;
 
@@ -263,13 +267,26 @@ pub(super) async fn delegate(
     .await
     .map_err(|error| format!("could not open a thread for this subagent: {error}"))?;
     lease.attach(&child.id);
-    // A child works on a draft of the score, never on the live rows.
+    // A child works on a draft of the score, never on the live rows. A score
+    // the person may only read gets no draft: the child reads it as they do.
     if let Some(score_id) = parent.score_id.as_deref() {
-        let mut connection = pool
-            .acquire()
-            .await
-            .map_err(|error| format!("could not open the subagent's draft: {error}"))?;
-        drafts::create(&mut connection, score_id, &child.id, &principal).await?;
+        let failed = |error| format!("could not open the subagent's draft: {error}");
+        let editable = {
+            let mut access = VenueAccess::<Read>::read(&pool, VenueResource::Score(score_id))
+                .await
+                .map_err(failed)?;
+            get_score(&mut access, score_id)
+                .await
+                .map_err(failed)?
+                .editable
+        };
+        if editable {
+            let mut connection = pool
+                .acquire()
+                .await
+                .map_err(|error| failed(error.to_string()))?;
+            drafts::create(&mut connection, score_id, &child.id, &principal).await?;
+        }
     }
 
     let mut snapshot = SubagentSnapshot {
@@ -379,14 +396,10 @@ async fn publish(ctx: &ToolContext<'_>, child_thread_id: &str, _text: &str) -> S
 /// turn. One transaction, so the attribution cannot outlive it and a merge
 /// that fails halfway leaves the live score as it was.
 async fn merge_draft(pool: &sqlx::SqlitePool, child_thread_id: &str) -> Result<(), String> {
-    let mut transaction = pool
-        .begin_with("BEGIN IMMEDIATE")
-        .await
-        .map_err(|error| error.to_string())?;
     // The turn's message is the newest a principal wrote in the child's
     // thread, which is what the child's cells named while they ran.
-    let found: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT draft.id, thread.actor,
+    let found: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT draft.id, draft.score_id, thread.actor,
                 (SELECT message.id FROM agent_thread_messages message
                   WHERE message.created_in_thread_id = draft.thread_id
                     AND message.role IN ('user', 'session')
@@ -396,26 +409,56 @@ async fn merge_draft(pool: &sqlx::SqlitePool, child_thread_id: &str) -> Result<(
           WHERE draft.thread_id = ?",
     )
     .bind(child_thread_id)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(pool)
     .await
     .map_err(|error| error.to_string())?;
-    // A child with no score in scope had nothing to draft and nothing to
-    // merge; its answer is the whole of its contribution.
-    let Some((draft, actor, message)) = found else {
+    // A child with no score in scope, or one it could only read, had nothing
+    // to draft and nothing to merge; its answer is the whole of its
+    // contribution.
+    let Some((draft, score_id, actor, message)) = found else {
         return Ok(());
     };
-    let attribution = crate::sync::triggers::TurnAttribution::turn(
+    let mut attribution = crate::sync::triggers::TurnAttribution::turn(
         actor.as_deref(),
         child_thread_id,
         message.as_deref(),
     );
-    crate::sync::triggers::attribute(&mut transaction, attribution.get()).await?;
-    drafts::merge(&mut transaction, &draft).await?;
-    crate::sync::triggers::unattribute(&mut transaction).await?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error| error.to_string())
+    attribution.group = person_turn(pool, child_thread_id)
+        .await?
+        .or(attribution.group);
+    let mut access =
+        VenueAccess::<Write>::write_as(pool, VenueResource::Score(&score_id), attribution.get())
+            .await?;
+    drafts::merge(access.connection(), &draft).await?;
+    access.commit().await
+}
+
+/// The message that started the turn `child_thread_id` is working for: the
+/// newest a principal wrote in the conversation at the top of its line of
+/// parents. It is the change group of everything the turn's children write,
+/// so history reads one request as one group however far down the work went.
+/// `None` for a thread that has no parent, whose own turn already is that.
+pub(crate) async fn person_turn(
+    pool: &sqlx::SqlitePool,
+    child_thread_id: &str,
+) -> Result<Option<String>, String> {
+    sqlx::query_scalar(
+        "WITH RECURSIVE line(id, parent) AS (
+             SELECT id, parent_thread_id FROM agent_threads WHERE id = ?1
+             UNION ALL
+             SELECT thread.id, thread.parent_thread_id
+               FROM agent_threads thread JOIN line ON thread.id = line.parent)
+         SELECT message.id
+           FROM line JOIN agent_thread_messages message
+             ON message.created_in_thread_id = line.id
+          WHERE line.parent IS NULL AND line.id <> ?1
+            AND message.role IN ('user', 'session')
+          ORDER BY message.depth DESC LIMIT 1",
+    )
+    .bind(child_thread_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("could not find the turn this thread works for: {error}"))
 }
 
 /// Close a failed child's draft. A failure to close is not worth failing the

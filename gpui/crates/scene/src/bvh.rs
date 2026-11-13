@@ -242,6 +242,26 @@ impl TriMesh {
         }
     }
 
+    /// A closed box, faces wound outward: what a pointer should meet on a
+    /// piece that is mostly air, such as a truss lattice.
+    pub fn solid(bounds: Aabb) -> TriMesh {
+        const FACES: [[u32; 4]; 6] = [
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+        ];
+        TriMesh::new(
+            bounds.corners().to_vec(),
+            FACES
+                .iter()
+                .flat_map(|[a, b, c, d]| [[*a, *b, *c], [*a, *c, *d]])
+                .collect(),
+        )
+    }
+
     pub fn bounds(&self) -> Aabb {
         self.bvh.bounds()
     }
@@ -249,6 +269,47 @@ impl TriMesh {
     #[cfg(test)]
     pub fn triangle_count(&self) -> usize {
         self.triangles.len()
+    }
+
+    /// Whether anything stands within `limit` along `ray`. Stops at the
+    /// first hit and allocates nothing: a bake asks this millions of times.
+    pub fn blocked(&self, ray: Ray, limit: f32) -> bool {
+        if self.triangles.is_empty() {
+            return false;
+        }
+        let inv_dir = Vec3::new(1.0 / ray.dir.x, 1.0 / ray.dir.y, 1.0 / ray.dir.z);
+        // A binned-SAH tree over a mesh is far shallower than this.
+        let mut stack = [0u32; 64];
+        let mut top = 1;
+        while top > 0 {
+            top -= 1;
+            let node = &self.bvh.nodes[stack[top] as usize];
+            if !slab_test(&node.bounds, ray.origin, inv_dir, limit) {
+                continue;
+            }
+            if node.count == 0 {
+                if top + 2 > stack.len() {
+                    return true;
+                }
+                stack[top] = node.first;
+                stack[top + 1] = node.first + 1;
+                top += 2;
+                continue;
+            }
+            for i in node.first..node.first + node.count {
+                let [a, b, c] = self.triangles[self.bvh.tri_indices[i as usize] as usize];
+                let hit = intersect_triangle(
+                    ray,
+                    self.positions[a as usize],
+                    self.positions[b as usize],
+                    self.positions[c as usize],
+                );
+                if hit.is_some_and(|t| t < limit) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Nearest forward hit, in the mesh's own space. Double-sided: stage GLBs
@@ -364,6 +425,22 @@ mod tests {
         TriMesh::new(positions, triangles)
     }
 
+    /// `blocked` says what `raycast` says, with a limit: a hit past the
+    /// limit is not in the way.
+    #[test]
+    fn blocked_is_a_hit_within_the_limit() {
+        let mesh = grid_quad(16);
+        let down = Ray::new(Vec3::new(0.3, -0.2, 2.0), Vec3::NEG_Z);
+        assert!(mesh
+            .raycast(down)
+            .is_some_and(|hit| (hit.t - 2.0).abs() < 1e-5));
+        assert!(mesh.blocked(down, 2.5));
+        assert!(!mesh.blocked(down, 1.5), "the quad is past the limit");
+        let past = Ray::new(Vec3::new(3.0, 0.0, 2.0), Vec3::NEG_Z);
+        assert!(mesh.raycast(past).is_none());
+        assert!(!mesh.blocked(past, 10.0));
+    }
+
     #[test]
     fn hits_the_plane_it_should() {
         let mesh = grid_quad(8);
@@ -419,5 +496,21 @@ mod tests {
         let a = Vec3::ZERO;
         let mesh = TriMesh::new(vec![a, Vec3::X, Vec3::Y], vec![[0, 1, 2]; 8]);
         assert_eq!(mesh.triangle_count(), 8);
+    }
+
+    /// A solid box stops a ray from every side, and says which way the face
+    /// it met points: back at where the ray came from.
+    #[test]
+    fn a_solid_box_faces_outward_on_every_side() {
+        let solid = TriMesh::solid(Aabb::from_points([
+            Vec3::new(-1.0, -0.2, -0.3),
+            Vec3::new(1.0, 0.2, 0.3),
+        ]));
+        for from in [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z] {
+            let hit = solid
+                .raycast(Ray::new(from * 5.0 + Vec3::splat(0.05), -from))
+                .expect("a ray at the middle of a face meets it");
+            assert!(hit.normal.dot(from) > 0.99, "{from}: {:?}", hit.normal);
+        }
     }
 }

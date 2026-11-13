@@ -31,7 +31,7 @@ mod outdoor_haze;
 mod panel_light;
 mod post_look;
 mod procedural_haze;
-mod reflection_probes;
+mod bounce;
 mod renderer_contract_goldens;
 mod serde_records;
 mod sky_clouds;

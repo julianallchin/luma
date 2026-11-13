@@ -8,7 +8,7 @@ use luma_ui::{float, glass};
 #[derive(Default)]
 pub(super) struct DockMotion {
     tooltip: Transition,
-    pub(super) switches: [Transition; 7],
+    pub(super) switches: [Transition; 6],
     knob_hovered: bool,
     light_dragging: bool,
     knob_bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
@@ -256,6 +256,9 @@ pub(crate) fn environment_panel(
             rows.child(float::divider())
                 .child(section("Clouds", clouds))
         })
+        .when_some(room_rows(state, environment, app), |rows, room| {
+            rows.child(float::divider()).child(section("Room", room))
+        })
         .child(float::divider())
         .child(section("Floor", floor_rows(environment, app)))
         .child(float::divider())
@@ -292,12 +295,11 @@ fn column(title: &'static str, body: impl IntoElement) -> Div {
         .child(body)
 }
 
-/// The Debug page: the reflection probes, their debug balls, and the
-/// camera export.
+/// The Debug page: the bounced light and the camera export.
 fn debug_rows(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
-    let probes = state.render_controls.probes;
+    let bounce = state.render_controls.bounce;
     // What the renderer is handed, read back from the settings it is sent.
-    let sent = state.render_settings().probes;
+    let sent = state.render_settings().bounce;
     div()
         .flex()
         .flex_col()
@@ -305,23 +307,15 @@ fn debug_rows(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .child(super::view_toggle(
             state,
             app,
-            "Reflection probes",
-            probes.enabled,
-            ViewToggle::ReflectionProbes,
-        ))
-        .child(super::view_toggle(
-            state,
-            app,
-            "Show probes",
-            probes.debug,
-            ViewToggle::ShowProbes,
+            "Bounced light",
+            bounce.enabled,
+            ViewToggle::BouncedLight,
         ))
         .child(div().size_0().agent_node(
             Role::Text,
             format!(
-                "Renderer probes = {}, balls {}",
-                if sent.enabled { "on" } else { "off" },
-                if sent.debug { "on" } else { "off" }
+                "Renderer bounce = {}",
+                if sent.enabled { "on" } else { "off" }
             ),
         ))
         .child(export_camera(app))
@@ -624,7 +618,7 @@ impl Luma {
             }
             ViewToggle::AutoExposure | ViewToggle::Footage => self.save_look(cx),
             // Session dials: they outlive nothing.
-            ViewToggle::ReflectionProbes | ViewToggle::ShowProbes => {}
+            ViewToggle::BouncedLight => {}
         }
         cx.notify();
     }
@@ -968,6 +962,76 @@ fn section(title: &'static str, rows: impl IntoElement) -> Div {
         .gap(px(8.))
         .child(float::label(title))
         .child(rows)
+}
+
+/// The size a room starts at when it is first given walls, in metres.
+const NEW_ROOM_M: [f64; 3] = [20.0, 14.0, 7.0];
+
+/// An indoor venue's walls and ceiling: whether it has them, and how wide,
+/// deep and high the room is. `None` outdoors, and before the builder has
+/// the venue's graph.
+///
+/// The size is the venue's own, kept with what is built in it, so each row
+/// writes it the way a placed piece's length is written and undoes with it.
+fn room_rows(state: &Visualizer, environment: VenueEnvironment, app: &Entity<Luma>) -> Option<Div> {
+    if !matches!(environment, VenueEnvironment::Indoor { .. }) {
+        return None;
+    }
+    let (root, size, shade) = state.build.as_ref()?.room();
+    let toggle = app.clone();
+    let (label, to) = match size {
+        Some(_) => ("Remove walls", None),
+        None => ("Add walls and ceiling", Some(NEW_ROOM_M)),
+    };
+    let mut rows = div().flex().flex_col().gap(px(8.));
+    for (i, (title, key)) in [
+        ("Width (m)", "width"),
+        ("Depth (m)", "depth"),
+        ("Height (m)", "height"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Some(size) = size else { break };
+        let (app, root) = (app.clone(), root.to_string());
+        rows = rows.child(super::scrub_row(
+            title,
+            size[i] as f32,
+            2.0..=100.0,
+            0.5,
+            1.0,
+            move |metres, cx| {
+                app.update(cx, |this, cx| {
+                    this.stage_set_param(&root, key, f64::from(metres), cx);
+                });
+            },
+        ));
+    }
+    if size.is_some() {
+        let (app, root) = (app.clone(), root.to_string());
+        let shades = luma_scene::venue::WALL_SHADES;
+        rows = rows.child(super::scrub_row(
+            "Wall brightness (%)",
+            shade * 100.0,
+            shades.start() * 100.0..=shades.end() * 100.0,
+            1.0,
+            1.0,
+            move |percent, cx| {
+                app.update(cx, |this, cx| {
+                    let shade = f64::from(percent) / 100.0;
+                    this.stage_set_param(&root, luma_scene::venue::WALL_SHADE_PARAM, shade, cx);
+                });
+            },
+        ));
+    }
+    Some(
+        rows.child(
+            float::btn(label, "room-walls")
+                .id("room-walls")
+                .on_click(move |_, _, cx| toggle.update(cx, |this, cx| this.stage_set_room(to, cx)))
+                .agent_node(Role::Button, label),
+        ),
+    )
 }
 
 /// Where an open-air venue's sun is, as two rows in degrees. `None` indoors,

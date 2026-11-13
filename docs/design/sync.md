@@ -34,8 +34,9 @@ the server remembers are in [data-layer.md](data-layer.md).
   (`SyncedTable::slot`).
 - Postgres row-level security decides who may read and write a row. Owner or
   venue member for venue content, the venue row included; owner for private
-  content and for the venue's door (its owner, its share code, deleting it,
-  removing members). A policy asks whether a row's parents are live, never
+  content, for the venue's door (its owner, its share code, deleting it,
+  removing members) and for a score and its clips, which members read and
+  copy (`VenueAccess` asks the same locally; see `VenueResource::Score`). A policy asks whether a row's parents are live, never
   whether the row itself is. `public.history` records who made each change.
   The app validates before it writes. The server does not re-run domain rules.
 - Concurrent edits to one row merge per column, last write wins. PowerSync
@@ -150,7 +151,7 @@ is an upsert.
 
 venues, venue_members, fixtures, fixture_groups, fixture_group_members,
 venue_nodes, venue_node_params, venue_constraints, folders,
-folder_tracks, laser_zones, laser_limits, perform_patterns, perform_layouts,
+folder_tracks, laser_limits, perform_patterns, perform_layouts,
 perform_controllers, control_bindings, tracks,
 track_beats, track_roots, track_stems, track_drum_onsets,
 track_bar_classifications, track_genres, track_beat_validations, scores,
@@ -215,7 +216,7 @@ A migration that changes what synced rows mean is a new data format. In one
 change: the Supabase migration replaces `public.data_format()` with the next
 number, converts every row server-side, flagged ones included, and ships the
 function that reads a row of the previous format as the new one
-(`public.row_from_format_1`); the commit bumps `PROJECTION_VERSION`; and a
+(`public.row_from_format_1`, `public.row_from_format_2`); the commit bumps `PROJECTION_VERSION`; and a
 new synced table gets the `_client_format` trigger
 (`supabase/migrations/20261111120000_client_format.sql`). There is no
 compatibility between formats on either side.

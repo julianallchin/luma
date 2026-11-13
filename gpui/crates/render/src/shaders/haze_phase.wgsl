@@ -1,6 +1,7 @@
 // The haze's phase function (`haze_phase.rs`): a Henyey-Greenstein forward
-// peak blended with a Draine lobe, Jendersie and d'Eon's fit to Mie
-// scattering by sub-micrometre droplets. `HAZE_PHASE_*` are prepended.
+// peak blended with a Draine lobe, the form of Jendersie and d'Eon's fit,
+// with parameters fitted to the Mie scattering of haze fluid's sub-micrometre
+// droplets. `HAZE_PHASE_*` are prepended.
 //
 // Relative to isotropic: a medium that scattered equally every way would
 // read 1 here, not 1/4pi. A cone's intensity is a dimmer times the optic's

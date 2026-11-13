@@ -264,6 +264,32 @@ pub async fn add_member_to_group(
     Ok(())
 }
 
+/// Put a membership row back as a snapshot recorded it, under its own id.
+/// A group deleted since is gone, and the row with it.
+pub async fn restore_membership(
+    access: &mut VenueAccess<'_, Write>,
+    row: &crate::models::venue_graph::VenueMembership,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO fixture_group_members
+             (id, uid, venue_id, fixture_id, group_id, head_index, display_order)
+         SELECT ?, ?, ?, ?, grp.id, ?, ?
+         FROM fixture_groups grp WHERE grp.id = ? AND grp.venue_id = ?",
+    )
+    .bind(&row.id)
+    .bind(access.principal().to_owned())
+    .bind(access.venue_id().to_owned())
+    .bind(&row.fixture_id)
+    .bind(row.head_index)
+    .bind(row.display_order)
+    .bind(&row.group_id)
+    .bind(access.venue_id().to_owned())
+    .execute(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to restore a group membership: {e}"))?;
+    Ok(())
+}
+
 /// Remove membership rows for a fixture in a group. `head_index = None`
 /// removes everything (whole-fixture and per-head rows alike);
 /// `Some(h)` removes only that head's row.

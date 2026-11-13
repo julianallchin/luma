@@ -161,6 +161,35 @@ after it. A new migration adds its line here.
   works without the other. Then redeploy `powersync/sync-config.yaml`, whose
   rules name the `deleted_at` this file adds; until they are deployed a
   deleted row stays on the devices that hold it
+- `20261112130000_venue_audio_follows_scores.sql` — any time after the data
+  layer; until it runs, a venue member cannot download the audio of a song
+  another member owns unless that owner scored it in the venue. Server only;
+  there is no local migration
+- `20261112140000_scores_are_their_authors.sql` — any time before shipping
+  the client that opens other people's scores read-only; until it runs, only
+  the app keeps a member from writing a score someone else owns. After it, an
+  older client's edit of such a score uploads to no rows and is undone by the
+  next download. Server only; there is no local migration
+- `20261112150000_laser_projectors.sql` — data format 3
+  ([lasers.md](../docs/design/lasers.md)). After
+  `20261112120000_data_layer.sql`. Its contract marker names 0.8.0, so it
+  runs in the first release after it, and that release is the first build
+  that reads format 3: from then on a 0.8.0 or older install neither uploads
+  nor downloads until it updates, and the new build clears its copy and
+  downloads again. Then redeploy `powersync/sync-config.yaml`, which stops
+  naming `laser_zones`. The table is left in place, unread; a later
+  migration drops it
+- `20261113120000_provenance.sql` — before shipping the client that writes
+  feedback and a copy's source: until it runs, that client's verdicts and
+  duplicated scores are refused and listed as not saved, and its "About you"
+  page cannot record an answer (it lets the account through). Additive, so
+  older clients are unaffected and the data format does not change. Then
+  redeploy `powersync/sync-config.yaml`, which now names `feedback`; until
+  it is deployed a verdict does not reach the account's other devices
+- `20261113130000_agent_thread_usage.sql` — before shipping the client that
+  syncs what a conversation cost: until it runs, that client's usage rows
+  are refused and listed as not saved after every agent step. Additive. Then
+  redeploy `powersync/sync-config.yaml`, which now names `agent_thread_usage`
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an

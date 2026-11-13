@@ -52,3 +52,14 @@ pub mod venue_graph;
 
 /// The version shared by the GPUI host and backend tools.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// This build, as the server's history records it against every write: the
+/// version, and the commit where the build was given one (a release or a
+/// nightly, which share a version between tags).
+#[must_use]
+pub fn build() -> String {
+    match option_env!("LUMA_COMMIT_SHA") {
+        Some(commit) => format!("{VERSION}+{commit}"),
+        None => VERSION.to_owned(),
+    }
+}

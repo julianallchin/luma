@@ -188,7 +188,7 @@ async fn resolve_scope(
                     "pinned score '{score_id}' does not belong to track '{track_id}' and venue '{venue_id}'"
                 ));
             }
-            let track_edit = access.capability().edit.then(|| TrackEditScope {
+            let track_edit = score.editable.then(|| TrackEditScope {
                 score_id: score_id.to_string(),
                 track_id: track_id.to_string(),
                 venue_id: venue_id.to_string(),
@@ -360,11 +360,17 @@ pub async fn run_python_cell_inner(
     // What this cell writes is the thread's actor's doing, in this
     // conversation, on the turn that ran it. Every cell of the turn names the
     // same message, so history reads the whole turn as one group of changes.
-    let attribution = crate::sync::triggers::TurnAttribution::turn(
+    let mut attribution = crate::sync::triggers::TurnAttribution::turn(
         thread.actor.as_deref(),
         &thread_id,
         turn_message_id.as_deref(),
     );
+    // A subagent's writes are part of what the person asked for.
+    if thread.parent_thread_id.is_some() {
+        attribution.group = crate::agent::subagent::person_turn(pool, &thread_id)
+            .await?
+            .or(attribution.group);
+    }
     // A room is renderable whenever one is in scope, whether or not this thread
     // may edit a track in it — a graph agent working against a venue still gets
     // to look at it. When a score *is* pinned, that score is what lights it.
@@ -783,10 +789,10 @@ mod tests {
         assert!(refused.contains("is not available"), "{refused}");
     }
 
-    /// No permission model inside a venue: a member's agent edits a score the
-    /// owner wrote, as the member could by hand.
+    /// A score is its author's: a member's agent reads a score the owner
+    /// wrote and may not write it, as the member may not by hand.
     #[tokio::test]
-    async fn a_member_s_track_thread_may_edit_another_person_s_score() {
+    async fn a_member_s_track_thread_reads_another_person_s_score() {
         let (_directory, pool) = scope_pool().await;
         crate::database::local::auth::arm_write_admission(&pool, Some("member"))
             .await
@@ -810,11 +816,15 @@ mod tests {
         let resolved = resolve_scope(&pool, &pinned_track_thread(), PythonScopeInput::default())
             .await
             .unwrap();
-        assert!(resolved.bindings.track_editable);
         assert_eq!(
-            resolved.track_edit.map(|edit| edit.score_id).as_deref(),
+            resolved.track.map(|track| track.score_id).as_deref(),
             Some("score"),
-            "the owner's score was read only to a member's agent"
+            "the owner's score did not open for a member's agent"
+        );
+        assert!(!resolved.bindings.track_editable);
+        assert!(
+            resolved.track_edit.is_none(),
+            "a member's agent may write the owner's score"
         );
     }
 

@@ -403,17 +403,24 @@ fn menu(app: &Luma, open: Target, entity: &Entity<Luma>) -> Option<AnyElement> {
             }
         }
     }
-    // What can be done to the open score itself.
+    // What can be done to the open score itself: someone else's is only
+    // duplicated.
+    let editable = matches!(
+        app.workspace.active_body(),
+        Some(Body::TrackEditor(editor)) if editor.score_editable()
+    );
     let card = card
         .child(rule())
-        .child(act(
-            "score-switcher-rename",
-            "Rename",
-            None,
-            pressable && menu.rename.is_none(),
-            entity,
-            |this, window, cx| this.rename_from_menu(window, cx),
-        ))
+        .when(editable, |card| {
+            card.child(act(
+                "score-switcher-rename",
+                "Rename",
+                None,
+                pressable && menu.rename.is_none(),
+                entity,
+                |this, window, cx| this.rename_from_menu(window, cx),
+            ))
+        })
         .child(act(
             "score-switcher-duplicate",
             "Duplicate",

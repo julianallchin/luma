@@ -13,7 +13,7 @@
 //! tick and the frame-cache grain live at the *output* boundary (the render
 //! loop / emitter), never here.
 
-use crate::eval::aim::{Aiming, Rig};
+use crate::eval::aim::{Aiming, LookAhead, Rig};
 use crate::eval::composite::{composite_frame, offset_frame};
 use crate::eval::{try_elements, try_eval, try_layers, try_turns, Arena, BlendMode, Plan};
 use crate::models::universe::UniverseState;
@@ -71,13 +71,40 @@ impl Scene {
     }
 
     /// Aim the heads of `rig` that a layer aims: move them in black and solve
-    /// their pan and tilt. Samples when each is lit up front.
+    /// their pan and tilt. Samples when each is lit up front, so every frame
+    /// is exact.
     ///
     /// # Errors
     /// Fails when a layer cannot be evaluated.
-    pub fn with_rig(mut self, rig: Rig) -> Result<Self, String> {
-        self.aiming = Aiming::new(&self.annotations, rig)?.map(Arc::new);
+    pub fn with_rig(self, rig: Rig) -> Result<Self, String> {
+        self.aim(rig, LookAhead::UpFront)
+    }
+
+    /// [`Self::with_rig`], sampling when each head is lit as `look` says.
+    ///
+    /// # Errors
+    /// Fails when the light is sampled up front and a layer cannot be
+    /// evaluated.
+    pub(crate) fn aim(mut self, rig: Rig, look: LookAhead) -> Result<Self, String> {
+        self.aiming = Aiming::new(&self.annotations, rig, look)?.map(Arc::new);
         Ok(self)
+    }
+
+    /// Carry over what `previous` sampled of when heads are lit, wherever
+    /// the same clips light the same heads: after an edit, everything but
+    /// the stretch of the score the edit reached.
+    pub(crate) fn keep_look_ahead(&self, previous: &Scene) {
+        if let (Some(aiming), Some(previous)) = (&self.aiming, &previous.aiming) {
+            aiming.keep(previous);
+        }
+    }
+
+    /// Sample when heads are lit in the background, for a scene whose
+    /// [`LookAhead`] is deferred. Stops when the scene is dropped.
+    pub(crate) fn look_ahead(&self) {
+        if let Some(aiming) = &self.aiming {
+            Aiming::look_ahead(aiming);
+        }
     }
 
     /// The heads this scene aims.
@@ -223,7 +250,13 @@ fn composite_from(
         // gives a laser clip no other mode.
         if ann.plan.outputs.laser {
             let elements = try_elements(ann.plan.as_ref(), &sample_times, layer as u32, scratch)?;
-            for ((k, _), elements) in slots.zip(elements) {
+            for ((k, _), mut elements) in slots.zip(elements) {
+                // A fader on a laser pattern, and the master, dim its light.
+                if level < 1.0 {
+                    for element in &mut elements {
+                        element.intensity *= f64::from(level);
+                    }
+                }
                 let under = &mut frames[k].lasers;
                 if ann.blend_mode == BlendMode::Add {
                     luma_patterns::laser::add(under, elements);

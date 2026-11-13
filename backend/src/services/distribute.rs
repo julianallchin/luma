@@ -76,10 +76,6 @@ use crate::services::patch;
 /// a refusal that had no measurement behind it.
 pub const DEFAULT_FIXTURE_WIDTH_M: f64 = 0.3;
 
-/// How far apart across a face two fixtures may sit and still be one row, in
-/// metres: a row is one line, and a floor holds many.
-pub const ROW_LINE_M: f64 = 1e-3;
-
 /// What a caller asked for.
 #[derive(Debug, Clone)]
 pub struct Request<'a> {
@@ -94,8 +90,14 @@ pub struct Request<'a> {
     /// How far off the face's middle the row sits across it, in metres. A
     /// truss face has no room for one; a floor or a deck top does.
     pub across_m: f64,
+    /// How high above the face the row is lifted, in metres.
+    pub trim_m: f64,
     /// The naming term, if the row should not be named after the model.
     pub label_prefix: Option<&'a str>,
+    /// Lights already on this face that the row is made of, in order along
+    /// it. They take the first seats and stay the lights they were; any past
+    /// `count` leave, and only the seats beyond them get a new light.
+    pub relay: &'a [String],
 }
 
 /// A refusal: the reason, and nothing written.
@@ -114,23 +116,51 @@ fn refused(
     }
 }
 
-/// Patch, name and place `count` fixtures along one host face.
+/// Where on a host face a row is asked to go.
+#[derive(Debug, Clone, Copy)]
+pub struct Place<'a> {
+    /// The node whose face hosts the row; `None` is the venue root.
+    pub host_node: Option<&'a str>,
+    /// The face on it. Defaults to the root's [`FLOOR_SOCKET`].
+    pub host_socket: Option<&'a str>,
+    pub layout: Layout,
+    /// How far off the face's middle the row sits across it, in metres. A
+    /// truss face has no room for one; a floor or a deck top does.
+    pub across_m: f64,
+}
+
+/// A row's seat on a host face, once everything that can refuse it has been
+/// asked: the face exists, a fixture clamps to it, the point is on it, the
+/// row fits its length, and nothing already sits there.
+struct Seats {
+    host_id: String,
+    host_socket: String,
+    /// The fixture's own half of the joint.
+    clamp: String,
+    /// Metres along the face from its middle, one per light.
+    stations: Vec<f64>,
+}
+
+/// Seat `count` bodies `width` metres wide at `place`. `moving` are lights
+/// that are being moved, and so are not in their own way.
 ///
-/// # Errors
-/// Invalid faces or joints are rejected before writing. Catalog, database or
-/// exhausted-address-space errors abort the caller's transaction.
-pub async fn distribute(
+/// The one set of placement rules: a new row and a moved light both pass
+/// through here, so neither can land where the other would be refused.
+async fn seats(
     access: &mut VenueAccess<'_, Write>,
     fixtures_root: &Path,
-    request: Request<'_>,
-) -> Result<DistributeReport, String> {
+    graph: &VenueGraph,
+    place: Place<'_>,
+    count: usize,
+    width: f64,
+    moving: &[String],
+) -> Result<Result<Seats, DistributeReport>, String> {
     let sockets = crate::venue_graph::sockets(fixtures_root)?;
-    let mut graph = crate::venue_graph::graph(access).await?;
-    let host_id = match request.host_node {
+    let host_id = match place.host_node {
         Some(id) => id.to_string(),
         None => graph.root().to_string(),
     };
-    let host_socket = request.host_socket.unwrap_or(FLOOR_SOCKET).to_string();
+    let host_socket = place.host_socket.unwrap_or(FLOOR_SOCKET).to_string();
     let host = graph
         .node(&host_id)
         .ok_or_else(|| format!("`{host_id}` is not a node in this venue"))?
@@ -159,20 +189,30 @@ pub async fn distribute(
         .to_string());
     }
 
-    let (definition, channels) = definition_and_width(fixtures_root, &request)?;
-    let width = body_width_m(&definition);
+    // A point off the face's middle line has to still be on the face: a deck
+    // top has room for one, a truss face does not.
+    if let Some(face_width) = face.width.length_m {
+        if place.across_m.abs() > face_width / 2.0 + TOUCHING_M {
+            return Err(format!(
+                "that point is {:.2} m off the middle of a face {face_width:.2} m wide, so \
+                 it is not on `{}`",
+                place.across_m.abs(),
+                host.label.clone().unwrap_or(host_id.clone())
+            ));
+        }
+    }
 
-    let stations = match offsets(face.feature, request.layout, request.count, width) {
+    let stations = match offsets(face.feature, place.layout, count, width) {
         Ok(stations) => stations,
         Err(Fit::TooLong {
             needed_m,
             available_m,
         }) => {
             let suggestion = format!(
-                "needs {needed_m:.2} m, the face is {available_m:.2} m — extend({}, to={needed_m:.2})",
+                "needs {needed_m:.2} m, the face is {available_m:.2} m — trim({}, span={needed_m:.2})",
                 host.id
             );
-            return Ok(refused(
+            return Ok(Err(refused(
                 host_id,
                 host_socket,
                 DistributeRefusal::TooLong {
@@ -181,19 +221,20 @@ pub async fn distribute(
                     extend_node_id: host.id.clone(),
                     suggestion,
                 },
-            ));
+            )));
         }
     };
 
     let rows = fixtures_db::get_patched_fixtures(access).await?;
     if let Some((from_m, to_m)) = band(&stations, width) {
         let held_by: Vec<DistributeOccupied> = occupied(
-            &graph,
+            graph,
             &rows,
             fixtures_root,
             &host_id,
             &host_socket,
-            request.across_m,
+            place.across_m,
+            moving,
         )
         .into_iter()
         .filter(|held| held.from_m < to_m - TOUCHING_M && from_m < held.to_m - TOUCHING_M)
@@ -208,7 +249,7 @@ pub async fn distribute(
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            return Ok(refused(
+            return Ok(Err(refused(
                 host_id,
                 host_socket,
                 DistributeRefusal::Overlap {
@@ -217,25 +258,201 @@ pub async fn distribute(
                     held_by,
                     suggestion,
                 },
-            ));
+            )));
         }
     }
+    Ok(Ok(Seats {
+        host_id,
+        host_socket,
+        clamp: clamp.name,
+        stations,
+    }))
+}
+
+/// Move one placed fixture to `place`, keeping its id, its patch row and so
+/// every group that holds it.
+///
+/// On the face it already hangs on it keeps its turn and its aim. On a new
+/// face both are relative to a different surface, so they return to rest and
+/// the light points straight out of where it now hangs. Returns whether that
+/// happened.
+///
+/// # Errors
+/// As [`distribute`] refuses a row of one: a face that does not exist or does
+/// not take a fixture, a point off it, no room, or another light in the way.
+pub async fn relocate(
+    access: &mut VenueAccess<'_, Write>,
+    fixtures_root: &Path,
+    node_id: &str,
+    place: Place<'_>,
+    trim_m: f64,
+) -> Result<bool, String> {
+    let sockets = crate::venue_graph::sockets(fixtures_root)?;
+    let mut graph = crate::venue_graph::graph(access).await?;
+    let old = graph
+        .node(node_id)
+        .filter(|node| node.kind == NodeKind::Fixture)
+        .and_then(|_| graph.edge(node_id))
+        .cloned()
+        .ok_or_else(|| format!("`{node_id}` is not a placed light"))?;
+    let rows = fixtures_db::get_patched_fixtures(access).await?;
+    let width = rows
+        .iter()
+        .find(|row| row.id == node_id)
+        .map_or(DEFAULT_FIXTURE_WIDTH_M, |row| {
+            width_of(fixtures_root, &row.fixture_path)
+        });
+    let seats = seats(
+        access,
+        fixtures_root,
+        &graph,
+        place,
+        1,
+        width,
+        &[node_id.to_string()],
+    )
+    .await?
+    .map_err(|report| match report.refusal {
+        Some(
+            DistributeRefusal::TooLong { suggestion, .. }
+            | DistributeRefusal::Overlap { suggestion, .. },
+        ) => suggestion,
+        None => "that place was refused".to_string(),
+    })?;
+    let rehung = old.parent != seats.host_id || old.their_socket != seats.host_socket;
+    let edge = Edge {
+        parent: seats.host_id,
+        my_socket: seats.clamp,
+        their_socket: seats.host_socket,
+        roll: if rehung { 0.0 } else { old.roll },
+    };
+    graph
+        .attach(node_id, edge.clone(), sockets)
+        .map_err(|e| e.to_string())?;
+    venue_graph_db::set_placement(access, node_id, &(&edge).into()).await?;
+    let mut params = BTreeMap::from([
+        ("u".to_string(), Some(seats.stations[0])),
+        ("v".to_string(), Some(place.across_m)),
+        ("trim".to_string(), Some(trim_m)),
+    ]);
+    if rehung {
+        for key in luma_scene::venue::ANGLE_PARAMS {
+            params.insert(key.to_string(), None);
+        }
+    }
+    venue_graph_db::set_params(access, node_id, &params).await?;
+    Ok(rehung)
+}
+
+/// Patch, name and place `count` fixtures along one host face.
+///
+/// # Errors
+/// Invalid faces or joints are rejected before writing. Catalog, database or
+/// exhausted-address-space errors abort the caller's transaction.
+pub async fn distribute(
+    access: &mut VenueAccess<'_, Write>,
+    fixtures_root: &Path,
+    request: Request<'_>,
+) -> Result<DistributeReport, String> {
+    let mut graph = crate::venue_graph::graph(access).await?;
+    let sockets = crate::venue_graph::sockets(fixtures_root)?;
+    let (definition, channels) = definition_and_width(fixtures_root, &request)?;
+    let width = body_width_m(&definition);
+    let place = Place {
+        host_node: request.host_node,
+        host_socket: request.host_socket,
+        layout: request.layout,
+        across_m: request.across_m,
+    };
+    let Seats {
+        host_id,
+        host_socket,
+        clamp,
+        stations,
+    } = match seats(
+        access,
+        fixtures_root,
+        &graph,
+        place,
+        request.count,
+        width,
+        request.relay,
+    )
+    .await?
+    {
+        Ok(seats) => seats,
+        Err(report) => return Ok(report),
+    };
+    let kept = request.relay.len().min(stations.len());
+    for id in &request.relay[kept..] {
+        fixture_create::delete(access, id)
+            .await
+            .map_err(|e| e.to_string())?;
+        graph.remove(id);
+    }
+    let rows = fixtures_db::get_patched_fixtures(access).await?;
 
     // Addresses come from the allocator, against the venue as it stands — the
     // rows do not exist yet; see [`offer`]. What it gives back is provisional;
     // see the re-derivation below.
     let solved = luma_scene::venue::resolve(&graph, sockets);
     let run = run_of(&solved, &host_id);
-    let footprints = offer(&solved, &rows, run.as_deref(), channels, stations.len())?;
+    // A fixture with no channels takes no address.
+    let footprints: Vec<Option<Footprint>> = if channels == 0 {
+        vec![None; stations.len() - kept]
+    } else {
+        offer(
+            &solved,
+            &rows,
+            run.as_deref(),
+            channels,
+            stations.len() - kept,
+        )?
+        .into_iter()
+        .map(Some)
+        .collect()
+    };
 
     let mut numbering = fixture_create::numbering(access)
         .await
         .map_err(|e| e.to_string())?;
-    let mut placed: Vec<(String, String, Footprint, f64)> = Vec::new();
-    for (station, footprint) in stations.iter().zip(&footprints) {
+    let mut placed: Vec<(String, String, Option<Footprint>, f64)> = Vec::new();
+    // A light that stays keeps its turn, its aim, its address and its
+    // groups: only where it sits along the face is written.
+    for (id, station) in request.relay[..kept].iter().zip(&stations) {
+        let row = rows
+            .iter()
+            .find(|row| &row.id == id)
+            .ok_or_else(|| format!("`{id}` has no patch row"))?;
+        let footprint = if channels == 0 {
+            None
+        } else {
+            Some(
+                Footprint::new(
+                    u16::try_from(row.universe).unwrap_or_default(),
+                    u16::try_from(row.address).unwrap_or_default(),
+                    channels,
+                )
+                .ok_or_else(|| format!("`{id}` is patched outside a universe"))?,
+            )
+        };
+        venue_graph_db::set_params(
+            access,
+            id,
+            &BTreeMap::from([("u".to_string(), Some(*station))]),
+        )
+        .await?;
+        placed.push((
+            id.clone(),
+            row.label.clone().unwrap_or_default(),
+            footprint,
+            *station,
+        ));
+    }
+    for (station, footprint) in stations[kept..].iter().zip(&footprints) {
         let edge = Edge {
             parent: host_id.clone(),
-            my_socket: clamp.name.clone(),
+            my_socket: clamp.clone(),
             their_socket: host_socket.clone(),
             roll: 0.0,
         };
@@ -269,7 +486,7 @@ pub async fn distribute(
             params: BTreeMap::from([
                 ("u".to_string(), *station),
                 ("v".to_string(), request.across_m),
-                ("trim".to_string(), 0.0),
+                ("trim".to_string(), request.trim_m),
             ])
             .into_iter()
             .collect(),
@@ -315,15 +532,17 @@ pub async fn distribute(
         fixtures: placed
             .into_iter()
             .map(|(id, label, footprint, along)| {
-                let row = addressed.iter().find(|row| row.id == id);
+                let row = addressed
+                    .iter()
+                    .find(|row| row.id == id && row.num_channels > 0);
                 DistributedFixture {
                     label,
                     universe: row
                         .and_then(|row| u16::try_from(row.universe).ok())
-                        .unwrap_or_else(|| footprint.universe()),
+                        .or(footprint.map(|footprint| footprint.universe())),
                     address: row
                         .and_then(|row| u16::try_from(row.address).ok())
-                        .unwrap_or_else(|| footprint.address()),
+                        .or(footprint.map(|footprint| footprint.address())),
                     along_m: along,
                     group_path: paths.get(&id).cloned().unwrap_or_default(),
                     id,
@@ -476,11 +695,12 @@ fn occupied(
     host: &str,
     socket: &str,
     across_m: f64,
+    moving: &[String],
 ) -> Vec<DistributeOccupied> {
     let mut widths: BTreeMap<&str, f64> = BTreeMap::new();
     let mut held: Vec<DistributeOccupied> = graph
         .nodes()
-        .filter(|node| node.kind == NodeKind::Fixture)
+        .filter(|node| node.kind == NodeKind::Fixture && !moving.contains(&node.id))
         .filter(|node| {
             graph
                 .edge(&node.id)

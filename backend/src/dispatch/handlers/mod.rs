@@ -20,6 +20,7 @@ pub mod compositor;
 pub mod controls;
 pub mod distribute;
 pub mod engine_dj;
+pub mod feedback;
 pub mod fixtures;
 pub mod folders;
 pub mod groups;

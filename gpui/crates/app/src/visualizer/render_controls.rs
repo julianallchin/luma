@@ -18,6 +18,11 @@ pub(super) struct RenderControls {
     /// of which the frame builder resolves for itself against the room's
     /// bounds, so it is carried whole rather than flattened into dials.
     house: VenueEnvironment,
+    /// The room's size, when it has one: `[width, depth, height]` in metres.
+    /// Venue truth like the house, read off the venue's graph.
+    pub(super) room: Option<[f32; 3]>,
+    /// How light that room's walls are painted, off the same graph.
+    pub(super) wall_shade: f32,
     sun_enabled: bool,
     sun_azimuth_deg: f32,
     sun_elevation_deg: f32,
@@ -63,9 +68,8 @@ pub(super) struct RenderControls {
     /// pixel budget in [`render_size`], and the rest inside the
     /// renderer.
     pub(super) quality: scene_desc::Quality,
-    /// The local reflection probes and their debug balls: a session view
-    /// choice, never saved.
-    pub(super) probes: scene_desc::ProbeView,
+    /// The bounced light: a session view choice, never saved.
+    pub(super) bounce: scene_desc::BounceView,
 }
 
 /// [`scene_desc::DirectionalLight::EDITOR`]'s direction as an azimuth and
@@ -118,6 +122,8 @@ impl RenderControls {
         // the bounds, and the atmosphere an open-air venue
         // takes its background, ambient and sun from.
         render.house = Some(self.house);
+        render.room = self.room;
+        render.wall_shade = self.wall_shade;
         render.sky = house::fill(self.house).sky;
         // `room` already carried the venue's own haze in. These two are the
         // local cost knobs it deliberately does not hold.
@@ -130,7 +136,7 @@ impl RenderControls {
         render.fixture_surface_lighting = self.fixture_surface_lighting;
         render.geometry_shadows = true;
         render.look = self.look;
-        render.probes = self.probes;
+        render.bounce = self.bounce;
         render
     }
 
@@ -138,6 +144,8 @@ impl RenderControls {
         let (azimuth_deg, elevation_deg) = editor_sun_angles();
         let mut controls = Self {
             house: environment,
+            room: None,
+            wall_shade: luma_scene::venue::WALL_SHADE,
             sun_enabled: true,
             // The editor key light in polar form. Read off
             // `DirectionalLight::EDITOR` rather than typed again, so the
@@ -173,7 +181,7 @@ impl RenderControls {
             render_scale_percent: 0,
             look: scene_desc::Look::STAGE,
             quality: scene_desc::Quality::High,
-            probes: scene_desc::ProbeView::default(),
+            bounce: scene_desc::BounceView::default(),
         };
         controls.set_environment(environment);
         controls.apply_settings(&AppSettings::default());
@@ -234,8 +242,7 @@ pub(super) enum ViewToggle {
     Grid,
     Gizmos,
     AutoExposure,
-    ReflectionProbes,
-    ShowProbes,
+    BouncedLight,
     /// The footage look, [`scene_desc::Footage`].
     Footage,
 }
@@ -301,8 +308,7 @@ impl RenderControls {
                     }
                 };
             }
-            ViewToggle::ReflectionProbes => self.probes.enabled = !self.probes.enabled,
-            ViewToggle::ShowProbes => self.probes.debug = !self.probes.debug,
+            ViewToggle::BouncedLight => self.bounce.enabled = !self.bounce.enabled,
             ViewToggle::Footage => {
                 self.look.footage.enabled = !self.look.footage.enabled;
             }

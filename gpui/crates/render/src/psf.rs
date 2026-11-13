@@ -221,26 +221,12 @@ fn wavelength(k: usize) -> f32 {
 }
 
 /// Per-wavelength weights into linear sRGB, each channel's summing to one:
-/// the CIE 1931 observer (the multi-lobe fit of Wyman, Sloan and Shirley
-/// 2013) through the XYZ-to-sRGB matrix, negative lobes clipped.
+/// the CIE 1931 observer through the XYZ-to-sRGB matrix, negative lobes
+/// clipped.
 fn spectral_weights() -> Vec<[f32; 3]> {
-    let lobe = |l: f32, mu: f32, below: f32, above: f32| {
-        let t = (l - mu) / if l < mu { below } else { above };
-        (-0.5 * t * t).exp()
-    };
+    use luma_scene::spectrum::{apply, observer, XYZ_TO_SRGB};
     let mut weights: Vec<[f32; 3]> = (0..BANDS * SUB)
-        .map(|k| {
-            let l = wavelength(k);
-            let x = 1.056 * lobe(l, 599.8, 37.9, 31.0) + 0.362 * lobe(l, 442.0, 16.0, 26.7)
-                - 0.065 * lobe(l, 501.1, 20.4, 26.2);
-            let y = 0.821 * lobe(l, 568.8, 46.9, 40.5) + 0.286 * lobe(l, 530.9, 16.3, 31.1);
-            let z = 1.217 * lobe(l, 437.0, 11.8, 36.0) + 0.681 * lobe(l, 459.0, 26.0, 13.8);
-            [
-                (3.2406 * x - 1.5372 * y - 0.4986 * z).max(0.0),
-                (-0.9689 * x + 1.8758 * y + 0.0415 * z).max(0.0),
-                (0.0557 * x - 0.2040 * y + 1.0570 * z).max(0.0),
-            ]
-        })
+        .map(|k| apply(XYZ_TO_SRGB, observer(f64::from(wavelength(k)))).map(|c| c.max(0.0) as f32))
         .collect();
     for c in 0..3 {
         let sum: f32 = weights.iter().map(|w| w[c]).sum();

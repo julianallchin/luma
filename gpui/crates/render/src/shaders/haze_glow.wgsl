@@ -143,7 +143,7 @@ fn cone_irradiance(li: u32, world: vec3<f32>, width: f32) -> vec3<f32> {
     let share = radius / max(widened, 1e-6);
     let pulled = rest.direction * axial + across * share;
     let pulled_distance = max(length(pulled), 1e-4);
-    let cos_angle = lens_cos_angle(pulled, rest.direction, rest.lens_distance, pulled_distance);
+    let cos_angle = lens_cos_angle(pulled, rest.direction, rest.lens_distance, pulled_distance, rest.cos_field);
     let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
     if angular <= 0.0 {
         return vec3<f32>(0.0);

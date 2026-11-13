@@ -42,8 +42,7 @@ use luma_scene::snap::{
 };
 use luma_scene::sockets::{Polarity, ResolvedSocket, SocketKind, SocketType};
 use luma_scene::venue::{
-    invert_placement, place_on, root_socket, NodeKind, NodeSockets, SurfacePlacement, VenueGraph,
-    FLOOR_SOCKET,
+    invert_placement, place_on, NodeKind, NodeSockets, SurfacePlacement, VenueGraph, FLOOR_SOCKET,
 };
 
 /// How big a socket mark's box is, in pixels: the anchor a right-press finds
@@ -352,10 +351,10 @@ pub(crate) enum Holding {
         /// Inverts the copy's handedness about its root socket.
         flip: bool,
     },
-    /// A fixture from the library that has no row anywhere yet — `distribute`,
-    /// which is how *every* new fixture is created, a single one being a row
-    /// of one. It carries what the fit needs so the preview and the commit
-    /// measure the same body.
+    /// A fixture: one from the library that has no row anywhere yet —
+    /// `distribute`, which is how *every* new fixture is created, a single
+    /// one being a row of one — or a placed one being moved. It carries what
+    /// the fit needs so the preview and the commit measure the same body.
     Fixture {
         path: String,
         label: String,
@@ -371,6 +370,9 @@ pub(crate) enum Holding {
         /// which is also "no box yet": a refusal invented from a guessed size
         /// would block placements the real body allows.
         dims: Option<[f64; 3]>,
+        /// The placed light this is, when it was picked up to be moved: the
+        /// drop moves that light and makes no new one.
+        moving: Option<String>,
     },
 }
 
@@ -503,11 +505,6 @@ pub(crate) struct Room {
     boxes: HashMap<String, luma_scene::aabb::DAabb>,
 }
 
-/// Contact is not collision: both boxes shrink by this before the overlap
-/// test, so a piece mated flush on a face stays legal and a piece *through*
-/// another does not.
-const COLLISION_CLEARANCE_M: f64 = 0.02;
-
 impl Room {
     /// The nearest placed piece under a ray, by its collision box.
     ///
@@ -535,7 +532,7 @@ impl Room {
     ///
     /// The root's two synthesized surfaces (`floor` and `rig`) are added by
     /// hand because they are not catalog sockets — they are the venue frame,
-    /// and [`luma_scene::venue::root_socket`] is the one place they are
+    /// and [`luma_scene::venue::root_sockets`] is the one place they are
     /// spelled.
     pub(crate) fn new(
         graph: &VenueGraph,
@@ -550,21 +547,10 @@ impl Room {
             let Some(world) = poses.get(&node.id).copied() else {
                 continue;
             };
-            if let Some(bounds) = piece_bounds(sockets, node) {
+            if let Some(bounds) = sockets.bounds(node) {
                 boxes.insert(node.id.clone(), bounds);
             }
-            let mut resolved = if node.id == root {
-                Vec::new()
-            } else {
-                sockets.sockets(node)
-            };
-            if node.id == root {
-                resolved.extend(
-                    [FLOOR_SOCKET, luma_scene::venue::RIG_SOCKET]
-                        .into_iter()
-                        .filter_map(root_socket),
-                );
-            }
+            let resolved = luma_scene::venue::sockets_of(sockets, node);
             pieces.push(ScenePiece {
                 id: node.id.clone(),
                 mesh_path: node.id.clone(),
@@ -600,8 +586,7 @@ impl Room {
                 return None;
             }
             let pose = self.poses.get(id)?;
-            luma_scene::aabb::obb_intersects(body, &world, *other, pose, COLLISION_CLEARANCE_M)
-                .then_some(id.as_str())
+            luma_scene::aabb::collides(body, &world, *other, pose).then_some(id.as_str())
         })
     }
 
@@ -914,7 +899,7 @@ impl Room {
     /// The collision arm of every landing: `Some(reason)` when the body at
     /// `world` passes through a placed piece that is neither its host nor
     /// itself.
-    fn refusal(
+    pub(crate) fn refusal(
         &self,
         body: Option<luma_scene::aabb::DAabb>,
         world: DMat4,
@@ -962,26 +947,6 @@ impl Room {
                     .dot(luma_scene::snap::WORLD_UP)
                     .total_cmp(&b.normal.dot(luma_scene::snap::WORLD_UP))
             })
-    }
-}
-
-/// One node's local bounds: the catalog's measurement for a mesh piece, the
-/// generator's arithmetic for a procedural one at this node's own parameters.
-/// A node with neither (a fixture, the root) has no box and no collisions.
-fn piece_bounds(
-    sockets: &VenueSockets,
-    node: &luma_scene::venue::Node,
-) -> Option<luma_scene::aabb::DAabb> {
-    let reference = node.catalog_ref.as_deref()?;
-    match luma_scene::catalog::piece(reference)?.geometry {
-        luma_scene::catalog::Geometry::Mesh { .. } | luma_scene::catalog::Geometry::Assembly(_) => {
-            sockets.catalog().bounds(reference)
-        }
-        luma_scene::catalog::Geometry::Procedural(family) => {
-            Some(luma_scene::catalog::procedural_bounds(
-                luma_scene::catalog::node_params(family, &node.params),
-            ))
-        }
     }
 }
 
@@ -1070,7 +1035,10 @@ mod tests {
 
     #[test]
     fn minimum_height_uses_the_surface_below_and_its_rotated_footprint() {
-        let floor = root_socket(FLOOR_SOCKET).unwrap();
+        let floor = luma_scene::venue::root_sockets(&luma_scene::venue::Params::default())
+            .into_iter()
+            .find(|socket| socket.name == FLOOR_SOCKET)
+            .unwrap();
         let mut top = floor.clone();
         top.position.y = 1.0;
         let room = Room {

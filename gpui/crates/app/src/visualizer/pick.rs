@@ -165,7 +165,7 @@ impl PickGeometry {
             .iter()
             .map(|mesh| {
                 Arc::clone(cache.entry(mesh.key.clone()).or_insert_with(|| {
-                    Arc::new(TriMesh::new(
+                    let drawn = TriMesh::new(
                         mesh.vertices
                             .iter()
                             .map(|vertex| Vec3::from(vertex.position))
@@ -174,7 +174,14 @@ impl PickGeometry {
                             .chunks_exact(3)
                             .map(|tri| [tri[0], tri[1], tri[2]])
                             .collect(),
-                    ))
+                    );
+                    // A pointer aimed between a truss's tubes is still aimed
+                    // at the truss.
+                    Arc::new(if luma_scene::truss::Truss::is_lattice(&mesh.key) {
+                        TriMesh::solid(drawn.bounds())
+                    } else {
+                        drawn
+                    })
                 }))
             })
             .collect();

@@ -8,7 +8,9 @@ use crate::sync::triggers::Attribution;
 pub struct Read;
 /// A persistent edit of the venue's content: its fixtures, groups, stage,
 /// scores, environment and the rest. The owner and every member may make one;
-/// the server's `public.history` records who did.
+/// the server's `public.history` records who did. A score is the exception
+/// inside a venue: only the account that owns it writes it
+/// ([`VenueResource::Score`]).
 pub struct Write;
 /// A change to who has the venue — its share code and its memberships. The
 /// signed-in owner only.
@@ -22,8 +24,9 @@ pub struct Owner;
 /// by it, every listing and trigger that asks whether a venue is reachable
 /// joins it, and a venue read carries its answer
 /// ([`crate::models::venues::Venue::capability`]). Nothing compares a row's
-/// `uid` with the principal to decide an edit. A venue the principal cannot
-/// open has no row, so no `Standing`.
+/// `uid` with the principal to decide an edit, but for a score, whose owner
+/// alone writes it — which [`VenueAccess::write_as`] asks, and nothing else
+/// does. A venue the principal cannot open has no row, so no `Standing`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Standing {
     /// The principal's own venue.
@@ -58,7 +61,13 @@ pub enum VenueResource<'a> {
     Group(&'a str),
     Folder(&'a str),
     GroupMember(&'a str),
+    /// A score. Anyone who can open its venue reads it; a write is admitted
+    /// for the account that owns it and nobody else.
     Score(&'a str),
+    /// The venue a score is in, for what is written beside that score and
+    /// not into it: a copy of it, which is the copier's whoever owns the
+    /// source.
+    BesideScore(&'a str),
     AgentThread(&'a str),
 }
 
@@ -142,6 +151,17 @@ impl<'a> VenueAccess<'a, Write> {
             .await
             .map_err(|error| format!("Failed to begin venue mutation: {error}"))?;
         let mut access: Self = authorize(transaction, resource, |can| can.edit).await?;
+        if let VenueResource::Score(score_id) = resource {
+            let own: bool = sqlx::query_scalar("SELECT uid IS ? FROM scores WHERE id = ?")
+                .bind(&access.principal)
+                .bind(score_id)
+                .fetch_one(&mut *access.transaction)
+                .await
+                .map_err(|error| format!("Failed to authorize the score edit: {error}"))?;
+            if !own {
+                return Err(SCORE_NOT_YOURS.into());
+            }
+        }
         if attribution != Attribution::PERSON {
             crate::sync::triggers::attribute(&mut access.transaction, attribution).await?;
             access.attributed = true;
@@ -255,7 +275,9 @@ async fn resolve_venue_id(
              WHERE member.id = ?",
             id,
         ),
-        VenueResource::Score(id) => ("SELECT venue_id FROM scores WHERE id = ?", id),
+        VenueResource::Score(id) | VenueResource::BesideScore(id) => {
+            ("SELECT venue_id FROM scores WHERE id = ?", id)
+        }
         VenueResource::AgentThread(id) => ("SELECT venue_id FROM agent_threads WHERE id = ?", id),
     };
     sqlx::query_scalar(sql)
@@ -264,6 +286,10 @@ async fn resolve_venue_id(
         .await
         .map_err(|error| format!("Failed to resolve venue resource: {error}"))
 }
+
+/// The refusal of a write to a score someone else owns.
+pub const SCORE_NOT_YOURS: &str =
+    "This score is someone else's. Duplicate it to edit your own copy";
 
 fn not_found() -> String {
     "Venue resource not found".into()

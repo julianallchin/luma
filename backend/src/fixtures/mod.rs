@@ -39,6 +39,17 @@ pub fn definition(root: &Path, fixture_path: &str) -> Result<Arc<FixtureDefiniti
     type Parsed = HashMap<PathBuf, (Option<SystemTime>, Arc<FixtureDefinition>)>;
     static CACHE: Lazy<Mutex<Parsed>> = Lazy::new(Default::default);
 
+    /// The laser projector, the one fixture that is not a file.
+    static LASER_PROJECTOR: Lazy<Arc<FixtureDefinition>> = Lazy::new(|| {
+        Arc::new(
+            parser::parse(include_str!("laser_projector.qxf"))
+                .expect("the built-in laser projector parses"),
+        )
+    });
+    if fixture_path == crate::models::fixtures::LASER_PROJECTOR_PATH {
+        return Ok(LASER_PROJECTOR.clone());
+    }
+
     let escapes = || format!("fixture path escapes the fixtures root: {fixture_path}");
     let path = match library::id(fixture_path) {
         Some(id) => {

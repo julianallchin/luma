@@ -97,6 +97,7 @@ pub fn track_editor(
                 .child(surface)
                 .into_any_element(),
         })
+        .children(clip_menu::clip_menu(state, app))
 }
 
 /// Keep the working score and its transport live while the timeline is hidden.

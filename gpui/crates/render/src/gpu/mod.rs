@@ -255,8 +255,8 @@ pub struct Renderer {
     sun_shafts: crate::sun_shafts::Cache,
     /// The light the haze scatters (`haze_glow.rs`).
     haze_glow: crate::haze_glow::Glow,
-    /// The local reflection probes over this renderer's stage.
-    probes: crate::probes::Probes,
+    /// The bounced light of this renderer's stage.
+    bounce: crate::bounce::Bounce,
     sky_visibility: crate::sky_visibility::SkyVisibility,
     /// Exposure state and post-chain targets (`post.rs`).
     post: crate::post::Post,
@@ -368,8 +368,8 @@ pub struct Gpu {
     sun_shafts: crate::sun_shafts::Pipelines,
     laser: crate::laser::Pipelines,
     haze_glow: crate::haze_glow::Pipelines,
-    /// The local reflection probes' capture, relight and prefilter.
-    probes: crate::probes::Pipelines,
+    /// The bounced light's relight, spread and low pictures.
+    bounce: crate::bounce::Pipelines,
     scene_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     cluster_layout: wgpu::BindGroupLayout,

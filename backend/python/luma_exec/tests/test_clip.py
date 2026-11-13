@@ -273,9 +273,9 @@ class ClipBuilderTests(unittest.TestCase):
         ring = figure("ring", heads=mirror(direction=(1, 0, 0)), count=6, x=slide, y=bend, size=0.4,
                       color=(1, 0, 0))
         dots = figure(count=4)
-        graph = laser([ring, dots], alpha=0.5, zone="z1")
+        graph = laser([ring, dots], alpha=0.5)
         nodes = graph.json()["nodes"]
-        self.assertEqual(nodes["laser1"], {"kind": "laser", "settings": {"zone": "z1"},
+        self.assertEqual(nodes["laser1"], {"kind": "laser",
                                            "inputs": {"figures": [{"node": "ring"}, {"node": "dots"}],
                                                       "alpha": 0.5}})
         node = nodes["ring"]

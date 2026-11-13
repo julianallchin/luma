@@ -853,6 +853,157 @@ fn session_turn(thread: &str) -> String {
     format!("{thread}-session")
 }
 
+/// A moved light is the same light: its id, its address and its group
+/// survive the trip from the floor onto a truss and along it, and a place a
+/// new light could not take is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_python_program_moves_a_light_and_it_stays_the_same_light() {
+    let Some(f) = Fixture::new("venue move").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+v = luma.venue
+def where(id):
+    node = v.nodes(ids=[id])[0]
+    return (round(node.at[0], 2), round(node.at[1], 2), round(node.z, 1))
+def patch(id):
+    return [(f.universe, f.address) for f in v.fixtures if f.id == id]
+
+beam = v.place("truss", at=(0.0, 2.0), length=6, direction=(1, 0, 0), trim=4.0)
+light = v.place(MOVER, at=(3.0, 4.0), mode=MODE).fixtures[0]
+other = v.place(MOVER, on=beam, at=-2.0, face=(0, 0, -1), mode=MODE).fixtures[0]
+v.group("movers", [light])
+before = patch(light.id)
+
+v.move(light, at=(-1.0, 5.0))
+on_floor = where(light.id)
+v.move(light, on=beam, at=1.5, face=(0, 0, -1))
+hung = where(light.id)
+v.move(light, at=0.5)
+slid = where(light.id)
+try:
+    v.move(light, at=-2.0)
+    taken = False
+except luma.VenueRefused:
+    taken = True
+
+grouped = [g.split() for g in str(v.groups()).splitlines() if g.strip().startswith("movers")]
+(on_floor[:2], hung[:2], hung[2] > 3, slid[:2], taken, patch(light.id) == before,
+ grouped[0][1], where(other.id)[:2])
+"#
+            .replace("MOVER", &format!("{MOVER:?}"))
+            .replace("MODE", &format!("{MOVER_MODE:?}"))
+            .as_str(),
+        )
+        .await;
+    expect_ok(&out, "move a light");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "((-1.0, 5.0), (1.5, 2.0), True, (0.5, 2.0), True, True, '1', (-2.0, 2.0))",
+        "{}",
+        out.stdout
+    );
+}
+
+/// A room given a size has walls. A light put on one by the way it should
+/// look sits on that wall, above the floor point it was asked over, and the
+/// size cannot be taken away from under it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_python_program_sizes_the_room_and_hangs_lights_on_its_walls() {
+    let Some(f) = Fixture::new("venue room").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+v = luma.venue
+def where(light):
+    node = v.nodes(ids=[light.fixtures[0].id])[0]
+    return (round(node.at[0], 1), round(node.at[1], 1), round(node.z, 1))
+
+said = v.room(width=10, depth=8, height=6)
+back = where(v.place(MOVER, at=(2.0, 1.0), face=(0, 1, 0), mode=MODE))
+side = where(v.place(MOVER, at=(-1.0, -2.0), face=(1, 0, 0), mode=MODE))
+try:
+    v.room()
+    cleared = True
+except luma.VenueRefused:
+    cleared = False
+(said, back[0], back[1] < -3.5, back[2] > 3.5,
+ side[0] < -4.5, side[1], side[2] < 1.5, cleared)
+"#
+            .replace("MOVER", &format!("{MOVER:?}"))
+            .replace("MODE", &format!("{MOVER_MODE:?}"))
+            .as_str(),
+        )
+        .await;
+    expect_ok(&out, "size the room");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "('the room is 10 x 8 x 6 m', 2.0, True, True, True, -1.0, True, False)",
+        "{}",
+        out.stdout
+    );
+}
+
+/// A light goes where it was asked to: a point of the floor, a point of a deck
+/// top in the room's directions however the deck is turned, and a height in
+/// the air. A point that is not on the face is refused, not moved onto it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_python_program_places_lights_at_points_of_the_room() {
+    let Some(f) = Fixture::new("venue points").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+v = luma.venue
+def where(row):
+    node = v.nodes(ids=[row.fixtures[0].id])[0]
+    return (round(node.at[0], 2), round(node.at[1], 2), round(node.z, 1))
+
+floor = where(v.place(MOVER, at=(3.0, 4.0), mode=MODE))
+hung = where(v.place(MOVER, at=(-2.0, 5.0), face=(0, 0, -1), trim=5.0, mode=MODE))
+decks = [v.place("deck", at=(0.0, -3.0)),
+         v.place("deck", at=(4.0, -3.0), direction=(0, 1, 0))]
+on_deck = [where(v.place(MOVER, on=deck, at=(0.3, 0.2), mode=MODE)) for deck in decks]
+beam = v.place("truss", at=(0.0, 2.0), length=4, direction=(1, 0, 0), trim=4.0)
+refused = []
+for at in ((1.0, 0.8), (0.0, 3.0)):
+    try:
+        v.place(MOVER, on=beam if at[1] < 1 else decks[0], at=at, face=(0, 0, -1) if at[1] < 1 else None, mode=MODE)
+    except luma.VenueRefused:
+        refused.append(at)
+
+(floor[:2], hung[:2], hung[2] > floor[2] + 4,
+ [(round(x - deck.at[0], 2), round(y - deck.at[1], 2)) for (x, y, _), deck in zip(on_deck, decks)],
+ len(refused))
+"#
+            .replace("MOVER", &format!("{MOVER:?}"))
+            .replace("MODE", &format!("{MOVER_MODE:?}"))
+            .as_str(),
+        )
+        .await;
+    expect_ok(&out, "place lights at points");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "((3.0, 4.0), (-2.0, 5.0), True, [(0.3, 0.2), (0.3, 0.2)], 2)",
+        "{}",
+        out.stdout
+    );
+}
+
 /// One program builds a whole rig out of an empty room, and reads back what it
 /// built through the same three channels the stage page draws from.
 ///
@@ -1353,9 +1504,9 @@ async fn a_python_laser_clip_draws_beams_on_the_stage() {
             r#"
 v = luma.venue
 v.haze(enabled=True, density=0.4)
-projector = v.fixture_library("ILDA laser projector")[0]
+projector = v.fixture_library("laser projector")[0]
 tower = v.place("truss", at=(0.0, -2.0), length=2.0, direction=(0, 0, 1))
-row = v.distribute(projector, 1, on=tower, face=(0, 1, 0), mode=projector.mode(1))
+row = v.distribute(projector, 1, on=tower, face=(0, 1, 0), mode=projector.mode("ILDA"))
 v.group("lasers", row.fixtures)
 projector.path
 "#,
@@ -1364,7 +1515,7 @@ projector.path
     expect_ok(&built, "laser rig");
     assert_eq!(
         built.repr.as_deref(),
-        Some("'Generic/Generic-ILDA-Laser-Projector.qxf'")
+        Some("'builtin:laser-projector'")
     );
     // The score is the owner's, written through a session turn.
     let track = f.editable_thread().await;

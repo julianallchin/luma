@@ -1,7 +1,8 @@
 //! The status bar on the window's trim, under the page: the app's quiet
 //! states, each one [`Item`], drawn one way.
 //!
-//! Left, sync (records and media), DMX output, an update ready, something
+//! Left, sync (records and media), DMX output, laser output while it is on,
+//! an update ready, something
 //! just done that did not land. Right, what the app is computing in the
 //! background ([`crate::background_work`]): an import, analysis, Python setup.
 //! An item that opens hangs its list off itself with [`popover`].
@@ -62,6 +63,7 @@ pub(crate) fn bar(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     let items = [
         crate::sync_status::item(app, &entity),
         output(app),
+        lasers(app),
         crate::update::item(app),
         crate::failure::item(app),
     ];
@@ -172,5 +174,16 @@ fn output(app: &Luma) -> Option<Item> {
     );
     item.ok = app.dmx_output;
     item.press = Some(|this, cx| this.open_settings(cx));
+    Some(item)
+}
+
+/// Laser output, while it is on: pressing it turns it off, from any page.
+fn lasers(app: &Luma) -> Option<Item> {
+    if !app.laser_output {
+        return None;
+    }
+    let mut item = Item::new("laser-output", "Laser output on");
+    item.attention = true;
+    item.press = Some(|this, cx| this.stop_lasers(cx));
     Some(item)
 }

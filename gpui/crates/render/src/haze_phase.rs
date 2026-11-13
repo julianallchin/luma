@@ -10,22 +10,41 @@
 //! sideways, and a weak lobe comes back. A beam you look down blazes; the same
 //! beam seen from the side is faint.
 //!
-//! The phase function is Jendersie and d'Eon's fit to Mie scattering by
-//! water droplets ("An Approximate Mie Scattering Function for Fog and Cloud
-//! Rendering", SIGGRAPH 2023 Talks, and its supplemental for diameters under
-//! 5 µm): a Henyey-Greenstein peak blended with a Draine lobe, all four
-//! parameters a function of droplet diameter. Glycol's refractive index
-//! (about 1.43) is higher than water's (1.33), which the fit does not model; it
-//! would send slightly more light back.
+//! The phase function has the form of Jendersie and d'Eon's fit to Mie
+//! scattering ("An Approximate Mie Scattering Function for Fog and Cloud
+//! Rendering", SIGGRAPH 2023 Talks): a Henyey-Greenstein peak blended with a
+//! Draine lobe. Their parameters are for water droplets of one size. Haze
+//! fluid bends light more than water (glycol and glycerine about 1.43,
+//! mineral oil 1.47, water 1.33) and its droplets come in a spread of sizes,
+//! and both send more of the light sideways and back: fitted to water at
+//! 0.8 µm, a beam seen from the side or from behind was half as bright as
+//! the exact scattering of haze makes it, and one looked straight down three
+//! times too bright. So the four parameters here are fitted to the exact
+//! Mie scattering of [`DROPLETS`], averaged over visible light, and the
+//! tests compute that scattering and hold the fit to it.
 //!
 //! Every user of the phase reads it relative to isotropic (isotropic is 1,
 //! not 1/4π) except the outdoor sun term, which divides by 4π itself.
 
-/// Droplet diameter, micrometres: the middle of the sub-micrometre mass the
-/// measurements above found.
-const DROPLET_UM: f32 = 0.8;
+/// The haze the phase function is fitted to: droplets of refractive index
+/// `index`, their diameters lognormal about a count median of `median_um`
+/// micrometres with geometric standard deviation `spread`. By mass that is a
+/// median of about 0.6 µm with nine tenths under a micrometre, as measured.
+#[cfg(test)]
+const DROPLETS: Droplets = Droplets {
+    index: 1.43,
+    median_um: 0.3,
+    spread: 1.6,
+};
 
-/// One droplet size's phase function: `(1 − w)·HG(g_hg) + w·Draine(g_d, α)`.
+#[cfg(test)]
+struct Droplets {
+    index: f64,
+    median_um: f64,
+    spread: f64,
+}
+
+/// A phase function `(1 − w)·HG(g_hg) + w·Draine(g_d, α)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Lobes {
     g_hg: f32,
@@ -34,26 +53,16 @@ struct Lobes {
     w_d: f32,
 }
 
-impl Lobes {
-    /// Jendersie and d'Eon's parameters for diameter `d` micrometres, in
-    /// 0.1 ≤ d < 1.5 (supplemental, equations 15 to 18).
-    fn for_droplet(d: f32) -> Self {
-        assert!((0.1..1.5).contains(&d), "the fit's sub-micrometre range");
-        let l = d.ln();
-        Self {
-            g_hg: 0.862 - 0.143 * l * l,
-            g_d: 0.379_685
-                * (1.196_92
-                    * ((l - 0.238_604) * (l + 1.006_67) / (0.507_522 - 0.156_77 * l)).cos()
-                    + 1.379_32 * l
-                    + 0.062_583_5)
-                    .cos()
-                + 0.344_213,
-            alpha: 250.0,
-            w_d: 0.146_209 * (3.387_07 * l + 2.111_93).cos() + 0.316_072 + 0.077_891_7 * l,
-        }
-    }
+/// The haze's: the least-squares fit, in log intensity over the sphere, to
+/// the exact scattering of [`DROPLETS`].
+const HAZE: Lobes = Lobes {
+    g_hg: 0.713,
+    g_d: 0.642,
+    alpha: 166.0,
+    w_d: 0.344,
+};
 
+impl Lobes {
     /// The phase function relative to isotropic, as the shader evaluates it.
     #[cfg(test)]
     fn eval(self, cos_t: f32) -> f32 {
@@ -70,7 +79,7 @@ impl Lobes {
 /// directions' variance about it, radians squared; this is the second term
 /// of the mean, so it holds while it is small.
 pub(crate) fn spread(cos_t: f32, spread: f32) -> f32 {
-    let g = Lobes::for_droplet(DROPLET_UM).g_hg;
+    let g = HAZE.g_hg;
     let d = 1.0 + g * g - 2.0 * g * cos_t;
     0.5 * spread * (15.0 * g * g * (1.0 - cos_t * cos_t) - 3.0 * g * cos_t * d).abs() / (d * d)
 }
@@ -78,7 +87,7 @@ pub(crate) fn spread(cos_t: f32, spread: f32) -> f32 {
 /// The phase constants and `haze_phase`, for any module that scatters light
 /// in the haze.
 pub(crate) fn prelude() -> String {
-    let lobes = Lobes::for_droplet(DROPLET_UM);
+    let lobes = HAZE;
     format!(
         "const HAZE_PHASE_G_HG: f32 = {:?};\nconst HAZE_PHASE_G_D: f32 = {:?};\n\
          const HAZE_PHASE_ALPHA: f32 = {:?};\nconst HAZE_PHASE_W_D: f32 = {:?};\n{}",
@@ -95,7 +104,120 @@ mod tests {
     use super::*;
 
     fn haze() -> Lobes {
-        Lobes::for_droplet(DROPLET_UM)
+        HAZE
+    }
+
+    /// `a·b` and `a/b` of complex numbers as `(re, im)`.
+    fn mul(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+    }
+    fn div(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        let d = b.0 * b.0 + b.1 * b.1;
+        ((a.0 * b.0 + a.1 * b.1) / d, (a.1 * b.0 - a.0 * b.1) / d)
+    }
+
+    /// The light one sphere scatters at each of `cosines`, unpolarised:
+    /// `|S1|² + |S2|²` of Mie theory for size parameter `x` and real
+    /// refractive index `m` (Bohren and Huffman, "Absorption and Scattering
+    /// of Light by Small Particles", appendix A).
+    fn mie(x: f64, m: f64, cosines: &[f64]) -> Vec<f64> {
+        let stop = (x + 4.0 * x.cbrt() + 2.0) as usize;
+        let mx = m * x;
+        // The logarithmic derivative of ψ at `mx`, by downward recurrence.
+        let mut d = vec![0.0; stop.max(mx as usize) + 16];
+        for n in (1..d.len()).rev() {
+            d[n - 1] = n as f64 / mx - 1.0 / (d[n] + n as f64 / mx);
+        }
+        let (mut psi0, mut psi1) = (x.cos(), x.sin());
+        let (mut chi0, mut chi1) = (-x.sin(), x.cos());
+        let mut s1 = vec![(0.0, 0.0); cosines.len()];
+        let mut s2 = s1.clone();
+        let mut pi0 = vec![0.0; cosines.len()];
+        let mut pi1 = vec![1.0; cosines.len()];
+        for n in 1..=stop {
+            let nf = n as f64;
+            let psi = (2.0 * nf - 1.0) / x * psi1 - psi0;
+            let chi = (2.0 * nf - 1.0) / x * chi1 - chi0;
+            let (xi, xi1) = ((psi, -chi), (psi1, -chi1));
+            let term = |k: f64| {
+                let k = k + nf / x;
+                div((k * psi - psi1, 0.0), (k * xi.0 - xi1.0, k * xi.1 - xi1.1))
+            };
+            let (a, b) = (term(d[n] / m), term(d[n] * m));
+            let weight = (2.0 * nf + 1.0) / (nf * (nf + 1.0));
+            for (j, &mu) in cosines.iter().enumerate() {
+                let pi = pi1[j];
+                let tau = nf * mu * pi - (nf + 1.0) * pi0[j];
+                let add = |sum: &mut (f64, f64), p: (f64, f64), q: (f64, f64), u: f64, v: f64| {
+                    let (p, q) = (mul(p, (u, 0.0)), mul(q, (v, 0.0)));
+                    sum.0 += weight * (p.0 + q.0);
+                    sum.1 += weight * (p.1 + q.1);
+                };
+                add(&mut s1[j], a, b, pi, tau);
+                add(&mut s2[j], a, b, tau, pi);
+                pi1[j] = ((2.0 * nf + 1.0) * mu * pi - (nf + 1.0) * pi0[j]) / nf;
+                pi0[j] = pi;
+            }
+            (psi0, psi1) = (psi1, psi);
+            (chi0, chi1) = (chi1, chi);
+        }
+        s1.iter()
+            .zip(&s2)
+            .map(|(a, b)| a.0 * a.0 + a.1 * a.1 + b.0 * b.0 + b.1 * b.1)
+            .collect()
+    }
+
+    /// The exact phase function of [`DROPLETS`] relative to isotropic, at
+    /// every half degree: over its sizes and over visible light.
+    fn exact() -> Vec<(f64, f64)> {
+        const STEPS: usize = 360;
+        let cosines: Vec<f64> = (0..STEPS)
+            .map(|i| ((i as f64 + 0.5) / STEPS as f64 * std::f64::consts::PI).cos())
+            .collect();
+        let mut light = vec![0.0; STEPS];
+        for wavelength in [0.45, 0.52, 0.55, 0.60, 0.638] {
+            for size in 0..30 {
+                let z = -3.0 + 6.0 * (f64::from(size) + 0.5) / 30.0;
+                let diameter = DROPLETS.median_um * (z * DROPLETS.spread.ln()).exp();
+                let x = std::f64::consts::PI * diameter / wavelength;
+                let scattered = mie(x, DROPLETS.index, &cosines);
+                let count = (-z * z / 2.0).exp();
+                for (sum, s) in light.iter_mut().zip(scattered) {
+                    *sum += count * s * wavelength * wavelength;
+                }
+            }
+        }
+        let sine = |c: f64| (1.0 - c * c).sqrt();
+        let mean = cosines
+            .iter()
+            .zip(&light)
+            .map(|(c, l)| l * sine(*c))
+            .sum::<f64>()
+            * std::f64::consts::PI
+            / STEPS as f64
+            / 2.0;
+        cosines
+            .into_iter()
+            .zip(light)
+            .map(|(c, l)| (c, l / mean))
+            .collect()
+    }
+
+    /// The lobes are the scattering of haze: within a quarter of the exact
+    /// Mie answer from 15° off a beam's axis round to straight behind it.
+    /// Nearer the axis two lobes cannot hold the peak's shape, and are
+    /// within a half.
+    #[test]
+    fn the_lobes_are_the_exact_scattering_of_haze() {
+        for (cosine, exact) in exact() {
+            let degrees = cosine.acos().to_degrees();
+            let off = (f64::from(haze().eval(cosine as f32)) / exact - 1.0).abs();
+            let allowed = if degrees < 15.0 { 0.5 } else { 0.25 };
+            assert!(
+                off < allowed,
+                "at {degrees:.1}°: {off:.2} from the exact {exact:.3}"
+            );
+        }
     }
 
     /// Mean over the sphere of `f(cos θ)`.
@@ -114,11 +236,21 @@ mod tests {
     }
 
     /// Sub-micrometre droplets are strongly forward scattering: an asymmetry
-    /// well above the old single lobe's 0.6, short of a cloud's 0.85+.
+    /// well above the old single lobe's 0.6, short of a cloud's 0.85+, and
+    /// the exact scattering's own.
     #[test]
     fn haze_droplets_scatter_mostly_forward() {
         let g = sphere_mean(|c| haze().eval(c) * c);
-        assert!((0.75..0.9).contains(&g), "{g}");
+        let steps = exact().len() as f64;
+        let exact: f64 = exact()
+            .iter()
+            .map(|(c, light)| light * c * (1.0 - c * c).sqrt())
+            .sum::<f64>()
+            * std::f64::consts::PI
+            / steps
+            / 2.0;
+        assert!((0.65..0.85).contains(&g), "{g}");
+        assert!((f64::from(g) - exact).abs() < 0.03, "{g} against {exact}");
     }
 
     /// Looking down a beam is far brighter than looking across it, and the

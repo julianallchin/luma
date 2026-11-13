@@ -29,13 +29,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DMat4, DVec3};
 
-use crate::aabb::{obb_intersects, DAabb};
+use crate::aabb::{collides, DAabb};
 use crate::catalog::{Family, Geometry};
 use crate::coords;
 use crate::sockets::{Polarity, ResolvedSocket, SocketType};
 use crate::venue::{
     place_on, Edge, Node, NodeKind, NodeSockets, ResolvedVenue, SurfacePlacement, VenueGraph,
-    FLOOR_SOCKET, RIG_SOCKET,
+    FLOOR_SOCKET,
 };
 
 // ---------------------------------------------------------------------------
@@ -59,10 +59,6 @@ pub const HINGE_LIMIT_DEG: f64 = 90.0;
 /// this module cannot hit misses by tens of degrees — the tolerance only has to
 /// separate "exact" from "not the same joint at all".
 const DIRECTION_TOLERANCE: f64 = 1e-3;
-
-/// Clearance both boxes are shrunk by before the collision test, metres.
-/// Contact is not collision: a mated piece touches its host by construction.
-const COLLISION_CLEARANCE_M: f64 = 0.02;
 
 /// How close two faces' normals must be before they count as pointing the same
 /// way, as a difference of cosines. Wide, because the tie this resolves is
@@ -361,26 +357,14 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
         let (Some(row), Some(world)) = (self.graph.node(node), self.world(node)) else {
             return Vec::new();
         };
-        let mut out: Vec<(ResolvedSocket, DVec3, DVec3)> = self
-            .sockets
-            .sockets(row)
+        crate::venue::sockets_of(self.sockets, row)
             .into_iter()
             .map(|socket| {
                 let at = world.transform_point3(socket.position);
                 let normal = world.transform_vector3(socket.normal).normalize_or_zero();
                 (socket, at, normal)
             })
-            .collect();
-        if row.kind == NodeKind::Venue {
-            for name in [FLOOR_SOCKET, RIG_SOCKET] {
-                if let Some(socket) = crate::venue::root_socket(name) {
-                    let at = world.transform_point3(socket.position);
-                    let normal = world.transform_vector3(socket.normal).normalize_or_zero();
-                    out.push((socket, at, normal));
-                }
-            }
-        }
-        out
+            .collect()
     }
 
     /// Which of `node`'s sockets some relation already accounts for.
@@ -498,6 +482,90 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
             .ok_or_else(|| self.no_face(node, &faces))
     }
 
+    /// The one face of `node` a light can mount on, for a caller that named
+    /// none: a deck has its top and nothing else.
+    ///
+    /// # Errors
+    /// [`Refusal::NoFace`] when there is none, and [`Refusal::WhichFace`] when
+    /// there are several, listing them as vectors.
+    pub fn only_face(&self, node: &str) -> Result<String, Refusal> {
+        let faces: Vec<(ResolvedSocket, DVec3)> = self
+            .world_sockets(node)
+            .into_iter()
+            .filter(|(s, _, _)| {
+                crate::catalog::fixture_clamp(0.0)
+                    .socket_type
+                    .mates(s.socket_type)
+            })
+            .map(|(s, _, normal)| (s, normal))
+            .collect();
+        match faces.as_slice() {
+            [] => Err(self.no_face(node, &faces)),
+            [(socket, _)] => Ok(socket.name.clone()),
+            _ => Err(Refusal::WhichFace {
+                name: self.name_of(node),
+                offered: faces
+                    .iter()
+                    .map(|(_, n)| facade_from_three(*n).to_array())
+                    .collect(),
+            }),
+        }
+    }
+
+    /// A point stated in plan, as metres along and across one of `node`'s
+    /// faces from its middle: the `(u, v)` a node on that face is stored with.
+    ///
+    /// `offset` is `(u, v)` stage metres from the face's middle, in the room's
+    /// own directions whichever way the host is turned, so `(1, 0)` on a deck
+    /// is a metre toward stage right on every deck.
+    ///
+    /// On one of the room's walls the pair is `(along, up)`: `along` runs the
+    /// way the floor's own axis under that wall runs, so a light on the back
+    /// wall at `2` is above the floor's `u = 2`, and `up` is metres above the
+    /// wall's middle.
+    ///
+    /// # Errors
+    /// [`Refusal::UnknownNode`] for a node or face that is not there, and
+    /// [`Refusal::NotLevel`] for any other face that is not level: a point in
+    /// plan names nothing on the side of a truss.
+    pub fn surface_point(
+        &self,
+        node: &str,
+        face: &str,
+        offset: [f64; 2],
+    ) -> Result<(f64, f64), Refusal> {
+        let unknown = || Refusal::UnknownNode(node.to_string());
+        let world = self.world(node).ok_or_else(unknown)?;
+        let (socket, _, normal) = self
+            .world_sockets(node)
+            .into_iter()
+            .find(|(socket, _, _)| socket.name == face)
+            .ok_or_else(unknown)?;
+        let frame = world * crate::venue::socket_frame(&socket);
+        if normal.dot(crate::snap::WORLD_UP).abs() < 0.9 {
+            let room = self.graph.node(node).map(|row| row.kind) == Some(NodeKind::Venue);
+            if !room {
+                return Err(Refusal::NotLevel {
+                    name: self.name_of(node),
+                });
+            }
+            // The wall's level axis, as the floor names it: whichever way
+            // that points along the wall is the way `along` counts.
+            let level = facade_from_three(frame.x_axis.truncate());
+            let sign = if level.x.abs() > level.y.abs() {
+                level.x.signum()
+            } else {
+                level.y.signum()
+            };
+            return Ok((offset[0] * sign, offset[1]));
+        }
+        let wanted = three_from_facade(DVec3::new(offset[0], offset[1], 0.0));
+        Ok((
+            wanted.dot(frame.x_axis.truncate().normalize_or_zero()),
+            wanted.dot(frame.y_axis.truncate().normalize_or_zero()),
+        ))
+    }
+
     /// How a node reads in a message: its id, its label and what it is.
     ///
     /// A refusal naming a bare uuid tells the reader nothing they can act on,
@@ -540,16 +608,16 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
         }
     }
 
-    /// The first placed node whose box the candidate overlaps, ignoring
-    /// `parent` (a mate touches its host by construction).
-    fn blocker(
+    /// The first placed node a body at `world` would pass through, ignoring
+    /// `skip`: the host it mates, and itself when it is already placed.
+    pub fn blocker(
         &self,
         world: &DMat4,
         bounds: DAabb,
-        parent: &str,
+        skip: &[&str],
     ) -> Option<(String, Option<String>)> {
         for pose in self.solved.poses() {
-            if pose.node == parent || pose.kind == NodeKind::Venue {
+            if skip.contains(&pose.node.as_str()) || pose.kind == NodeKind::Venue {
                 continue;
             }
             let Some(row) = self.graph.node(&pose.node) else {
@@ -558,7 +626,7 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
             let Some(other) = self.sockets.bounds(row) else {
                 continue;
             };
-            if obb_intersects(bounds, world, other, &pose.world, COLLISION_CLEARANCE_M) {
+            if collides(bounds, world, other, &pose.world) {
                 return Some((pose.node.clone(), pose.label.clone()));
             }
         }
@@ -595,6 +663,13 @@ pub enum Refusal {
         hint: Option<String>,
         offered: Vec<[f64; 3]>,
     },
+    /// Several faces a light could mount on and no direction to pick one.
+    WhichFace {
+        name: String,
+        offered: Vec<[f64; 3]>,
+    },
+    /// A point in plan asked of a face that is not level.
+    NotLevel { name: String },
     /// A piece with no half that bolts to the end it was handed.
     NoJoint {
         piece: String,
@@ -681,6 +756,17 @@ impl std::fmt::Display for Refusal {
                 f,
                 "{name} has no face that way; its faces point {}",
                 vectors(offered)
+            ),
+            Refusal::WhichFace { name, offered } => write!(
+                f,
+                "{name} has {} faces a light mounts on — say which with face=, one of {}",
+                offered.len(),
+                vectors(offered)
+            ),
+            Refusal::NotLevel { name } => write!(
+                f,
+                "at=(u, v) is a point on a level surface, and that face of {name} is not \
+                 one — give one number, metres along the face from its middle"
             ),
             Refusal::NoJoint {
                 piece,
@@ -959,7 +1045,7 @@ pub fn compile<S: NodeSockets + ?Sized>(
         .sockets
         .bounds(&probe)
         .unwrap_or_else(|| DAabb::new(DVec3::ZERO, DVec3::ZERO));
-    if let Some((node, label)) = scene.blocker(&plan.world, bounds, &plan.edge.parent) {
+    if let Some((node, label)) = scene.blocker(&plan.world, bounds, &[&plan.edge.parent]) {
         return Err(Refusal::Collision { node, label });
     }
     plan.at = Footprint::of(&plan.world, bounds);
@@ -1140,7 +1226,9 @@ fn run_axis<S: NodeSockets + ?Sized>(scene: &Scene<'_, S>, probe: &Node) -> Opti
 pub fn resting_footprint<S: NodeSockets + ?Sized>(sockets: &S, node: &Node) -> Option<Footprint> {
     let piece = crate::catalog::find(node.catalog_ref.as_deref()?)?;
     let bounds = sockets.bounds(node)?;
-    let floor = crate::venue::root_socket(FLOOR_SOCKET)?;
+    let floor = crate::venue::root_sockets(&crate::venue::Params::default())
+        .into_iter()
+        .find(|socket| socket.name == FLOOR_SOCKET)?;
     let held = sockets
         .sockets(node)
         .into_iter()

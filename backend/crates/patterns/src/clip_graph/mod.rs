@@ -160,12 +160,10 @@ impl Kind {
 }
 
 /// What a laser clip draws on each projector it selects: its figures, in
-/// the order of the laser's `figures`, in the zone with id `zone` (empty:
-/// the venue's first zone).
+/// the order of the laser's `figures`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LaserHeads {
     pub figures: Vec<FigureHeads>,
-    pub zone: String,
 }
 
 /// One figure of a laser clip: `count` elements of `kind`.
@@ -694,7 +692,7 @@ impl ClipGraph {
         self.output().map(|(_, node)| node.kind)
     }
 
-    /// A laser graph's figures and zone id, which a host needs to lay out
+    /// A laser graph's figures, which a host needs to lay out
     /// the clip's heads before it prepares the graph. `None` for any other
     /// output.
     pub fn laser(&self) -> Option<LaserHeads> {
@@ -719,10 +717,7 @@ impl ClipGraph {
                 }
             })
             .collect();
-        Some(LaserHeads {
-            figures,
-            zone: node.setting("zone").unwrap_or_default().to_string(),
-        })
+        Some(LaserHeads { figures })
     }
 
     /// A free id for a new node of `kind`: `<kind><n>` with the lowest

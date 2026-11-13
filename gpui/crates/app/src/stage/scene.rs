@@ -4,7 +4,6 @@
 use std::collections::{BTreeMap, HashMap};
 
 use luma_lib::services::stage_ops::CopyStep;
-use luma_scene::venue::NodeKind;
 
 use super::build::Build;
 use super::hand::{self, Hand, Holding, Landed, Landing};
@@ -232,7 +231,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
             let socket = build.room.socket(&run.from_node, &run.from_socket);
             let pose = build.room.pose(&run.from_node);
             if let (Some(socket), Some(pose)) = (socket, pose) {
-                let refused = run.refused().is_some();
+                let refused = build.run_refused().is_some();
                 let direction = pose.transform_vector3(socket.normal).normalize_or_zero();
                 let to = from + direction * run.length_m;
                 out.measure = Some(Measure {
@@ -243,19 +242,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                 // The run's own ghost, at the length being asked for. This is
                 // the design's red case: a length past the measured gap is one
                 // of the two hard errors, and the ghost is where it is said.
-                #[allow(clippy::cast_possible_truncation)]
-                let params = luma_scene::truss::Procedural::Truss {
-                    span: run.length_m as f32,
-                };
-                let held = luma_scene::catalog::procedural_sockets(params);
-                if let Some(end) = held.iter().find(|s| s.name == "end_a") {
-                    let world = luma_scene::venue::place_on(
-                        pose,
-                        socket,
-                        end,
-                        NodeKind::Run,
-                        luma_scene::venue::SurfacePlacement::FLUSH,
-                    );
+                if let Some((params, world)) = build.run_ghost() {
                     let (pos, rot) = luma_scene::coords::data_pose_of_d(world);
                     out.ghosts.push(Ghost {
                         geometry: luma_render::scene_desc::Geometry::Procedural(params),

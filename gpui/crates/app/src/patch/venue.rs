@@ -50,6 +50,7 @@ pub(super) fn render(
             super::View::Stage => crate::stage::elements(stage, app),
             super::View::Patch => super::footprint::universes(state, app),
             super::View::Output => super::outputs::outputs(state, app),
+            super::View::Lasers => super::lasers::lasers(state, app),
         })
         .agent_node(Role::Card, "Venue fixtures");
     div()

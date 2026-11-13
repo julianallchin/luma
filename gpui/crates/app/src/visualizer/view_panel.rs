@@ -311,9 +311,8 @@ pub(super) fn view_toggle(
         ViewToggle::Grid => 1,
         ViewToggle::Gizmos => 2,
         ViewToggle::AutoExposure => 3,
-        ViewToggle::ReflectionProbes => 4,
-        ViewToggle::ShowProbes => 5,
-        ViewToggle::Footage => 6,
+        ViewToggle::BouncedLight => 4,
+        ViewToggle::Footage => 5,
     };
     let t = state.settings_motion.borrow_mut().switches[index].sample(checked);
     let app = app.clone();

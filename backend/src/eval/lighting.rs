@@ -50,6 +50,7 @@ fn plan(
             laser: draws,
         },
         span,
+        source: None,
     })
 }
 /// A clip's plan over `cells`. Every clip graph writes its lighting to the
@@ -163,7 +164,6 @@ impl Program {
                     let (projector, index) = places[n];
                     slot[n] = Some(p::laser::Element {
                         projector: projector.to_string(),
-                        zone: laser.zone.clone(),
                         layer,
                         outline: figure.outline(),
                         s: p::laser::order(index, counts[projector]),

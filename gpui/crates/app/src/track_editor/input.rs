@@ -146,14 +146,16 @@ pub(super) fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
         let at = event.position;
         // The gestures that share one press, told apart by button, keys and
         // count, the way the platform tells them apart: the right button
-        // offers an insertion, the middle button (or the left with the
+        // opens a clip's menu or offers an insertion, the middle button (or the left with the
         // platform key and Alt) pans, a second left click opens the clip's
         // pattern, and a first left click is the pointer contract in
         // `timeline_press`.
         match (event.button, event.click_count) {
             (MouseButton::Right, _) => {
                 pressed.update(cx, |this, cx| {
-                    this.timeline_insert_menu(at, cx);
+                    if !this.open_clip_menu(at, cx) {
+                        this.timeline_insert_menu(at, cx);
+                    }
                     if let Some(Body::TrackEditor(editor)) = this.workspace.active_body() {
                         if editor.menu.is_some() {
                             editor.menu_search.focus_handle(cx).focus(window, cx);
@@ -259,6 +261,17 @@ impl Editor {
         if y >= self.layout().top(row) + 1. + CLIP_HEADER {
             return None;
         }
+        self.clips
+            .iter()
+            .find(|clip| clip.row == row && time >= clip.start && time < clip.end)
+    }
+
+    /// The clip under a window position, anywhere in its lane row: body as
+    /// well as header bar. What a gesture that is not a drag hits.
+    pub(super) fn clip_under(&self, at: Point<Pixels>) -> Option<&Clip> {
+        let canvas = self.canvas.get();
+        let time = self.view.time_at(f32::from(at.x - canvas.origin.x));
+        let row = self.layout().row_at(f32::from(at.y - canvas.origin.y))?;
         self.clips
             .iter()
             .find(|clip| clip.row == row && time >= clip.start && time < clip.end)
@@ -410,19 +423,11 @@ impl Luma {
         let Some(Body::TrackEditor(state)) = self.workspace.active_body() else {
             return;
         };
-        let canvas = state.canvas.get();
-        let time = state.view.time_at(f32::from(at.x - canvas.origin.x));
         let selected = state
             .pressed_clip
             .as_ref()
             .and_then(|(id, _)| state.clips.iter().find(|clip| clip.id == *id));
-        let Some(clip) = selected.or_else(|| {
-            let row = state.layout().row_at(f32::from(at.y - canvas.origin.y))?;
-            state
-                .clips
-                .iter()
-                .find(|clip| clip.row == row && time >= clip.start && time < clip.end)
-        }) else {
+        let Some(clip) = selected.or_else(|| state.clip_under(at)) else {
             return;
         };
         let id = clip.id.clone();

@@ -506,6 +506,13 @@ impl Truss {
         })
     }
 
+    /// Whether a frame mesh is one of this module's lattices, by its key.
+    /// A lattice is drawn as tubes and pointed at as the box they outline.
+    #[must_use]
+    pub fn is_lattice(mesh_key: &str) -> bool {
+        mesh_key.starts_with("procedural/truss/")
+    }
+
     /// Stable identity of this truss's geometry in the frame's mesh bank.
     ///
     /// Every parameter that changes a vertex is in the key, which is the

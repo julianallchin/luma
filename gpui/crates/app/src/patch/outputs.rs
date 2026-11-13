@@ -237,8 +237,7 @@ fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
 
     // How full the universe is, from the same cells the patch grid draws.
     let fixtures = state
-        .rows()
-        .iter()
+        .patched()
         .filter(|row| row.universe == universe)
         .count();
     let used = u16::try_from(universe)

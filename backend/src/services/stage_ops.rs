@@ -34,7 +34,7 @@ use luma_scene::build;
 use luma_scene::catalog::VenueSockets;
 use luma_scene::sockets::{ResolvedSocket, SocketType};
 use luma_scene::venue::{
-    root_socket, Constraint, Edge, Node, NodeKind, NodeSockets as _, Params,
+    sockets_of, Constraint, Edge, Node, NodeKind, NodeSockets as _, Params,
     ResolvedVenue as Solved, VenueGraph, FLOOR_SOCKET,
 };
 use sqlx::SqlitePool;
@@ -154,9 +154,9 @@ impl From<crate::services::patch::PatchError> for StageError {
         use crate::services::patch::PatchError;
         let message = error.to_string();
         match error {
-            PatchError::OutOfRange { .. } | PatchError::Collision { .. } => {
-                StageError::Refused(message)
-            }
+            PatchError::OutOfRange { .. }
+            | PatchError::Collision { .. }
+            | PatchError::NoFootprint(_) => StageError::Refused(message),
             PatchError::Database(_) => StageError::Internal(message),
         }
     }
@@ -452,12 +452,13 @@ impl<'a> Stage<'a> {
         node_id: &str,
         mut params: BTreeMap<String, f64>,
         label: Option<&str>,
+        frame: Frame,
     ) -> Result<PlacementReport> {
         let mut access = self.write().await?;
         require_in_venue(&mut access, &[node_id]).await?;
         let graph = venue_graph::graph(&mut access).await?;
         parameter_edit(&graph, node_id, &params)?;
-        if params.contains_key("u") || params.contains_key("v") {
+        if frame == Frame::Plan && (params.contains_key("u") || params.contains_key("v")) {
             let supply = venue_graph::sockets(self.fixtures_root)?;
             let (u, v) = surface_offset(
                 &graph,
@@ -479,6 +480,74 @@ impl<'a> Stage<'a> {
             venue_graph_db::set_label(&mut access, node_id, label).await?;
         }
         self.report(access, node_id).await
+    }
+
+    /// Give the room a size, `[width, depth, height]` in metres, or take it
+    /// away. A room with a size has four walls to build on, around a floor
+    /// centred on the venue's origin, and a ceiling at its height.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] for a side that is not a real length, and for
+    /// taking the size away while something still hangs on a wall.
+    pub async fn set_room(&self, size: Option<[f64; 3]>) -> Result<ResolvedVenue> {
+        use luma_scene::venue::{ROOM_PARAMS, WALL_SOCKETS};
+        let mut access = self.write().await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let root = graph.root().to_string();
+        if let Some(size) = size {
+            if let Some(side) = size
+                .iter()
+                .find(|m| !m.is_finite() || !(1.0..=500.0).contains(*m))
+            {
+                return Err(StageError::Refused(format!(
+                    "a room's width, depth and height are each 1 to 500 metres, not {side}"
+                )));
+            }
+        } else {
+            let held = graph
+                .relations()
+                .filter(|(_, edge)| {
+                    edge.parent == root && WALL_SOCKETS.contains(&edge.their_socket.as_str())
+                })
+                .count();
+            if held > 0 {
+                return Err(StageError::Refused(format!(
+                    "{held} thing(s) hang on the walls: move or remove them first"
+                )));
+            }
+        }
+        let params = ROOM_PARAMS
+            .into_iter()
+            .enumerate()
+            .map(|(i, key)| (key.to_string(), size.map(|size| size[i])))
+            .collect();
+        venue_graph_db::set_params(&mut access, &root, &params).await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let out = ResolvedVenue::from(&solved);
+        venue_graph::commit_graph(access).await?;
+        Ok(out)
+    }
+
+    /// Paint the room's walls and ceiling: `shade` is the share of light they
+    /// send back, kept within [`luma_scene::venue::WALL_SHADES`].
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] for a shade that is not a number.
+    pub async fn set_wall_shade(&self, shade: f64) -> Result<()> {
+        use luma_scene::venue::{WALL_SHADES, WALL_SHADE_PARAM};
+        if !shade.is_finite() {
+            return Err(StageError::Refused("a wall's shade is a number".into()));
+        }
+        let shade = shade.clamp(
+            f64::from(*WALL_SHADES.start()),
+            f64::from(*WALL_SHADES.end()),
+        );
+        let mut access = self.write().await?;
+        let root = venue_graph::graph(&mut access).await?.root().to_string();
+        let params = BTreeMap::from([(WALL_SHADE_PARAM.to_string(), Some(shade))]);
+        venue_graph_db::set_params(&mut access, &root, &params).await?;
+        venue_graph::commit_graph(access).await?;
+        Ok(())
     }
 
     /// Delete a node and everything hanging off it.
@@ -713,18 +782,23 @@ impl<'a> Stage<'a> {
     ) -> Result<Distributed> {
         let relative = confine(fixture_path)?;
         let mut access = self.write().await?;
+        let (place, trim_m) = self
+            .place_on_face(&mut access, host_node_id, host_socket, layout)
+            .await?;
         let report = distribute_service::distribute(
             &mut access,
             self.fixtures_root,
             distribute_service::Request {
-                host_node: host_node_id,
-                host_socket,
+                host_node: place.host_node,
+                host_socket: place.host_socket,
                 fixture_path: relative,
                 mode_name,
                 count,
-                layout: layout.into(),
-                across_m: layout.across_m(),
+                layout: place.layout,
+                across_m: place.across_m,
+                trim_m,
                 label_prefix,
+                relay: &[],
             },
         )
         .await
@@ -737,14 +811,122 @@ impl<'a> Stage<'a> {
         Ok(Distributed { report, patch })
     }
 
+    /// A layout as a place on one host face, and how high above it: a point
+    /// in plan is put on the face here, for a new row and a moved light alike.
+    async fn place_on_face<'h>(
+        &self,
+        access: &mut VenueAccess<'_, Write>,
+        host_node: Option<&'h str>,
+        host_socket: Option<&'h str>,
+        layout: DistributeLayout,
+    ) -> Result<(distribute_service::Place<'h>, f64)> {
+        let (layout, across_m, trim_m) = match layout.on_face() {
+            Ok((layout, across_m)) => (layout, across_m, 0.0),
+            Err(point) => {
+                let graph = venue_graph::graph(access).await?;
+                let solved = venue_graph::resolved(access, self.fixtures_root).await?;
+                let supply = venue_graph::sockets(self.fixtures_root)?;
+                let (along, across) = build::Scene::new(&graph, &solved, supply)
+                    .surface_point(
+                        host_node.unwrap_or(graph.root()),
+                        host_socket.unwrap_or(FLOOR_SOCKET),
+                        [point.u, point.v],
+                    )
+                    .map_err(|refusal| StageError::Refused(refusal.to_string()))?;
+                (
+                    luma_scene::distribute::Layout::At(along),
+                    across,
+                    point.trim,
+                )
+            }
+        };
+        Ok((
+            distribute_service::Place {
+                host_node,
+                host_socket,
+                layout,
+                across_m,
+            },
+            trim_m,
+        ))
+    }
+
+    /// Move one light to a new place, keeping its id, its address and every
+    /// group it is in.
+    ///
+    /// `to` is the host and face to hang it on (`None` for the room); leave
+    /// `to` out and it stays on the face it has and moves along it, at the
+    /// depth it had. A place that names no height keeps the light's own while
+    /// it stays on its face. On a new face the light's turn and aim return to
+    /// rest, and the answer says so.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] for anything but one light at one place, and
+    /// for a place a new light would be refused at.
+    pub async fn move_light(
+        &self,
+        node_id: &str,
+        to: Option<(Option<&str>, &str)>,
+        layout: DistributeLayout,
+    ) -> Result<Moved> {
+        let mut access = self.write().await?;
+        require_in_venue(&mut access, &[node_id]).await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let Some(edge) = graph.edge(node_id).cloned() else {
+            return Err(StageError::Refused(format!(
+                "`{node_id}` is not a placed light"
+            )));
+        };
+        let own = |key: &str| {
+            graph
+                .node(node_id)
+                .map_or(0.0, |node| node.params.get(key, 0.0))
+        };
+        let (across, trim) = (own("v"), own("trim"));
+        let (host, socket) = match to {
+            Some((host, socket)) => (host.map(str::to_string), socket.to_string()),
+            None => (
+                (edge.parent != graph.root()).then_some(edge.parent.clone()),
+                edge.their_socket.clone(),
+            ),
+        };
+        let stays =
+            host.as_deref().unwrap_or(graph.root()) == edge.parent && socket == edge.their_socket;
+        drop(graph);
+        let along_only = layout.on_face().is_ok();
+        let (mut place, mut trim_m) = self
+            .place_on_face(&mut access, host.as_deref(), Some(&socket), layout)
+            .await?;
+        if along_only && stays {
+            trim_m = trim;
+            if to.is_none() {
+                place.across_m = across;
+            }
+        }
+        if !matches!(place.layout, luma_scene::distribute::Layout::At(_)) {
+            return Err(StageError::Refused(
+                "a move puts one light in one place: give at=".into(),
+            ));
+        }
+        let rehung =
+            distribute_service::relocate(&mut access, self.fixtures_root, node_id, place, trim_m)
+                .await
+                .map_err(StageError::Refused)?;
+        Ok(Moved {
+            rehung,
+            report: self.report(access, node_id).await?,
+        })
+    }
+
     /// Re-lay an existing row of fixtures at a new count or layout.
     ///
     /// `member_node_id` names *any* fixture of the row; the row is derived —
     /// every fixture of the same model chained on the same host face — never
-    /// stored, so there is no row id to go stale. One transaction: the old
-    /// fixtures leave, [`distribute_service::distribute`] lays the new ones,
-    /// and a count that no longer fits rolls the whole thing back — the row
-    /// you had is the row you keep.
+    /// stored, so there is no row id to go stale. The lights of the row stay
+    /// the lights they were, in order along the face, so their groups, names,
+    /// aim and addresses stay too: a larger count adds lights at the end and
+    /// a smaller one takes them from it. A count that does not fit changes
+    /// nothing.
     ///
     /// # Errors
     /// [`StageError::Refused`] if the member is not a placed fixture, or the
@@ -773,33 +955,22 @@ impl<'a> Stage<'a> {
             )));
         };
         let (path, mode) = (member.fixture_path.clone(), member.mode_name.clone());
-        // The row is one line across the face: on a floor, the lights at
+        // The row keeps its own line and height: on a floor, the lights at
         // another depth are not in it and are left where they stand.
-        let across_m = graph
-            .node(member_node_id)
-            .map_or(0.0, |node| node.params.get("v", 0.0));
-        let siblings: Vec<String> = graph
-            .nodes()
-            .filter(|node| node.kind == NodeKind::Fixture)
-            .filter(|node| {
-                (node.params.get("v", 0.0) - across_m).abs() < distribute_service::ROW_LINE_M
-            })
-            .filter(|node| {
-                graph.edge(&node.id).is_some_and(|sibling| {
-                    sibling.parent == edge.parent && sibling.their_socket == edge.their_socket
-                })
-            })
-            .filter(|node| {
-                rows.iter()
-                    .any(|row| row.id == node.id && row.fixture_path == path)
-            })
-            .map(|node| node.id.clone())
-            .collect();
+        let (across_m, trim_m) = graph.node(member_node_id).map_or((0.0, 0.0), |node| {
+            (node.params.get("v", 0.0), node.params.get("trim", 0.0))
+        });
+        let mut siblings = graph.row_of(member_node_id, |node| {
+            rows.iter()
+                .any(|row| row.id == node.id && row.fixture_path == path)
+        });
+        siblings.sort_by(|a, b| a.params.get("u", 0.0).total_cmp(&b.params.get("u", 0.0)));
+        let siblings: Vec<String> = siblings.into_iter().map(|node| node.id.clone()).collect();
+        let (layout, _) = layout.on_face().map_err(|_| {
+            StageError::Refused("a row is re-laid along its face, not at a point".into())
+        })?;
         let host_node = (edge.parent != graph.root()).then_some(edge.parent.clone());
         drop(graph);
-        for id in &siblings {
-            fixture_create::delete(&mut access, id).await?;
-        }
         let report = distribute_service::distribute(
             &mut access,
             self.fixtures_root,
@@ -809,15 +980,15 @@ impl<'a> Stage<'a> {
                 fixture_path: &path,
                 mode_name: &mode,
                 count,
-                layout: layout.into(),
+                layout,
                 across_m,
+                trim_m,
                 label_prefix: None,
+                relay: &siblings,
             },
         )
         .await
         .map_err(StageError::Refused)?;
-        // A refusal after the deletes must not commit them: erroring here is
-        // what rolls the transaction back to the row that fit.
         if let Some(refusal) = &report.refusal {
             return Err(StageError::Refused(match refusal {
                 DistributeRefusal::TooLong {
@@ -850,8 +1021,9 @@ impl<'a> Stage<'a> {
     /// deleted lights can be undone: a fixture node the snapshot holds and the
     /// venue has lost comes back with its patch row from `patch`, and one the
     /// venue holds and the snapshot does not leaves with its patch row. A light
-    /// in both keeps the patch row it has now, because a patch edit is not a
-    /// stage edit. One transaction: reconcile changed rows, preserving
+    /// in both keeps the patch row and the groups it has now, because a patch
+    /// or group edit is not a stage edit; a light that returns is back in the
+    /// groups it was in. One transaction: reconcile changed rows, preserving
     /// unchanged rows and their sync receipts, then re-solve.
     ///
     /// # Errors
@@ -890,6 +1062,10 @@ impl<'a> Stage<'a> {
                 ))
             })?;
             fixture_create::restore(&mut access, row, node).await?;
+            // Its groups went with it, so they come back with it.
+            for membership in rows.memberships.iter().filter(|m| m.fixture_id == node.id) {
+                crate::database::local::groups::restore_membership(&mut access, membership).await?;
+            }
         }
 
         // Structure: new rows in, changed rows (placements included) back to
@@ -1082,17 +1258,12 @@ impl<'a> Stage<'a> {
         params: &BTreeMap<String, f64>,
     ) -> Result<String> {
         let supply = venue_graph::sockets(self.fixtures_root)?;
-        let host = if parent_id == graph.root() {
-            root_socket(their_socket)
-        } else {
-            let node = graph.node(parent_id).ok_or_else(|| {
-                StageError::NotFound(format!("`{parent_id}` is not in this venue"))
-            })?;
-            supply
-                .sockets(node)
-                .into_iter()
-                .find(|s| s.name == their_socket)
-        };
+        let node = graph
+            .node(parent_id)
+            .ok_or_else(|| StageError::NotFound(format!("`{parent_id}` is not in this venue")))?;
+        let host = sockets_of(supply, node)
+            .into_iter()
+            .find(|s| s.name == their_socket);
         let host = host.ok_or_else(|| {
             StageError::Refused(format!("`{parent_id}` has no socket `{their_socket}`"))
         })?;
@@ -1191,7 +1362,12 @@ impl<'a> Stage<'a> {
         let run = distribute_service::run_of(&solved, &edge.parent);
         let channels = u16::try_from(source.num_channels)
             .map_err(|_| StageError::Internal(format!("`{}` has no channel count", source.id)))?;
-        let footprint = distribute_service::offer(&solved, &rows, run.as_deref(), channels, 1)?[0];
+        // A fixture with no channels takes no address.
+        let footprint = if channels == 0 {
+            None
+        } else {
+            Some(distribute_service::offer(&solved, &rows, run.as_deref(), channels, 1)?[0])
+        };
         let term = source
             .label
             .as_deref()
@@ -1225,21 +1401,37 @@ impl<'a> Stage<'a> {
         Ok((fixture.id, run))
     }
 
-    /// Check the joint `edge` makes for `node` as it will be — its sockets
-    /// depend on its params — by `luma_scene`'s own check: acyclic, both
-    /// sockets present, polarities compatible.
+    /// Check that `node` may exist where `edge` hangs it, as it will be —
+    /// its sockets and its size depend on its params. The joint is
+    /// `luma_scene`'s own check: acyclic, both sockets present, polarities
+    /// compatible. Then the body: it may touch what it hangs on and pass
+    /// through nothing, which is what a plan and a preview were refused for,
+    /// asked again here so no caller can write past it.
     async fn admit(
         &self,
         access: &mut VenueAccess<'_, Write>,
         node: Node,
         edge: &Edge,
     ) -> Result<()> {
+        let supply = venue_graph::sockets(self.fixtures_root)?;
         let mut graph = venue_graph::graph(access).await?;
         let id = node.id.clone();
+        let bounds = supply.bounds(&node);
         graph.insert(node);
         graph
-            .attach(&id, edge.clone(), venue_graph::sockets(self.fixtures_root)?)
-            .map_err(|e| StageError::Refused(e.to_string()))
+            .attach(&id, edge.clone(), supply)
+            .map_err(|e| StageError::Refused(e.to_string()))?;
+        let solved = luma_scene::venue::resolve(&graph, supply);
+        let (Some(bounds), Some(pose)) = (bounds, solved.pose(&id)) else {
+            return Ok(());
+        };
+        let scene = build::Scene::new(&graph, &solved, supply);
+        match scene.blocker(&pose.world, bounds, &[&id, &edge.parent]) {
+            Some((node, label)) => Err(StageError::Refused(
+                build::Refusal::Collision { node, label }.to_string(),
+            )),
+            None => Ok(()),
+        }
     }
 
     /// Solve, commit, and report — the tail of every verb.
@@ -1258,6 +1450,26 @@ impl<'a> Stage<'a> {
 // ---------------------------------------------------------------------------
 // The authoring surface: chains, queries, drafts
 // ---------------------------------------------------------------------------
+
+/// Which way an edit's `u` and `v` are read. They are one pair of numbers
+/// with two honest readings, so every writer says which it means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Frame {
+    /// As stored: metres along and across the host face, in the face's own
+    /// directions. What a joint solved from a pose hands back.
+    Stored,
+    /// Stage metres from the host's footprint centre, in the room's
+    /// directions: what `place`'s `at=` means.
+    Plan,
+}
+
+/// What a move did.
+pub struct Moved {
+    /// The light now hangs on a different face, so its turn and aim are back
+    /// at rest.
+    pub rehung: bool,
+    pub report: PlacementReport,
+}
 
 /// What one chain op did: the node it made, where it landed, and the end the
 /// next op grows from.
@@ -1605,7 +1817,19 @@ impl Draft {
         node_id: &str,
         params: &BTreeMap<String, f64>,
     ) -> Result<()> {
-        let (updated, edge) = parameter_edit(&self.graph, node_id, params)?;
+        let mut params = params.clone();
+        if params.contains_key("u") || params.contains_key("v") {
+            let (u, v) = surface_offset(
+                &self.graph,
+                supply,
+                node_id,
+                params.get("u").copied(),
+                params.get("v").copied(),
+            )?;
+            params.insert("u".into(), u);
+            params.insert("v".into(), v);
+        }
+        let (updated, edge) = parameter_edit(&self.graph, node_id, &params)?;
         match edge {
             Some(edge) => self.graph.insert_placed(updated, edge),
             None => self.graph.insert(updated),
@@ -1639,6 +1863,22 @@ impl Draft {
     pub fn face(&self, supply: &VenueSockets, node_id: &str, face: [f64; 3]) -> Result<String> {
         build::Scene::new(&self.graph, &self.solved, supply)
             .face(node_id, glam::DVec3::from(face))
+            .map_err(|refusal| StageError::Refused(refusal.to_string()))
+    }
+
+    /// The draft's reading of [`build::Scene::surface_point`].
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] for a face that is not level.
+    pub fn surface_point(
+        &self,
+        supply: &VenueSockets,
+        node_id: &str,
+        socket: &str,
+        point: [f64; 2],
+    ) -> Result<(f64, f64)> {
+        build::Scene::new(&self.graph, &self.solved, supply)
+            .surface_point(node_id, socket, point)
             .map_err(|refusal| StageError::Refused(refusal.to_string()))
     }
 
@@ -1828,6 +2068,24 @@ impl<'a> Stage<'a> {
         let node = node_id.map_or_else(|| graph.root().to_string(), str::to_string);
         build::Scene::new(&graph, &solved, supply)
             .face(&node, glam::DVec3::from(face))
+            .map_err(|refusal| StageError::Refused(refusal.to_string()))
+    }
+
+    /// The face a row lands on when its caller named none: the floor for the
+    /// room, and a host's one mounting face.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] when the host has no such face, or several.
+    pub async fn default_face(&self, node_id: Option<&str>) -> Result<String> {
+        let Some(node_id) = node_id else {
+            return Ok(luma_scene::venue::FLOOR_SOCKET.to_string());
+        };
+        let mut access = self.read().await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let supply = venue_graph::sockets(self.fixtures_root)?;
+        build::Scene::new(&graph, &solved, supply)
+            .only_face(node_id)
             .map_err(|refusal| StageError::Refused(refusal.to_string()))
     }
 

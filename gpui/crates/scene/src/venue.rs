@@ -107,6 +107,26 @@ pub const FLOOR_SOCKET: &str = "floor";
 /// is the floor: same origin, same `(u, v)`, same `trim`.
 pub const RIG_SOCKET: &str = "rig";
 
+/// The room's four walls, each facing in. `back` is upstage, `front` is
+/// behind the house, `left` and `right` are stage left and stage right.
+pub const WALL_SOCKETS: [&str; 4] = ["wall_back", "wall_front", "wall_left", "wall_right"];
+
+/// The root's own parameters: how wide, deep and high the room is, in
+/// metres. A venue with none of them is open floor with no walls.
+pub const ROOM_PARAMS: [&str; 3] = ["width", "depth", "height"];
+
+/// The root's parameter for how light its walls and ceiling are painted:
+/// the share of light they send back. Read it through [`wall_shade`].
+pub const WALL_SHADE_PARAM: &str = "shade";
+
+/// A room's walls before anyone has chosen: matt dark grey, a hall's
+/// painted walls.
+pub const WALL_SHADE: f32 = 0.18;
+
+/// The darkest and lightest a wall can be painted: black-box black to
+/// white plaster. No paint sends back nothing, or everything.
+pub const WALL_SHADES: std::ops::RangeInclusive<f32> = 0.02..=0.85;
+
 /// The parameters held in radians in the graph and quoted in **degrees** at
 /// every surface a person or an agent reads.
 ///
@@ -188,6 +208,10 @@ impl Node {
     pub fn parameter_names(&self) -> Vec<&'static str> {
         use crate::catalog::{self, Geometry};
 
+        // The room is not placed on anything: all it has is its size.
+        if self.kind == NodeKind::Venue {
+            return ROOM_PARAMS.into_iter().chain([WALL_SHADE_PARAM]).collect();
+        }
         let mut names = vec!["u", "v", "trim"];
         match self.kind {
             NodeKind::Fixture => names.extend(ANGLE_PARAMS),
@@ -408,6 +432,10 @@ pub struct VenueGraph {
     warnings: Vec<NodeWarning>,
 }
 
+/// How far apart across a face two fixtures may sit and still be one row, in
+/// metres: a row is one line, and a floor holds many.
+pub const ROW_LINE_M: f64 = 1e-3;
+
 impl VenueGraph {
     /// A venue holding nothing but its root.
     #[must_use]
@@ -452,6 +480,33 @@ impl VenueGraph {
     #[must_use]
     pub fn edge(&self, id: &str) -> Option<&Edge> {
         self.edges.get(id)
+    }
+
+    /// The row `member` is in: the fixtures `same_model` accepts that hang on
+    /// the same host face along the same line, ordered along it.
+    ///
+    /// Derived, never stored: the graph keeps where each light sits, and "the
+    /// row" is a reading of that, so there is no row id to go stale when a
+    /// light is deleted by hand. Lights at another depth of a floor are beside
+    /// the row, not in it.
+    pub fn row_of(&self, member: &str, same_model: impl Fn(&Node) -> bool) -> Vec<&Node> {
+        let (Some(node), Some(edge)) = (self.node(member), self.edge(member)) else {
+            return Vec::new();
+        };
+        let across = node.params.get("v", 0.0);
+        let mut row: Vec<&Node> = self
+            .nodes()
+            .filter(|sibling| sibling.kind == NodeKind::Fixture)
+            .filter(|sibling| {
+                self.edge(&sibling.id).is_some_and(|joint| {
+                    joint.parent == edge.parent && joint.their_socket == edge.their_socket
+                })
+            })
+            .filter(|sibling| (sibling.params.get("v", 0.0) - across).abs() < ROW_LINE_M)
+            .filter(|sibling| same_model(sibling))
+            .collect();
+        row.sort_by(|a, b| a.params.get("u", 0.0).total_cmp(&b.params.get("u", 0.0)));
+        row
     }
 
     /// Every far-end check.
@@ -733,23 +788,14 @@ impl VenueGraph {
         out
     }
 
-    /// One node's socket by name, with the root's synthesized floor.
-    ///
-    /// The root has no catalog entry, so [`root_socket`] is the only place
-    /// its floor exists; every relation that can name a node can name the
-    /// root, so the fallback belongs here rather than at each caller.
+    /// One node's socket by name, the room's own faces included.
     fn socket_on<S: NodeSockets + ?Sized>(
         &self,
         node: &Node,
         name: &str,
         sockets: &S,
     ) -> Option<ResolvedSocket> {
-        if node.kind == NodeKind::Venue {
-            if let Some(socket) = root_socket(name) {
-                return Some(socket);
-            }
-        }
-        find_socket(&sockets.sockets(node), name)
+        find_socket(&sockets_of(sockets, node), name)
     }
 }
 
@@ -772,27 +818,100 @@ impl VenueGraph {
 /// anyone has to remember.
 #[cfg(test)]
 fn floor_socket() -> ResolvedSocket {
-    root_socket(FLOOR_SOCKET).expect("the floor is a root socket")
+    find_socket(&root_sockets(&Params::default()), FLOOR_SOCKET).expect("a room has a floor")
 }
 
-/// One of the root's two synthesized hosts, by name.
+/// A room's size, when it has one: `[width, depth, height]` in metres, off
+/// the root's [`ROOM_PARAMS`]. All three, each more than nothing, or the
+/// room is open floor.
 #[must_use]
-pub fn root_socket(name: &str) -> Option<ResolvedSocket> {
-    let normal = match name {
-        FLOOR_SOCKET => crate::snap::WORLD_UP,
-        RIG_SOCKET => -crate::snap::WORLD_UP,
-        _ => return None,
-    };
-    Some(ResolvedSocket {
+pub fn room_size(params: &Params) -> Option<[f64; 3]> {
+    let size = ROOM_PARAMS.map(|key| params.lookup(key).filter(|metres| *metres > 0.0));
+    Some([size[0]?, size[1]?, size[2]?])
+}
+
+/// How light the room's walls and ceiling are painted, always within
+/// [`WALL_SHADES`]: a venue that never chose has [`WALL_SHADE`].
+#[must_use]
+pub fn wall_shade(params: &Params) -> f32 {
+    params
+        .lookup(WALL_SHADE_PARAM)
+        .filter(|shade| shade.is_finite())
+        .map_or(WALL_SHADE, |shade| {
+            (shade as f32).clamp(*WALL_SHADES.start(), *WALL_SHADES.end())
+        })
+}
+
+/// One flat face of the room: a plane through `position` facing `normal`.
+fn room_face(name: &str, position: DVec3, normal: DVec3, tangent: DVec3) -> ResolvedSocket {
+    ResolvedSocket {
         name: name.to_string(),
         socket_type: SocketType::Ground,
-        position: DVec3::ZERO,
+        position,
         normal,
-        tangent: DVec3::X,
+        tangent,
         mode: SocketMode::Face,
         outward: normal,
         roll: SocketType::Ground.roll(),
-    })
+    }
+}
+
+/// Everything the room itself can be built on, in the root's own frame.
+///
+/// The floor and the grid are always there, at the origin. A room with a
+/// size ([`room_size`]) also has four walls around a floor centred on the
+/// origin, each facing in. A wall's `u` runs level along it and its `v` runs
+/// up it, from the wall's middle.
+///
+/// The ceiling is not a face of its own: it is the grid at the room's
+/// height, so a thing hung from the ceiling is a thing on the grid with
+/// that `trim`, and there is one way to hang from above.
+///
+/// The root has no catalog entry, so this is the only place these exist.
+/// Read a node's sockets through [`sockets_of`], which answers for the root
+/// here and for every other node from the supply.
+#[must_use]
+pub fn root_sockets(params: &Params) -> Vec<ResolvedSocket> {
+    let up = crate::snap::WORLD_UP;
+    let mut out = vec![
+        room_face(FLOOR_SOCKET, DVec3::ZERO, up, DVec3::X),
+        room_face(RIG_SOCKET, DVec3::ZERO, -up, DVec3::X),
+    ];
+    if let Some([width, depth, height]) = room_size(params) {
+        // Upstage is three-space `+Z`; see the floor's frame above.
+        let inward = [-DVec3::Z, DVec3::Z, DVec3::X, -DVec3::X];
+        let reach = [depth, depth, width, width];
+        for ((name, normal), reach) in WALL_SOCKETS.into_iter().zip(inward).zip(reach) {
+            let middle = up * (height / 2.0) - normal * (reach / 2.0);
+            out.push(room_face(name, middle, normal, up.cross(normal)));
+        }
+    }
+    out
+}
+
+/// How far one of the room's faces runs along its `u` and across it, in
+/// metres, or `None` for a face nothing can overrun: the floor and the grid
+/// of a room with no size.
+#[must_use]
+pub fn root_face_size(params: &Params, name: &str) -> Option<(f64, f64)> {
+    let [width, depth, height] = room_size(params)?;
+    match name {
+        FLOOR_SOCKET | RIG_SOCKET => Some((width, depth)),
+        "wall_back" | "wall_front" => Some((width, height)),
+        "wall_left" | "wall_right" => Some((depth, height)),
+        _ => None,
+    }
+}
+
+/// `node`'s sockets: the room's own faces for the root, the supply's for
+/// everything else.
+#[must_use]
+pub fn sockets_of<S: NodeSockets + ?Sized>(sockets: &S, node: &Node) -> Vec<ResolvedSocket> {
+    if node.kind == NodeKind::Venue {
+        root_sockets(&node.params)
+    } else {
+        sockets.sockets(node)
+    }
 }
 
 fn find_socket(sockets: &[ResolvedSocket], name: &str) -> Option<ResolvedSocket> {
@@ -1418,7 +1537,7 @@ fn flip_for(mode: SocketMode) -> DMat4 {
 
 /// A socket's local frame: origin at the socket, `+Z` its normal, `+X` its
 /// tangent re-orthogonalized against the normal.
-fn socket_frame(socket: &ResolvedSocket) -> DMat4 {
+pub(crate) fn socket_frame(socket: &ResolvedSocket) -> DMat4 {
     let z = socket.normal.normalize_or_zero();
     let x = socket.tangent.normalize_or_zero();
     let x = (x - z * z.dot(x)).normalize_or_zero();
@@ -1689,10 +1808,7 @@ fn evaluate_constraint<S: NodeSockets + ?Sized>(
     let world_point = |node_id: &str, socket_name: &str| -> Option<DVec3> {
         let pose = resolved.pose(node_id)?;
         let node = graph.node(node_id)?;
-        let socket = match root_socket(socket_name) {
-            Some(socket) if node.kind == NodeKind::Venue => socket,
-            _ => find_socket(&sockets.sockets(node), socket_name)?,
-        };
+        let socket = find_socket(&sockets_of(sockets, node), socket_name)?;
         Some(pose.world.transform_point3(socket.position))
     };
     let status = match (
@@ -1802,6 +1918,20 @@ pub fn invert_placement(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// A wall is as light as the venue says, within what paint can be, and
+    /// the grey it always was until someone chooses.
+    #[test]
+    fn a_wall_is_painted_within_what_paint_can_be() {
+        let mut params = Params::default();
+        assert_eq!(wall_shade(&params), WALL_SHADE);
+        params.set(WALL_SHADE_PARAM, 0.5);
+        assert_eq!(wall_shade(&params), 0.5);
+        for (asked, limit) in [(-3.0, WALL_SHADES.start()), (9.0, WALL_SHADES.end())] {
+            params.set(WALL_SHADE_PARAM, asked);
+            assert_eq!(wall_shade(&params), *limit);
+        }
+    }
 
     /// A socket table keyed by catalog ref, which is all the resolver needs of
     /// the geometry — no GLB, no generator, no GPU.
@@ -2577,6 +2707,67 @@ mod tests {
             (position.z - (6.0 - MOVER_STANDOFF)).abs() < 1e-12,
             "at {position:?}"
         );
+    }
+
+    /// A room with a size has walls. A light on one sits on that wall and
+    /// shines into the room; `v` on a wall is up it. A room with no size has
+    /// none.
+    #[test]
+    fn a_sized_room_has_walls_that_face_in() {
+        let (width, depth, height) = (10.0, 8.0, 5.0);
+        let hang = |room: Node, face: &str, v: f64| {
+            let mut graph = VenueGraph::new(room);
+            let mut light = node("light", NodeKind::Fixture, "mover");
+            light.params = on_floor(0.0, v, 0.0);
+            graph.insert(light);
+            graph
+                .attach(
+                    "light",
+                    Edge {
+                        parent: "venue".into(),
+                        my_socket: "clamp".into(),
+                        their_socket: face.into(),
+                        roll: 0.0,
+                    },
+                    &table(),
+                )
+                .map(|()| {
+                    let (at, rot) = resolve(&graph, &table())
+                        .pose("light")
+                        .unwrap()
+                        .data_basis();
+                    (at, rot * DVec3::NEG_Z)
+                })
+        };
+        let mut room = root();
+        for (key, metres) in ROOM_PARAMS.into_iter().zip([width, depth, height]) {
+            room.params.set(key, metres);
+        }
+        let near = |a: f64, b: f64| (a - b).abs() <= MOVER_STANDOFF + 1e-9;
+
+        // Data space: `y` runs upstage, `z` is up.
+        let (at, beam) = hang(room.clone(), "wall_back", 0.0).unwrap();
+        assert!(
+            near(at.y, depth / 2.0) && near(at.z, height / 2.0),
+            "{at:?}"
+        );
+        assert!(
+            beam.y < -0.99,
+            "the back wall shines at the house: {beam:?}"
+        );
+        let (raised, _) = hang(room.clone(), "wall_back", 1.0).unwrap();
+        assert!((raised.z - at.z - 1.0).abs() < 1e-9, "{at:?} to {raised:?}");
+
+        for side in ["wall_left", "wall_right"] {
+            let (at, beam) = hang(room.clone(), side, 0.0).unwrap();
+            assert!(near(at.x.abs(), width / 2.0), "{side}: {at:?}");
+            assert!(beam.x * at.x < 0.0, "{side} shines back across: {beam:?}");
+        }
+        let (left, _) = hang(room.clone(), "wall_left", 0.0).unwrap();
+        let (right, _) = hang(room.clone(), "wall_right", 0.0).unwrap();
+        assert!(left.x * right.x < 0.0, "the side walls face each other");
+
+        assert!(hang(root(), "wall_back", 0.0).is_err());
     }
 
     #[test]

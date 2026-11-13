@@ -757,10 +757,13 @@ fn live_async_presentation_matches_deterministic_capture_without_ui_polling() {
         rot: [0.0, 0.0, 0.0],
         scale: 1.0,
     };
-    let proof = scene(
+    let mut proof = scene(
         probe_settings([-6.0, -4.0, 8.0], 1.4, true),
         vec![proof_piece()],
     );
+    // A live view takes its bounced light when the bake is done and a still
+    // waits for it: what is compared here is the presentation.
+    proof.render.bounce.enabled = false;
     let definitions = BTreeMap::new();
     let build = |library: &mut Library| {
         build_frame_with(&proof, &definitions, &|_, _| None, 0.0, library).unwrap()

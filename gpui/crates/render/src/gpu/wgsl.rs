@@ -53,25 +53,24 @@ pub(super) fn composite_wgsl() -> String {
 
 /// The scene module's source.
 ///
-/// The local reflection probes (`probes.rs`) are in it: the scene pass
-/// samples them, and their relight is this module with its entry points
-/// appended, so a probe texel is lit by the functions that light the surface
-/// it stands for. The light-index prelude is authored against group 1 (the
+/// The bounced light (`bounce.rs`) is in it: the scene pass samples it, and
+/// its relight is this module with its entry point appended, so a disc is
+/// lit by the functions that light the surface it stands for. The light-index prelude is authored against group 1 (the
 /// haze pass's slot); the surface pass carries the same bindings inside its
 /// group 3, so its copy is rebound by this one documented replace.
 pub(super) fn scene_wgsl() -> String {
     format!(
         "{}{}{}{}{}{}{}{}{}{}",
         scene_bindings_wgsl(),
-        crate::probes::prelude(),
-        include_str!("../shaders/probe_sample.wgsl"),
+        crate::bounce::prelude(),
+        include_str!("../shaders/bounce_sample.wgsl"),
+        include_str!("../shaders/bounce_lookup.wgsl"),
         crate::light_index::prelude().replace("@group(1)", "@group(3)"),
         include_str!("../shaders/fixture_light.wgsl"),
         include_str!("../shaders/panel.wgsl"),
         include_str!("../shaders/visibility.wgsl"),
         include_str!("../shaders/scene.wgsl"),
         include_str!("../shaders/floor.wgsl"),
-        include_str!("../shaders/probe_debug.wgsl"),
     )
 }
 

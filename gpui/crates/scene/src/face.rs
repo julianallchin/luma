@@ -21,7 +21,7 @@
 use crate::catalog::Geometry;
 use crate::distribute::Feature;
 use crate::sockets::ResolvedSocket;
-use crate::venue::{root_socket, Node, NodeKind, NodeSockets};
+use crate::venue::{root_face_size, sockets_of, Node, NodeKind};
 use glam::DVec3;
 
 use crate::catalog::{node_params, VenueSockets};
@@ -38,25 +38,38 @@ pub struct HostFace {
     pub socket: ResolvedSocket,
     /// How long it is and how short a change to that length the host admits.
     pub feature: Feature,
+    /// How wide it is across that length: a deck top is a surface with room
+    /// for a point off its middle line, a truss face barely any.
+    pub width: Feature,
 }
 
 /// The named face of a host node, or `None` if the node has no such socket.
 ///
-/// The root's two synthesized planes ([`crate::venue::root_socket`]) are
-/// answered here too, so "on the floor" and "on this truss" are one call.
+/// The room's own faces ([`crate::venue::root_sockets`]) are answered here
+/// too, so "on the floor", "on that wall" and "on this truss" are one call.
 #[must_use]
 pub fn host_face(sockets: &VenueSockets, node: &Node, name: &str) -> Option<HostFace> {
+    let socket = sockets_of(sockets, node)
+        .into_iter()
+        .find(|s| s.name == name)?;
     if node.kind == NodeKind::Venue {
-        if let Some(socket) = root_socket(name) {
-            return Some(HostFace {
-                socket,
-                feature: Feature::unbounded(),
-            });
-        }
+        let size = root_face_size(&node.params, name);
+        let side = |metres: Option<f64>| {
+            metres.map_or_else(Feature::unbounded, |m| Feature::bounded(m, None))
+        };
+        return Some(HostFace {
+            socket,
+            feature: side(size.map(|(along, _)| along)),
+            width: side(size.map(|(_, across)| across)),
+        });
     }
-    let socket = sockets.sockets(node).into_iter().find(|s| s.name == name)?;
     let feature = extent_along(sockets, node, socket.tangent);
-    Some(HostFace { socket, feature })
+    let width = extent_along(sockets, node, socket.normal.cross(socket.tangent));
+    Some(HostFace {
+        socket,
+        feature,
+        width,
+    })
 }
 
 /// The host's size along one of its own local axes, as a distributable feature.

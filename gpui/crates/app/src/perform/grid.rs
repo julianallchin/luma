@@ -160,9 +160,8 @@ fn tabs(
         .children(tabs)
         .when(setup, |row| {
             row.child(
-                float::btn("+", "perform-page-add")
+                float::icon_btn(luma_ui::icons::IconName::Plus, "perform-page-add")
                     .id("perform-page-add")
-                    .text_size(px(16.))
                     .on_click(on_edit(target, app, Edit::AddPage))
                     .agent_node(Role::Button, "Add page"),
             )
@@ -440,7 +439,6 @@ fn slot(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(20.))
                 .text_color(if open {
                     accent
                 } else {
@@ -448,7 +446,7 @@ fn slot(
                 })
                 .cursor_pointer()
                 .hover(|style| style.border_color(accent).text_color(accent))
-                .child("+")
+                .child(gpui_component::Icon::new(luma_ui::icons::IconName::Plus).size(px(16.)))
                 .on_click(on_edit(target, app, Edit::Adding(Some((column, row)))))
                 .children(open.then(|| super::add::menu(state, target, app)))
                 .agent_node(

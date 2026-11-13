@@ -1,4 +1,5 @@
-//! Physical DMX output: one frame per tick, handed to every transport.
+//! Physical output: one frame per tick, handed to every transport. DMX
+//! here; laser projectors, which a DAC plays, in [`laser`].
 //!
 //! The output loop renders the light state into 512-slot universes once and
 //! publishes the result as the *latest* frame. Each driver — Art-Net, USB
@@ -8,6 +9,8 @@
 //! universe with no route is sent nowhere.
 
 mod artnet;
+mod ether_dream;
+mod laser;
 mod usb;
 
 use std::collections::HashMap;
@@ -17,7 +20,9 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
 use crate::fixtures::engine;
+use crate::laser::LaserRig;
 use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
+use crate::models::lasers::{LaserDevice, LaserOutput, LaserRoute};
 use crate::models::patch::{DmxRoute, OutputDevice};
 use crate::models::universe::UniverseState;
 use crate::settings::AppSettings;
@@ -114,6 +119,9 @@ pub struct OutputHub {
     max_dimmer: AtomicU8,
     shared: Arc<Shared>,
     drivers: Vec<Box<dyn OutputDriver>>,
+    lasers: Arc<laser::Shared>,
+    laser_solve: Mutex<laser::Solve>,
+    laser_drivers: Vec<Box<dyn laser::LaserDriver>>,
 }
 
 impl OutputHub {
@@ -135,6 +143,11 @@ impl OutputHub {
             Box::new(artnet::ArtNetDriver::start(shared.clone())),
             Box::new(usb::UsbDriver::start(shared.clone())),
         ];
+        let lasers = Arc::new(laser::Shared::new(
+            crate::database::local::outputs::laser_routes(pool).await?,
+        ));
+        let laser_drivers: Vec<Box<dyn laser::LaserDriver>> =
+            vec![Box::new(ether_dream::EtherDream::start(lasers.clone()))];
         Ok(Self {
             render: Mutex::new(Render {
                 patched_fixtures: Vec::new(),
@@ -145,6 +158,9 @@ impl OutputHub {
             max_dimmer: AtomicU8::new(settings.max_dimmer),
             shared,
             drivers,
+            lasers,
+            laser_solve: Mutex::default(),
+            laser_drivers,
         })
     }
 
@@ -190,9 +206,16 @@ impl OutputHub {
         }
     }
 
-    /// Render `state` into universes and hand them to the drivers. Cheap to
-    /// call from any thread: it never touches a socket or a device.
+    /// Render `state` for every transport and hand it to the drivers. Cheap
+    /// to call from any thread: it never touches a socket or a device.
     pub fn publish(&self, state: &UniverseState) {
+        let master = f32::from(self.max_dimmer.load(Ordering::Relaxed)) / 100.0;
+        self.publish_dmx(state, master);
+        let solve = self.laser_solve.lock().unwrap_or_else(|e| e.into_inner());
+        laser::publish(&self.lasers, &solve, state, f64::from(master));
+    }
+
+    fn publish_dmx(&self, state: &UniverseState, master: f32) {
         if !self.shared.enabled.load(Ordering::Relaxed) {
             return;
         }
@@ -205,7 +228,7 @@ impl OutputHub {
             &render.patched_fixtures,
             &render.fixture_definitions,
             Some(&render.last_universe_buffers),
-            f32::from(self.max_dimmer.load(Ordering::Relaxed)) / 100.0,
+            master,
             luma_scene::strobe::clock(),
         );
         if universes.is_empty() {
@@ -220,6 +243,64 @@ impl OutputHub {
     pub fn devices(&self) -> Vec<OutputDevice> {
         self.drivers.iter().flat_map(|d| d.devices()).collect()
     }
+
+    /// The rig whose scans are solved each tick.
+    pub fn update_lasers(&self, rig: LaserRig) {
+        self.laser_solve
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .rig = rig;
+    }
+
+    /// Replace the table of which DAC plays each projector.
+    pub fn set_laser_routes(&self, routes: Vec<LaserRoute>) {
+        self.lasers.set_routes(routes);
+    }
+
+    /// Turn laser output on or off. It is off at every launch and is never
+    /// stored: nothing reaches a DAC until someone here turns it on.
+    pub fn set_laser_output(&self, on: bool) {
+        self.lasers.set_on(on);
+    }
+
+    /// Show `projector`'s test pattern in place of what it would play, or
+    /// with `None` show none.
+    pub fn set_laser_test(&self, projector: Option<String>) {
+        self.laser_solve
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .testing = projector;
+    }
+
+    /// Whether a test pattern is showing, which needs frames though nothing
+    /// plays.
+    pub fn testing_lasers(&self) -> bool {
+        self.lasers.on.load(Ordering::Relaxed)
+            && self
+                .laser_solve
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .testing
+                .is_some()
+    }
+
+    pub fn laser_output(&self) -> LaserOutput {
+        LaserOutput {
+            on: self.lasers.on.load(Ordering::Relaxed),
+            testing: self
+                .laser_solve
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .testing
+                .clone(),
+            links: self.lasers.links(),
+        }
+    }
+
+    /// Every DAC any laser driver can see, in driver order.
+    pub fn laser_devices(&self) -> Vec<LaserDevice> {
+        self.laser_drivers.iter().flat_map(|d| d.devices()).collect()
+    }
 }
 
 impl Drop for OutputHub {
@@ -229,6 +310,8 @@ impl Drop for OutputHub {
         self.shared.frames.published.notify_all();
         // Dropping the drivers joins their threads, each blacking out first.
         self.drivers.clear();
+        self.lasers.shutdown.store(true, Ordering::Relaxed);
+        self.laser_drivers.clear();
     }
 }
 

@@ -65,14 +65,17 @@ pub fn ev_for_lux(lux: f32) -> f32 {
 /// - **−6 EV, 12,800 lx**, the brightest light it adapts to: a stage lit for
 ///   broadcast (1,000 to 2,000 lx of key) with the beams of a full show on top
 ///   of it, and short of daylight.
-/// - **+4 EV, 12.5 lx**, the darkest: a dark show, lit by nothing but its
-///   fixtures. A concert video camera wide open — ISO 6400, f/2.8, 1/50 s,
-///   EV100 2.6 — is correctly exposed for an incident reading of about 12 lx
-///   (EV100 = log2(E·100/C)). Below it a dim cue is meant to look dim, not be
-///   lifted to grey.
+/// - **+7 EV, about 1.6 lx**, the darkest: a blacked-out house seen by an
+///   eye that has had its minute in the dark, looking the way the light is
+///   going. Haze sends some thirty times less light back toward its source
+///   than on ahead (`haze_phase.rs`), five stops, so a show metered from the
+///   house at 12 lx, where a concert video camera wide open is correctly
+///   exposed, is a 1.5 lx scene from behind its rig. Below this a dim cue
+///   is meant to look dim, not be lifted to grey, and [`ADAPTATION`] keeps
+///   a share of every stop in the picture on the way down.
 ///
 /// The 2^n lux values keep the ends whole stops.
-pub const ADAPT_EV: std::ops::RangeInclusive<f32> = -6.0..=4.0;
+pub const ADAPT_EV: std::ops::RangeInclusive<f32> = -6.0..=7.0;
 
 /// The share of a change in the light that metering makes up for, from the
 /// room at [`METER_LUX`]: the rest shows in the picture. All of it, and a
@@ -104,20 +107,14 @@ pub fn cone_intensity(lumens: f32, cos_beam: f32, cos_field: f32) -> f32 {
         / luma_scene::luminaire::profile_solid_angle(cos_beam, cos_field)
 }
 
-/// Scene-linear radiance per unit of a laser projector's light, per metre of
-/// beam and unit scattering, as `laser.wgsl` reads it (`laser.rs`'s `GAIN`).
+/// Scene-linear radiance per lumen of a laser beam, per metre of beam and
+/// unit scattering, as `laser.wgsl` reads it (`laser.rs`'s `GAIN`).
 ///
-/// One unit is a full-white beam of [`LASER_LUMENS`]. A haze cone scatters
-/// `σ` times its phase (relative to isotropic) per lumen-per-square-metre
-/// crossing it, at [`SCENE_PER_NIT`]; a laser beam is the same light in a
-/// line, so its gain is the same scale times its lumens.
-pub const LASER_GAIN: f32 = SCENE_PER_NIT * LASER_LUMENS;
-
-/// A club RGB laser projector's white, lumens: about 3 W of red, green and
-/// blue diodes (a mid-size show laser) at about 200 lm/W for a white mix of
-/// 638, 520 and 450 nm (683 lm/W × V(λ), weighted by the power each needs
-/// for white: green carries most of it at about 480 lm/W).
-const LASER_LUMENS: f32 = 600.0;
+/// A haze cone scatters `σ` times its phase (relative to isotropic) per
+/// lumen-per-square-metre crossing it, at [`SCENE_PER_NIT`]; a laser beam is
+/// the same light in a line. A projector says how many lumens its diodes
+/// give (`LaserScan::light`).
+pub const LASER_GAIN: f32 = SCENE_PER_NIT;
 
 #[cfg(test)]
 mod tests {
@@ -162,9 +159,9 @@ mod tests {
     }
 
     #[test]
-    fn adaptation_spans_a_dark_show_to_a_broadcast_stage() {
+    fn adaptation_spans_a_dark_house_to_a_broadcast_stage() {
         const BRIGHTEST_LUX: f32 = 12_800.0;
-        const DARKEST_LUX: f32 = 12.5;
+        const DARKEST_LUX: f32 = 1.5625;
         assert_eq!(*ADAPT_EV.start(), ev_for_lux(BRIGHTEST_LUX));
         assert_eq!(*ADAPT_EV.end(), ev_for_lux(DARKEST_LUX));
         assert!(ADAPT_EV.contains(&ev_for_lux(METER_LUX)));

@@ -78,6 +78,7 @@ fn sample(column: &str) -> Option<Option<&'static str>> {
     Some(match column {
         "kind" => Some("venue"),
         "verdict" => Some("unreviewed"),
+        "rating" => Some("1"),
         "lifecycle_state" => Some("active"),
         "engine" => Some("api"),
         "provider" => Some("anthropic"),

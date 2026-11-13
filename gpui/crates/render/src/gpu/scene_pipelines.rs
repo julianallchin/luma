@@ -14,8 +14,6 @@ pub(super) struct ScenePipelines {
     pub(super) grid: wgpu::RenderPipeline,
     pub(super) compass: wgpu::RenderPipeline,
     pub(super) cables: wgpu::RenderPipeline,
-    /// The reflection probes as small balls (`probe_debug.wgsl`).
-    pub(super) probe_debug: wgpu::RenderPipeline,
 }
 
 /// Everything [`ScenePipelines`] is built from, kept so a second sample count
@@ -102,31 +100,6 @@ impl ScenePipelineSource {
                 module: &self.scene,
                 entry_point: Some("fs_surface_depth"),
                 targets: &[Some(wgpu::TextureFormat::R16Float.into())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(depth_state(true)),
-            multisample: wgpu::MultisampleState {
-                count: samples,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let probe_debug = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("probe-debug"),
-            layout: Some(&self.layout),
-            vertex: wgpu::VertexState {
-                module: &self.scene,
-                entry_point: Some("vs_probe_debug"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &self.scene,
-                entry_point: Some("fs_probe_debug"),
-                targets: &[Some(SCENE_FORMAT.into())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
@@ -243,7 +216,6 @@ impl ScenePipelineSource {
             grid,
             compass,
             cables,
-            probe_debug,
         }
     }
 }

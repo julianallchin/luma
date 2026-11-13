@@ -642,7 +642,10 @@ mod tests {
             forward: Vec3::Y,
             right: Vec3::X,
             up: Vec3::Z,
-            half_field: [30.0, 30.0],
+            half_angle: 30.0,
+            light: [Vec3::X, Vec3::Y, Vec3::Z].map(|diode| diode * 600.0),
+            beam_m: 0.004,
+            divergence: 0.0015,
             rate: 30_000.0,
             points: (0..points)
                 .map(|i| LaserPoint {

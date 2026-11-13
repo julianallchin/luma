@@ -312,6 +312,14 @@ class GraphTrack(_ImmutableSnapshot):
         """Inspect an at=, bars= or seconds= range of the saved score."""
         return Window(self, self._document, self._range(**range))
 
+    def review(self):
+        """Measure the whole saved score from its render; prints as a short report.
+
+        Level and lit share per eight bars, how the level follows the music,
+        and what stays dark, each beside what finished shows measure.
+        """
+        return Review(self, self._document)
+
     def __repr__(self):
         return f"<luma.track {self.title!r} clips={len(self.clips)} editable={self.editable}>"
 
@@ -611,6 +619,11 @@ class Edit:
         """
         return Window(self._track, self._candidate, self._track._range(**range))
 
+    def review(self):
+        """Measure the whole candidate from its render, as luma.track.review() does."""
+        self._open()
+        return Review(self._track, self._candidate)
+
     def _preview(self, only=None):
         """Snapshot for the venue camera; isolation never mutates the draft.
 
@@ -691,6 +704,152 @@ class Applied(dict):
             lines.append(f"warning: {len(layers)} layers; clips of one look belong on one z")
         if reactive:
             lines.append(f"warning: {reactive} clips follow audio(); use it only when the user asked for a reactive look")
+        return "\n".join(lines)
+
+
+# One render call samples at most 2048 times, 16 to a beat.
+_REVIEW_CHUNK_BEATS = 120.0
+_REVIEW_BARS = 8
+# A light below this is off; a stretch of bars below _DARK has no light in it.
+_LIT, _DARK = 0.02, 0.002
+# A review warns only past what much-reworked shows measure, with room to
+# spare. Nine such shows on rigs of 16 to 700 lights gave: mean level 0.05 to
+# 0.24; quietest lit section at most 0.4 of the brightest; nine lights in ten
+# on for at most 18% of the show on a rig of a hundred lights or more; level
+# against the track's intensity per bar 0.27 to 0.81.
+_TOO_BRIGHT = 0.30
+_FLAT = 0.5
+_ALL_LIT, _BIG_RIG = 0.30, 100
+_OFF_MUSIC = 0.2
+
+
+def _spans(firsts, last):
+    """Eight-bar sections by first bar as "1-8, 25-40", up to the last bar."""
+    spans = []
+    for first in firsts:
+        if spans and spans[-1][1] == first:
+            spans[-1][1] = first + _REVIEW_BARS
+        else:
+            spans.append([first, first + _REVIEW_BARS])
+    return ", ".join(f"{first}-{min(end - 1, last)}" for first, end in spans)
+
+
+def _ranks(values):
+    import numpy as np
+    return np.argsort(np.argsort(values))
+
+
+class Review:
+    """A whole score measured from its render. It prints as a short report.
+
+    `level` is the mean brightness of the rig over the show, 0..1. `sections`
+    is one (first bar, level, lit share) per eight bars. `lit` is the share of
+    the rig that is on, averaged over the show; `all_lit` the share of the
+    show with nine lights in ten on; `never_lit` how many lights stay off.
+    `follows_music` is the rank correlation of level and the track's
+    intensity per bar over the bars that have light, or None when the track
+    has no bar analysis. `warnings` are the numbers past what finished shows
+    measure.
+    """
+
+    def __init__(self, track, document):
+        import numpy as np
+        clips = (document.get("clips") or {}).values()
+        start = track._beat_at(0.0)
+        end = max([start] + [clip["start"] + clip["duration"] for clip in clips])
+        if track.duration_s > 0:
+            end = track._beat_at(track.duration_s) - _TOUCH
+        if end <= start:
+            raise TrackError("there is nothing to review: the track has no length and the score no clips")
+        light, times = [], []
+        while start < end - _TOUCH:
+            stop = min(end, start + _REVIEW_CHUNK_BEATS)
+            output = Window(track, document, (start, stop)).output
+            light.append(np.asarray(output.values, dtype=float).max(axis=2))
+            times.extend(float(time) for time in output.times_s)
+            start = stop
+        light = np.concatenate(light, axis=1)
+        grid = track.bars
+        bars = np.array([max(1, grid.bar_at(track._beat_at(time))) for time in times])
+        level, lit = light.mean(axis=0), light > _LIT
+        share = lit.mean(axis=0)
+        self.clips, self.lights, self.bars = len(clips), light.shape[0], int(bars.max())
+        self.level = float(level.mean())
+        self.lit = float(share.mean())
+        self.all_lit = float((share >= 0.9).mean())
+        self.never_lit = int((~lit.any(axis=1)).sum())
+        section = (bars - 1) // _REVIEW_BARS
+        self.sections = tuple(
+            (int(index) * _REVIEW_BARS + 1, float(level[section == index].mean()),
+             float(share[section == index].mean()))
+            for index in np.unique(section))
+        self.follows_music = self._follows(track, bars, level)
+        self.warnings = self._warnings()
+
+    def _follows(self, track, bars, level):
+        import numpy as np
+        try:
+            intensity = np.asarray(_field(_field(track._features, "bars"), "intensity"), dtype=float)
+        except Exception:
+            return None
+        if intensity.ndim != 1:
+            return None
+        count = min(len(intensity), int(bars.max()))
+        if count < _REVIEW_BARS:
+            return None
+        dark = {first for first, mean, _ in self.sections if mean < _DARK}
+        built = [bar for bar in range(1, count + 1)
+                 if (bar - 1) // _REVIEW_BARS * _REVIEW_BARS + 1 not in dark and (bars == bar).any()]
+        if len(built) < _REVIEW_BARS:
+            return None
+        per_bar = np.array([level[bars == bar].mean() for bar in built])
+        music = intensity[np.array(built) - 1]
+        if not per_bar.std() or not music.std():
+            return None
+        return float(np.corrcoef(_ranks(music), _ranks(per_bar))[0, 1])
+
+    def _lit_sections(self):
+        return [section for section in self.sections if section[1] >= _DARK]
+
+    def _warnings(self):
+        found = []
+        lit = self._lit_sections()
+        if not lit:
+            return ("nothing lights at any point",)
+        if self.level > _TOO_BRIGHT:
+            found.append(f"mean level {self.level:.2f}; finished shows sit between 0.05 and 0.25")
+        top = max(section[1] for section in lit)
+        quietest = min(section[1] for section in lit) / top
+        if len(lit) >= 4 and quietest > _FLAT:
+            found.append(f"the quietest section is {quietest:.0%} of the brightest; "
+                         "finished shows drop to 40% of it or lower somewhere")
+        if self.lights >= _BIG_RIG and self.all_lit > _ALL_LIT:
+            found.append(f"the whole rig is on {self.all_lit:.0%} of the time; "
+                         "finished shows on a rig this size keep that under 20%")
+        if self.follows_music is not None and self.follows_music < _OFF_MUSIC:
+            found.append(f"level follows the music {self.follows_music:.2f}; "
+                         "finished shows measure 0.3 to 0.8")
+        return tuple(found)
+
+    def __repr__(self):
+        lines = [f"review: {self.clips} clips over {self.bars} bars on {self.lights} lights"]
+        lit = self._lit_sections()
+        if lit:
+            first, top, _ = max(lit, key=lambda section: section[1])
+            lines.append(f"level: mean {self.level:.2f}; brightest in bars "
+                         f"{first}-{first + _REVIEW_BARS - 1} at {top:.2f}")
+            lines.append("by 8 bars against the brightest: " + " | ".join(
+                f"{first} {level / top:.1f}" for first, level, _ in self.sections))
+            never = f"; {self.never_lit} lights never light" if self.never_lit else ""
+            lines.append(f"lit: {self.lit:.0%} of the rig on average, "
+                         f"all of it {self.all_lit:.0%} of the time{never}")
+        if self.follows_music is not None:
+            lines.append(f"music: level follows the track's intensity {self.follows_music:.2f} "
+                         "(1 is brightest where the music is biggest)")
+        dark = [first for first, level, _ in self.sections if level < _DARK]
+        if dark and lit:
+            lines.append(f"dark: bars {_spans(dark, self.bars)}")
+        lines += [f"warning: {warning}" for warning in self.warnings]
         return "\n".join(lines)
 
 
@@ -847,7 +1006,8 @@ class Window(_ImmutableSnapshot):
         self._track = track
         self._document = copy.deepcopy(document)
         start, end = span
-        self.start_s, self.end_s = track._seconds_at(start), track._seconds_at(end)
+        # Seconds to beats and back leaves 0 a hair below zero, which the host refuses.
+        self.start_s, self.end_s = max(0.0, track._seconds_at(start)), track._seconds_at(end)
         if track.duration_s > 0 and self.end_s > track.duration_s:
             if self.start_s >= track.duration_s:
                 raise TrackError(f"window starts at {self.start_s:.3f} s, after the track ends at {track.duration_s:.3f} s")

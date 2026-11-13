@@ -70,6 +70,11 @@ pub(crate) enum Action {
         venue_id: SharedString,
         pattern_id: SharedString,
     },
+    /// Lift a projector's limit: light may then go where it was kept from.
+    RemoveLaserLimit {
+        venue_id: String,
+        projector_id: String,
+    },
     /// Switch the window to another venue and open one of its scores there:
     /// nothing is lost, but everything on screen changes.
     SwitchVenue {
@@ -146,6 +151,10 @@ impl Luma {
                 venue_id,
                 pattern_id,
             } => self.delete_perform_pattern(&venue_id, &pattern_id, cx),
+            Action::RemoveLaserLimit {
+                venue_id,
+                projector_id,
+            } => self.set_laser_limit(venue_id, projector_id, None, cx),
             Action::SwitchVenue {
                 venue_id,
                 track_id,

@@ -30,7 +30,9 @@ use uuid::Uuid;
 
 use crate::database::local::deletes;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
-use crate::models::venue_graph::{NodePlacement, VenueConstraint, VenueGraphRows, VenueNode};
+use crate::models::venue_graph::{
+    NodePlacement, VenueConstraint, VenueGraphRows, VenueMembership, VenueNode,
+};
 
 static RIG_GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -157,10 +159,20 @@ pub async fn get_graph(access: &mut impl AuthorizedVenue) -> Result<VenueGraphRo
         params.entry(node_id).or_default().insert(key, value);
     }
 
+    let memberships = sqlx::query_as::<_, VenueMembership>(
+        "SELECT id, fixture_id, group_id, head_index, display_order
+         FROM fixture_group_members WHERE venue_id = ? ORDER BY id ASC",
+    )
+    .bind(&venue_id)
+    .fetch_all(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to read venue group memberships: {e}"))?;
+
     Ok(VenueGraphRows {
         nodes,
         params,
         constraints,
+        memberships,
     })
 }
 

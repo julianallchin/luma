@@ -270,18 +270,18 @@ fn auto_exposure_meters_the_lit_part_of_the_frame() {
     );
     let mut metered = |intensity: f32, haze: f32, look: Look| shot(intensity, haze, look).0;
 
-    // A dim cue: the beam at a quarter, in light haze. It is past what the
-    // exposure opens for, so a dimmer one meters the same.
-    let dark_room = metered(0.25, 0.05, auto);
+    // A cue almost out: the beam at a hundredth, in light haze. It is past
+    // what the exposure opens for, so a dimmer one meters the same.
+    let dark_room = metered(0.01, 0.05, auto);
     assert_eq!(
         dark_room,
-        metered(0.125, 0.05, auto),
+        metered(0.005, 0.05, auto),
         "a dark room stops at the clamp"
     );
 
     // Compensation is added after the clamp, so it still moves a dark room.
     let lifted = metered(
-        0.25,
+        0.01,
         0.05,
         Look {
             exposure: Exposure {
@@ -350,9 +350,9 @@ fn a_sudden_light_closes_the_exposure_only_as_far_as_a_pupil() {
     };
     let dark = |time: f32| Frame {
         time,
-        ..hazy_frame(0.25, 0.4, 0.05, auto)
+        ..hazy_frame(0.01, 0.4, 0.05, auto)
     };
-    // The same beam a thousand times brighter, down the camera's throat.
+    // The same beam many thousand times brighter, down the camera's throat.
     let blinding = |time: f32| Frame {
         time,
         ..hazy_frame(4000.0, 1.0, 0.3, auto)
@@ -447,6 +447,65 @@ fn sun_frame(away_deg: f32, look: Look) -> Frame {
 /// Mean luma of one image column.
 fn column(pixels: &[u8], x: u32) -> f32 {
     (0..HEIGHT).map(|y| luma(pixels, x, y)).sum::<f32>() / HEIGHT as f32
+}
+
+/// The sun's glare does not change as the sun crosses the frame's edge: a
+/// lens just turned off it still shows its rays.
+#[test]
+fn the_suns_glare_is_the_same_on_both_sides_of_the_frames_edge() {
+    // Large enough that the disc is several pixels across in the frame.
+    const W: u32 = 768;
+    const H: u32 = 512;
+    let mut renderer = Renderer::new().unwrap();
+    let star = Glare {
+        style: GlareStyle::Star,
+        ..Glare::STAGE
+    };
+    let level = sun_frame(0.0, manual(star));
+    let fov = level.camera.fov_y_deg;
+    let elevation = level.sky.as_ref().unwrap().sun_direction.z.asin();
+    let focal = H as f32 * 0.5 / (fov.to_radians() * 0.5).tan();
+    let edge = (W as f32 * 0.5 / focal).atan().to_degrees();
+    let luma = |pixels: &[u8], x: u32, y: u32| {
+        let i = ((y * W + x) * 4) as usize;
+        0.2126 * f32::from(pixels[i])
+            + 0.7152 * f32::from(pixels[i + 1])
+            + 0.0722 * f32::from(pixels[i + 2])
+    };
+    // How far a ray stands out of the glare around it, along the column a
+    // twelfth of the frame's width in from the sun, with the sun `away`
+    // degrees to the side. The veil is smooth in the sky above the sun's
+    // own row; a ray is a ridge.
+    let mut ray = |away: f32| {
+        let glaring = renderer
+            .render(&sun_frame(away, manual(star)), W, H, 1)
+            .unwrap();
+        let plain = renderer
+            .render(&sun_frame(away, manual(Glare::OFF)), W, H, 1)
+            .unwrap();
+        crate::common::capture(&format!("edge-{away:.0}"), &glaring, W, H);
+        let inward = focal * away.to_radians().tan() - W as f32 / 12.0;
+        let added = |x: f32, y: u32| {
+            let x = (W as f32 * 0.5 + x).round() as u32;
+            luma(&glaring, x, y) - luma(&plain, x, y)
+        };
+        const SPAN: u32 = 12;
+        let sun_row = H as f32 * 0.5 - focal * elevation.tan() / away.to_radians().cos();
+        // The sun is on one side or the other; the glare is on its side.
+        [-inward, inward]
+            .into_iter()
+            .flat_map(|x| (SPAN..H - SPAN).map(move |y| (x, y)))
+            .filter(|(_, y)| (*y as f32) < sun_row - 2.0 * SPAN as f32)
+            .map(|(x, y)| added(x, y) - 0.5 * (added(x, y - SPAN) + added(x, y + SPAN)))
+            .fold(0.0, f32::max)
+    };
+    let inside = ray(edge - 2.0);
+    let outside = ray(edge + 2.0);
+    assert!(inside > 2.0, "the sun in the frame throws rays: {inside}");
+    assert!(
+        (outside / inside - 1.0).abs() < 0.3,
+        "its rays off the frame ({outside}) are its rays in it ({inside})"
+    );
 }
 
 /// A sun just past the frame's edge still veils it, as it veils a real

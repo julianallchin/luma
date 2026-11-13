@@ -251,21 +251,21 @@ class VenueGroupTests(unittest.TestCase):
         self.assertEqual(venue.generate_groups().names(), ("back_movers",))
         self.assertEqual(calls[-1], ("venue.generate_groups", {}))
 
-    def test_laser_zones_read_and_write_by_name(self) -> None:
+    def test_the_laser_window_reads_and_sets(self) -> None:
         calls = []
-        row = {"id": "z1", "venueId": "v", "name": "Crowd", "turn": [-40, 40], "tilt": [10, 25]}
 
         def host_call(method, payload):
             calls.append((method, payload))
-            return {"zones": [row]} if method == "venue.laser_zones" else {"zone": row}
+            return {"window": {"turn": [-40, 40], "tilt": [10, 25]}, "set": bool(payload)}
 
         venue = Venue({}, host_call=host_call, workspace=Path(tempfile.mkdtemp()))
-        [zone] = venue.laser_zones()
-        self.assertEqual((zone.id, zone.turn, zone.tilt), ("z1", (-40.0, 40.0), (10.0, 25.0)))
-        self.assertEqual(venue.laser_zone("Crowd", turn=(-40, 40), tilt=(10, 25)).id, "z1")
+        window = venue.laser_window()
+        self.assertEqual((window.turn, window.tilt, window.set), ((-40.0, 40.0), (10.0, 25.0), False))
+        self.assertEqual(calls[-1], ("venue.laser_window", {}))
+        self.assertTrue(venue.laser_window(turn=(-40, 40), tilt=(10, 25)).set)
         self.assertEqual(
             calls[-1],
-            ("venue.laser_zone", {"name": "Crowd", "turn": [-40.0, 40.0], "tilt": [10.0, 25.0]}),
+            ("venue.laser_window", {"turn": [-40.0, 40.0], "tilt": [10.0, 25.0]}),
         )
 
 
@@ -903,6 +903,32 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(
             self.host.last("venue.distribute")["layout"], {"kind": "at", "metres": 2.0}
         )
+
+    def test_a_light_placed_at_a_pair_keeps_both_numbers(self) -> None:
+        """A floor is a surface: the second number is how far toward the crowd,
+        and dropping it stands every light on the room's centre line."""
+        self.venue.place("a.qxf", at=(3.0, -4.5), mode="m")
+        payload = self.host.last("venue.distribute")
+        self.assertEqual(payload["layout"], {"kind": "point", "u": 3.0, "v": -4.5, "trim": 0.0})
+        self.assertIsNone(payload["hostNodeId"])
+        # Lifted, it is still one call: the height travels with the point.
+        self.venue.place("a.qxf", at=(3.0, -4.5), trim=5.0, mode="m")
+        self.assertEqual(self.host.last("venue.distribute")["layout"]["trim"], 5.0)
+        with self.assertRaises(LumaHostCallError):
+            self.venue.place("a.qxf", at=(1.0, 2.0, 3.0), mode="m")
+
+    def test_a_move_says_where_in_the_words_place_uses(self) -> None:
+        self.venue.move("light-1", at=(3.0, -4.5), trim=2.0)
+        payload = self.host.last("venue.move")
+        self.assertEqual(payload["layout"], {"kind": "point", "u": 3.0, "v": -4.5, "trim": 2.0})
+        self.assertFalse(payload["stay"])
+        # One number and no host: along the face it already hangs on.
+        self.venue.move("light-1", at=-2.0)
+        payload = self.host.last("venue.move")
+        self.assertEqual(payload["layout"], {"kind": "at", "metres": -2.0})
+        self.assertTrue(payload["stay"])
+        with self.assertRaises(LumaHostCallError):
+            self.venue.move("light-1")
 
     def test_two_ways_along_one_face_is_refused_before_the_host_sees_it(self) -> None:
         with self.assertRaises(LumaHostCallError):

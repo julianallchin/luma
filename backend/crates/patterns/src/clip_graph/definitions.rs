@@ -438,13 +438,7 @@ fn build(kind: Kind) -> Definition {
                 ("figures", wire(T::Figures, "[figure1, figure2]")),
                 ("alpha", share("1")),
             ],
-            vec![(
-                "zone",
-                SettingDef {
-                    options: &[],
-                    default: "",
-                },
-            )],
+            vec![],
         ),
         Kind::Along => (Produces::Coordinate, vec![], vec![]),
         Kind::Time => (

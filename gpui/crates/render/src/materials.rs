@@ -117,6 +117,16 @@ pub const VENUE_FLOOR: Material = Material {
     ..PLAIN
 };
 
+/// A room's walls and ceiling: matt paint, as light as the venue says
+/// ([`luma_scene::venue::wall_shade`]). The default is not black-box black:
+/// at a few percent a wall sends nothing back, and a room lit only by its
+/// own lamps is pools on a floor in the dark.
+pub const VENUE_WALL: Material = Material {
+    base_color: Vec3::splat(luma_scene::venue::WALL_SHADE),
+    roughness: 0.9,
+    ..PLAIN
+};
+
 /// Open ground outdoors. The base colour is set by the caller from the sky's
 /// ground albedo, so the near floor and the ground the sky bounces light off
 /// are one surface.

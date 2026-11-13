@@ -150,6 +150,12 @@ The transcript sticks to the bottom with a spring (`transcript::StickSpring`).
 - `model_picker.rs`: engine and model per thread.
 - `usage.rs`: the usage card, including cache reads and writes.
 - `subagents.rs`: the pill that counts running subagents.
+- `transcript.rs`: the rows, and the thumbs under a finished turn's reply. A
+  verdict names the user message that started the turn. The panel shows a
+  press at once and asks its host to store it (`ChatEvent::FeedbackGiven`);
+  when a thread opens it asks for the stored verdicts
+  (`ChatEvent::FeedbackRequested`, answered with `AgentChat::set_verdicts`).
+  A read-only panel has no thumbs.
 
 The composer declares the `TEXT_INPUT` key context, so `space` and `escape`
 bindings in `keymap.rs` do not fire while a person types.

@@ -93,23 +93,24 @@ async fn insert_score(
 
 /// Copy `score_id` — the row, the beat grid it names and every clip on it —
 /// into a new score of the same track in the same venue, named `name`, in one
-/// transaction. The copy is
-/// the caller's, as a score they created would be; a member may copy a score
-/// they can write.
+/// transaction. The copy is the caller's, as a score they created would be,
+/// whoever owns the source: copying is how someone else's score is edited.
 pub async fn duplicate_score(
     pool: &SqlitePool,
     score_id: &str,
     name: &str,
 ) -> Result<Score, String> {
-    let mut access = VenueAccess::<Write>::write(pool, VenueResource::Score(score_id)).await?;
+    let mut access =
+        VenueAccess::<Write>::write(pool, VenueResource::BesideScore(score_id)).await?;
     let owner = access.principal().to_owned();
     let copy_id = Uuid::new_v4().to_string();
     let source = get_score(&mut access, score_id).await?;
     // The copied clips are in the beats of the source's grid, so the copy
-    // names the same one.
+    // names the same one. It names its source too: the record would
+    // otherwise read the copy's clips as work somebody did again.
     sqlx::query(
-        "INSERT INTO scores (id, uid, track_id, venue_id, name, grid_id)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO scores (id, uid, track_id, venue_id, name, grid_id, copied_from_score_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&copy_id)
     .bind(&owner)
@@ -117,6 +118,7 @@ pub async fn duplicate_score(
     .bind(&source.venue_id)
     .bind(name)
     .bind(&source.grid_id)
+    .bind(score_id)
     .execute(access.connection())
     .await
     .map_err(|error| format!("insert the copy: {error}"))?;

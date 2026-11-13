@@ -48,10 +48,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{div, prelude::*, px, AnyElement, Entity, SharedString, Window};
+use gpui_component::Icon;
 use luma_lib::agent::{AgentChatMessage, AgentChatPart, Role, ToolPart, Transcript};
+use luma_lib::database::local::feedback::Verdict;
 use luma_md::render::{render_block, MD_LINE_HEIGHT, MD_TEXT_SIZE};
 use luma_md::{Block, BlockTree, IncrementalParser, RenderCache, RenderOptions, Syntax};
-use luma_ui::node::{Instrument, Role as NodeRole};
+use luma_ui::icons::IconName;
+use luma_ui::node::{AgentNode, Instrument, Role as NodeRole};
 
 use crate::chip;
 use crate::theme::{self, Theme};
@@ -853,7 +856,16 @@ pub struct RowCtx<'a> {
     /// The running turn's `python` calls that are waiting for the host's
     /// Python setup, by call id ([`crate::running::Live::awaiting_setup`]).
     pub awaiting_setup: &'a HashSet<String>,
+    /// The thumbs this row carries, on the last row of a turn that has ended.
+    pub verdict: Option<TurnVerdict>,
     pub theme: &'a Theme,
+}
+
+/// What a finished turn's thumbs show and act on.
+pub struct TurnVerdict {
+    /// The user message that started the turn, which is what a verdict names.
+    pub asked: SharedString,
+    pub verdict: Option<Verdict>,
 }
 
 impl RowCtx<'_> {
@@ -993,6 +1005,8 @@ pub fn row(
             .flex_none()
             .flex()
             .items_center()
+            .gap(px(theme::SPACE_SM))
+            .children(ctx.verdict.as_ref().map(|turn| thumbs(turn, ctx.chat)))
             .children(stamp.map(|stamp| {
                 div()
                     .opacity(0.0)
@@ -1024,6 +1038,50 @@ pub fn row(
         )
         .agent_node(NodeRole::Text, plain)
         .into_any_element()
+}
+
+/// A finished turn's thumbs: good and bad, the given one lit. Pressing the lit
+/// one takes the verdict back.
+///
+/// As tall as the lane they sit in, which is reserved under every reply, so
+/// their arrival at the end of a turn moves nothing. The first plate starts
+/// on the prose's edge: the transcript clips at that edge, so a plate pulled
+/// left of it to line its glyph up would lose its lit side.
+fn thumbs(turn: &TurnVerdict, chat: &Entity<AgentChat>) -> impl IntoElement {
+    const GLYPH: f32 = 13.0;
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(2.0))
+        .children(
+            [
+                (Verdict::Good, IconName::ThumbsUp, "Good response", "good"),
+                (Verdict::Bad, IconName::ThumbsDown, "Bad response", "bad"),
+            ]
+            .map(|(verdict, icon, label, key)| {
+                let active = turn.verdict == Some(verdict);
+                let (chat, asked) = (chat.clone(), turn.asked.clone());
+                luma_ui::toggle_paint(
+                    div()
+                        .size(px(theme::TIMESTAMP_LANE))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(luma_ui::radius::CONTROL))
+                        .cursor_pointer()
+                        .child(Icon::new(icon).size(px(GLYPH))),
+                    active,
+                )
+                .id(SharedString::from(format!("chat-{key}-{}", turn.asked)))
+                .on_click(move |_, _, cx| {
+                    chat.update(cx, |this, cx| this.judge(asked.clone(), verdict, cx));
+                })
+                .agent_node(NodeRole::Button, label)
+                .agent_focused(active)
+            }),
+        )
 }
 
 /// The user's turn: a translucent plate, right-aligned, never full width.

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod beat_validations;
 pub mod database;
 pub mod deletes;
+pub mod feedback;
 pub mod fixtures;
 pub mod folders;
 pub mod groups;

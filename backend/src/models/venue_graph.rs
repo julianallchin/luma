@@ -80,6 +80,20 @@ pub struct VenueConstraint {
     pub target_socket: String,
 }
 
+/// One `fixture_group_members` row: a light, or one head of it, in a group.
+///
+/// Carried with the graph because a light that leaves the room takes these
+/// with it, and a snapshot that brings the light back owes its groups too.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct VenueMembership {
+    pub id: String,
+    pub fixture_id: String,
+    pub group_id: String,
+    pub head_index: i64,
+    pub display_order: i64,
+}
+
 /// A whole venue's rows, as `get_venue_graph` returns them.
 ///
 /// Params come as one map per node rather than a flat row list: a caller that
@@ -91,6 +105,9 @@ pub struct VenueGraphRows {
     pub nodes: Vec<VenueNode>,
     pub params: BTreeMap<String, BTreeMap<String, f64>>,
     pub constraints: Vec<VenueConstraint>,
+    /// Which groups each light is in.
+    #[serde(default)]
+    pub memberships: Vec<VenueMembership>,
 }
 
 impl VenueGraphRows {
@@ -690,9 +707,7 @@ mod tests {
     fn rows(nodes: Vec<VenueNode>) -> VenueGraphRows {
         VenueGraphRows {
             nodes,
-            params: BTreeMap::new(),
-            constraints: Vec::new(),
+            ..VenueGraphRows::default()
         }
     }
-
 }

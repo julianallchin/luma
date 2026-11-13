@@ -545,7 +545,6 @@ mod tests {
     ) -> luma_patterns::laser::Element {
         luma_patterns::laser::Element {
             projector: "p".into(),
-            zone: String::new(),
             layer: 0,
             outline,
             s: 0.,

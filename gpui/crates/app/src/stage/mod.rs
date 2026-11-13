@@ -41,7 +41,7 @@ pub(crate) mod preview;
 mod row;
 mod scene;
 
-pub(crate) use build::Build;
+pub(crate) use build::{Build, Snapshot};
 pub(crate) use inspector::selection_controls;
 pub(crate) use layer::build_layer;
 pub(crate) use page::{controls, elements, StagePage, StageView};

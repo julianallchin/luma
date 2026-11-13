@@ -240,6 +240,16 @@ pub struct RenderSettings {
     /// the room is. `None` means the subject is not a room — a palette
     /// thumbnail, or a tracked contract capture — and no house is hung.
     pub house: Option<VenueEnvironment>,
+    /// The room's size, `[width, depth, height]` in metres, when it has one:
+    /// four walls and a ceiling are drawn around a floor centred on the
+    /// origin, and the house rig hangs under that ceiling. `None` is open
+    /// floor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<[f32; 3]>,
+    /// How light that room's walls and ceiling are painted, as
+    /// [`luma_scene::venue::wall_shade`].
+    #[serde(skip_serializing_if = "is_default_wall_shade")]
+    pub wall_shade: f32,
     /// The physically based sky, when the room is open air.
     ///
     /// `None` — the default everywhere, including every tracked contract
@@ -263,10 +273,10 @@ pub struct RenderSettings {
     pub geometry_shadows: bool,
     /// Paint cluster occupancy instead of authored PBR shading.
     pub cluster_debug: bool,
-    /// The local reflection probes: a view choice for this session, never
-    /// saved. Starts as [`ProbeView::PLAIN`].
+    /// The bounced light: a view choice for this session, never saved.
+    /// Starts as [`BounceView::ON`].
     #[serde(skip)]
-    pub probes: ProbeView,
+    pub bounce: BounceView,
     /// Vertical field of view, degrees.
     pub fov: f32,
     /// How much work the renderer may spend per frame. A device choice, not
@@ -281,27 +291,22 @@ pub struct RenderSettings {
     pub(crate) golden_shadow_eye: Option<[f32; 3]>,
 }
 
-/// The local reflection probes (`probes.rs`), as the view shows them.
+/// The bounced light (`bounce.rs`), as the view shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ProbeView {
-    /// Light surfaces from the probes over the stage, not the sky probe
-    /// alone.
+pub struct BounceView {
+    /// Light surfaces by what the lit stage sends on to them, not the
+    /// house's flat fill and the sky probe alone.
     pub enabled: bool,
-    /// Draw each probe as a small ball showing its cube.
-    pub debug: bool,
 }
 
-impl ProbeView {
-    /// On, balls off: where every view starts.
-    pub const PLAIN: Self = Self {
-        enabled: true,
-        debug: false,
-    };
+impl BounceView {
+    /// On: where every view starts.
+    pub const ON: Self = Self { enabled: true };
 }
 
-impl Default for ProbeView {
+impl Default for BounceView {
     fn default() -> Self {
-        Self::PLAIN
+        Self::ON
     }
 }
 
@@ -829,6 +834,8 @@ impl RenderSettings {
             show_cables: true,
             show_gizmos: true,
             house: None,
+            room: None,
+            wall_shade: luma_scene::venue::WALL_SHADE,
             sky: None,
             debug_view: DebugView::Pbr,
             look: Look::NEUTRAL,
@@ -836,7 +843,7 @@ impl RenderSettings {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
-            probes: ProbeView::PLAIN,
+            bounce: BounceView::ON,
             fov,
             quality: Quality::High,
             golden_shadow_eye: None,
@@ -866,6 +873,8 @@ impl RenderSettings {
             show_cables: true,
             show_gizmos: true,
             house: None,
+            room: None,
+            wall_shade: luma_scene::venue::WALL_SHADE,
             sky: None,
             debug_view: DebugView::Pbr,
             look: Look::NEUTRAL,
@@ -873,7 +882,7 @@ impl RenderSettings {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
-            probes: ProbeView::PLAIN,
+            bounce: BounceView::ON,
             fov,
             quality: Quality::High,
             golden_shadow_eye: None,
@@ -919,6 +928,8 @@ impl RenderSettings {
             show_cables: true,
             show_gizmos: true,
             house: Some(environment),
+            room: None,
+            wall_shade: luma_scene::venue::WALL_SHADE,
             sky: fill.sky,
             debug_view: DebugView::Pbr,
             look: Look::NEUTRAL,
@@ -926,7 +937,7 @@ impl RenderSettings {
             fixture_shadows: true,
             geometry_shadows: false,
             cluster_debug: false,
-            probes: ProbeView::default(),
+            bounce: BounceView::default(),
             fov,
             quality: Quality::High,
             golden_shadow_eye: None,
@@ -954,6 +965,10 @@ struct RenderSettingsWire {
     show_gizmos: Option<bool>,
     #[serde(default)]
     house: Option<VenueEnvironment>,
+    #[serde(default)]
+    room: Option<[f32; 3]>,
+    #[serde(default)]
+    wall_shade: Option<f32>,
     #[serde(default)]
     sky: Option<SkyParams>,
     #[serde(default)]
@@ -983,6 +998,22 @@ struct RenderSettingsWire {
     haze_density: Option<f32>,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_wall_shade(shade: &f32) -> bool {
+    *shade == luma_scene::venue::WALL_SHADE
+}
+
+impl RenderSettings {
+    /// The room's size when it has walls to draw: an indoor room with a
+    /// size. Open air has no walls, whatever size the venue was given while
+    /// it was indoors.
+    #[must_use]
+    pub fn walls(&self) -> Option<[f32; 3]> {
+        self.room
+            .filter(|_| matches!(self.house, Some(VenueEnvironment::Indoor { .. })))
+    }
+}
+
 impl<'de> Deserialize<'de> for RenderSettings {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1009,6 +1040,8 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 // environments and are about materials and beams; a house hung
                 // over them would rewrite all nineteen.
                 house: wire.house,
+                room: wire.room,
+                wall_shade: wire.wall_shade.unwrap_or(luma_scene::venue::WALL_SHADE),
                 // Absent means no atmosphere, which is what every tracked
                 // contract image was captured under.
                 sky: wire.sky,
@@ -1023,7 +1056,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 fixture_shadows: wire.fixture_shadows.unwrap_or(true),
                 geometry_shadows: wire.geometry_shadows,
                 cluster_debug: wire.cluster_debug,
-                probes: ProbeView::default(),
+                bounce: BounceView::default(),
                 fov: wire.fov,
                 quality: wire.quality,
                 golden_shadow_eye: None,
@@ -1354,8 +1387,14 @@ impl Scene {
     /// [`crate::house::lamps`] turns that into a minimum room rather than
     /// refusing, since an empty venue is exactly the one an operator is about
     /// to start building in.
+    ///
+    /// A room with a size is that size, whatever is in it.
     #[must_use]
     pub fn room_bounds(&self) -> luma_scene::Aabb {
+        if let Some([width, depth, height]) = self.render.walls() {
+            let half = glam::Vec3::new(width / 2.0, depth / 2.0, 0.0);
+            return luma_scene::Aabb::from_points([-half, half + glam::Vec3::Z * height]);
+        }
         let mut bounds = luma_scene::Aabb::from_points(
             self.fixtures
                 .iter()

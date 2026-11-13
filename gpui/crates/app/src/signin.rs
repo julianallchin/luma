@@ -229,6 +229,7 @@ impl Luma {
         self.score_switcher = luma_ui::dialog::Popup::default();
         self.settings = None;
         self.terms = None;
+        self.about_you = None;
         self.sign_in_generation = self.sign_in_generation.wrapping_add(1);
         let generation = self.sign_in_generation;
         self.sign_in = Some(Box::new(SignIn::new(generation, expired, cx)));

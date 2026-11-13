@@ -9,6 +9,8 @@ use luma_patterns::{self as p, FeatureRequest};
 pub(crate) struct TrackFeatures {
     clock: p::BeatTimeline,
     mix: super::ResidentAudio,
+    /// The hash of the track file the mix was decoded from.
+    track_hash: String,
     /// Per band, its lowest and highest energy over the whole track.
     ranges: std::sync::Mutex<std::collections::HashMap<[u64; 2], (f64, f64)>>,
 }
@@ -17,6 +19,11 @@ pub(crate) struct TrackFeatures {
 const RANGE_STEP: f64 = 0.05;
 
 impl TrackFeatures {
+    /// The hash of the track file these features read.
+    pub(crate) fn track_hash(&self) -> &str {
+        &self.track_hash
+    }
+
     fn band(&self, request: &FeatureRequest, seconds: f64) -> p::Result<f64> {
         crate::audio::spectrum::sample_band(
             &self.mix,
@@ -76,6 +83,7 @@ pub(crate) async fn prepare(
     Ok(std::sync::Arc::new(TrackFeatures {
         clock: grid.timeline().map_err(|e| e.to_string())?,
         mix,
+        track_hash: path.track_hash,
         ranges: Default::default(),
     }))
 }
@@ -94,6 +102,7 @@ mod tests {
         let features = TrackFeatures {
             clock: p::BeatTimeline::new(vec![0., 0.5, 1., 1.5], 0.).unwrap(),
             mix: Arc::new(samples.clone()),
+            track_hash: String::new(),
             ranges: Default::default(),
         };
         let request = FeatureRequest {
@@ -120,6 +129,7 @@ mod tests {
         let features = TrackFeatures {
             clock: p::BeatTimeline::new(vec![0., 0.5, 1., 1.5], 0.).unwrap(),
             mix: Arc::new(samples),
+            track_hash: String::new(),
             ranges: Default::default(),
         };
         let request = FeatureRequest {

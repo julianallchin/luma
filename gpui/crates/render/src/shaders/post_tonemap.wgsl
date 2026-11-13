@@ -14,6 +14,14 @@ struct Tonemap {
     sun: vec4<f32>,
     // rgb: the sun's light times the veil's scale, w: focal length, pixels.
     sun_veil: vec4<f32>,
+    // xy: the sun's centre, output pixels; z: output pixels per glare texel;
+    // w: half the spread of the sun's disc on the glare grid, texels.
+    sun_at: vec4<f32>,
+    // rgb: the sun's light as the glare grid would hold it, summed over its
+    // texels, before exposure. w: 0 when the sun has no place on the grid.
+    sun_source: vec4<f32>,
+    // xy: the glare grid, texels; zw: how far its kernel reaches, texels.
+    kernel: vec4<f32>,
 };
 
 // Set for a compositor that presents HDR: half-float linear light where 1.0
@@ -30,6 +38,9 @@ override TEN_BIT_OUTPUT: bool = false;
 @group(0) @binding(2) var glare_tex: texture_2d<f32>;
 @group(0) @binding(3) var linear_clamp: sampler;
 @group(0) @binding(4) var<storage, read> exposure: vec4<f32>;
+// The glare kernel the frame's light is convolved with (`psf.rs`): the grid's
+// texels, row-major, offset zero at texel 0 and negative offsets wrapped.
+@group(0) @binding(5) var<storage, read> kernel_texels: array<vec4<f32>>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -72,10 +83,43 @@ fn vos(theta: f32) -> f32 {
         + 0.138 * 72.37 / (t * t);
 }
 
-/// The veil of a sun off the frame (`post.rs`, `off_frame_sun`): the
+/// The glare kernel `offset` texels from its source, between its texels.
+fn kernel_at(offset: vec2<f32>) -> vec3<f32> {
+    let grid = vec2<i32>(cfg.kernel.xy);
+    let base = floor(offset);
+    let f = offset - base;
+    var sum = vec3<f32>(0.0);
+    for (var j = 0; j < 2; j++) {
+        for (var i = 0; i < 2; i++) {
+            let d = vec2<i32>(base) + vec2<i32>(i, j);
+            if any(d < -grid / 2) || any(d >= grid / 2) {
+                continue;
+            }
+            let at = (d + grid) % grid;
+            let weight = mix(1.0 - f.x, f.x, f32(i)) * mix(1.0 - f.y, f.y, f32(j));
+            sum += weight * kernel_texels[at.y * grid.x + at.x].rgb;
+        }
+    }
+    return sum;
+}
+
+/// What the convolution would put `offset` texels from the sun's centre:
+/// the kernel, over four taps spread as wide as the sun's disc is once the
+/// glare grid has averaged it and the glare texture's filter has read it.
+fn sun_kernel(offset: vec2<f32>) -> vec3<f32> {
+    let a = cfg.sun_at.w;
+    return 0.25 * (kernel_at(offset + vec2<f32>(a, a))
+        + kernel_at(offset + vec2<f32>(-a, a))
+        + kernel_at(offset + vec2<f32>(a, -a))
+        + kernel_at(offset + vec2<f32>(-a, -a)));
+}
+
+/// The glare of a sun off the frame (`post.rs`, `off_frame_sun`): the
 /// convolution sees only light inside the frame, and a lens is lit by the
-/// sun past its edge too.
-fn sun_veil(frag: vec2<f32>, size: vec2<f32>) -> vec3<f32> {
+/// sun past its edge too. As far as the kernel reaches it is the kernel
+/// itself, rays and all, so the glare is the same on both sides of the edge;
+/// past that it is the veil alone, which has no end.
+fn sun_glare(frag: vec2<f32>, size: vec2<f32>) -> vec3<f32> {
     if cfg.sun.w <= 0.0 {
         return vec3<f32>(0.0);
     }
@@ -85,7 +129,16 @@ fn sun_veil(frag: vec2<f32>, size: vec2<f32>) -> vec3<f32> {
         1.0,
     ));
     let theta = degrees(acos(clamp(dot(ray, cfg.sun.xyz), -1.0, 1.0)));
-    return cfg.sun.w * vos(theta) * cfg.sun_veil.rgb * exposure.w;
+    var glare = vos(theta) * cfg.sun_veil.rgb;
+    if cfg.sun_source.w > 0.0 {
+        let offset = (frag - cfg.sun_at.xy) / cfg.sun_at.z;
+        // The kernel's own fade toward the grid's padding (`psf::kernel`).
+        let window = 1.0 - smoothstep(0.6, 1.0, length(offset / cfg.kernel.zw));
+        if window > 0.0 {
+            glare = glare * (1.0 - window) + sun_kernel(offset) * cfg.sun_source.rgb;
+        }
+    }
+    return cfg.sun.w * glare * exposure.w;
 }
 
 // Sensor noise at `amount = 1`, in exposed scene-linear light at unit gain.
@@ -146,7 +199,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let headroom = select(1.0, max(cfg.params.w, 1.0), HDR_OUTPUT);
     var display = hdr_expand(tone_curve(scene, u32(cfg.params.x + 0.5)), headroom);
     if cfg.params.y > 0.0 {
-        let glare = cfg.params.y * (bspline(uv * cfg.glare.xy) + sun_veil(frag.xy, size));
+        let glare = cfg.params.y * (bspline(uv * cfg.glare.xy) + sun_glare(frag.xy, size));
         // Light added over the picture, saturating at the display's white:
         // faint glare keeps its colour, a strong one burns to white.
         display += (vec3<f32>(headroom) - display) * (vec3<f32>(1.0) - exp(-glare));

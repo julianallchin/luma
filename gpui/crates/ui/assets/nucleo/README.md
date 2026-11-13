@@ -25,6 +25,7 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | Gear | gear-2 | 1574 |
 | Info | circle-info | 1570 |
 | Keyboard | keyboard | 1506 |
+| Lock | lock | 2096 |
 | Minimize | reduce | 1006 |
 | Minus | minus | 5945 |
 | Music | music-note | 6574 |
@@ -32,6 +33,7 @@ Luma's mark and service-provider logos remain their original brand artwork.
 | PanelLeft | sidebar-left | 6006 |
 | Play | media-play | 3328 |
 | Plus | plus | 5963 |
+| Return | arrow-turn-left | 804 |
 | Search | magnifier | 2724 |
 | ThumbsDown | thumbs-down | 1807 |
 | ThumbsUp | thumbs-up | 1808 |

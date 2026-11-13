@@ -12,6 +12,7 @@ use gpui::prelude::*;
 use gpui::{div, px, App, Context, Entity, Subscription};
 use luma_chat::{AgentChat, RunningEvent, RunningTurns};
 use luma_lib::agent::{ThreadScope, TurnContext, TurnEvent};
+use luma_lib::database::local::feedback::{Target as FeedbackTarget, Verdict};
 use luma_ui::ladder;
 use luma_ui::node::{Instrument, Role};
 
@@ -141,10 +142,16 @@ impl Luma {
             }));
             chat
         });
-        let requests = cx.subscribe(&panel, |this, _, event, cx| match event {
+        let requests = cx.subscribe(&panel, |this, panel, event, cx| match event {
             luma_chat::ChatEvent::HistoryRequested => this.show_chat_history(cx),
             luma_chat::ChatEvent::SubagentsRequested(child) => {
                 this.show_subagents(child.clone(), cx);
+            }
+            luma_chat::ChatEvent::FeedbackRequested(thread) => {
+                this.read_turn_feedback(&panel, thread.clone(), cx);
+            }
+            luma_chat::ChatEvent::FeedbackGiven { target, verdict } => {
+                this.store_turn_feedback(&panel, target.clone(), *verdict, cx);
             }
         });
         BodyChat {
@@ -152,6 +159,57 @@ impl Luma {
             unseen: false,
             _requests: requests,
         }
+    }
+
+    /// Hand `panel` the account's stored verdicts on `thread`'s turns.
+    fn read_turn_feedback(
+        &mut self,
+        panel: &Entity<AgentChat>,
+        thread: String,
+        cx: &mut Context<Self>,
+    ) {
+        let stored = self.library.thread_feedback(&thread);
+        let panel = panel.downgrade();
+        cx.spawn(async move |_, cx| match stored.await {
+            Ok(feedback) => {
+                panel
+                    .update(cx, |chat, cx| chat.set_verdicts(&thread, feedback, cx))
+                    .ok();
+            }
+            // The thumbs work without it; they only start unlit.
+            Err(error) => log::warn!("Could not read the chat's feedback: {error}"),
+        })
+        .detach();
+    }
+
+    /// Store a verdict `panel` is already showing. One that could not be
+    /// stored is said so, and the panel is put back to what is stored.
+    fn store_turn_feedback(
+        &mut self,
+        panel: &Entity<AgentChat>,
+        target: FeedbackTarget,
+        verdict: Option<Verdict>,
+        cx: &mut Context<Self>,
+    ) {
+        let FeedbackTarget::Turn { thread_id, .. } = &target else {
+            return;
+        };
+        let thread = thread_id.clone();
+        let stored = self.library.set_feedback(target, verdict);
+        let panel = panel.downgrade();
+        cx.spawn(async move |this, cx| {
+            let Err(error) = stored.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.report_failure("Could not save your feedback", error, cx);
+                if let Some(panel) = panel.upgrade() {
+                    this.read_turn_feedback(&panel, thread, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The chat of the body on screen, which is the agent panel's.

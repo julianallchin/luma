@@ -79,7 +79,7 @@ impl Library {
     /// Named for the ordering it provides rather than for the session items it
     /// was first written for — settings share the queue, and a name that said
     /// "session" would make that read as a mistake.
-    fn ordered_write<F, Fut>(
+    pub(super) fn ordered_write<F, Fut>(
         &self,
         command: &'static str,
         run: F,

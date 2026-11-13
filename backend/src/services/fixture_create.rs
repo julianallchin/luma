@@ -90,8 +90,10 @@ pub struct NewFixture<'a> {
     pub mode_name: &'a str,
     pub fixture_path: &'a str,
     /// Where it lands, already admitted against the patch by the caller — which
-    /// is what makes this function unable to refuse anything.
-    pub footprint: Footprint,
+    /// is what makes this function unable to refuse anything. `None` for a
+    /// fixture DMX does not drive (a laser projector): it has no channels,
+    /// takes no address and is not in the patch.
+    pub footprint: Option<Footprint>,
     /// Whether a human typed this address, in which case the allocator leaves
     /// it alone.
     pub pinned: bool,
@@ -133,11 +135,19 @@ pub async fn create(
         Naming::Given(label) => label,
         Naming::Minted(term) => numbering.next(term.unwrap_or(spec.model)),
     };
+    // A row with no channels still has an address column: 1, meaning nothing.
+    let (universe, address, channels) = spec.footprint.map_or((1, 1, 0), |footprint| {
+        (
+            footprint.universe(),
+            footprint.address(),
+            footprint.channels(),
+        )
+    });
     let fixture = fixtures_db::insert_fixture(
         access,
-        i64::from(spec.footprint.universe()),
-        i64::from(spec.footprint.address()),
-        i64::from(spec.footprint.channels()),
+        i64::from(universe),
+        i64::from(address),
+        i64::from(channels),
         spec.manufacturer,
         spec.model,
         spec.mode_name,
@@ -175,14 +185,16 @@ pub async fn restore(
     row: &PatchedFixture,
     node: &VenueNode,
 ) -> Result<(), PatchError> {
-    let patched = crate::services::patch::occupancy(access).await?;
-    let narrow = |value: i64| u16::try_from(value).unwrap_or(u16::MAX);
-    patched.admit(
-        None,
-        narrow(row.universe),
-        narrow(row.address),
-        narrow(row.num_channels),
-    )?;
+    if row.num_channels > 0 {
+        let patched = crate::services::patch::occupancy(access).await?;
+        let narrow = |value: i64| u16::try_from(value).unwrap_or(u16::MAX);
+        patched.admit(
+            None,
+            narrow(row.universe),
+            narrow(row.address),
+            narrow(row.num_channels),
+        )?;
+    }
     fixtures_db::insert_fixture_row(access, row).await?;
     venue_graph_db::insert_node_with_id(
         access,

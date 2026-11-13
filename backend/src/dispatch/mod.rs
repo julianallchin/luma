@@ -154,6 +154,14 @@ commands! {
     agent_threads::agent_thread_set_actor(thread_id: String, actor: String) -> ();
     agent_threads::agent_thread_delete(thread_id: String) -> ();
 
+    feedback::set_feedback(
+        target: crate::database::local::feedback::Target,
+        verdict: Option<crate::database::local::feedback::Verdict>,
+        note: Option<String>,
+    ) -> ();
+    feedback::thread_feedback(thread_id: String) -> Vec<crate::database::local::feedback::Feedback>;
+    feedback::score_clip_feedback(score_id: String) -> Vec<crate::database::local::feedback::Feedback>;
+
     agent_execution::run_python_cell(
         thread_id: String,
         turn_message_id: String,
@@ -192,6 +200,31 @@ commands! {
     folders::delete_folder(folder_id: String) -> ();
     folders::set_folder_track(folder_id: String, track_id: String, linked: bool) -> ();
     lasers::get_laser_rig(venue_id: String) -> crate::laser::LaserRig;
+    lasers::set_laser_window(venue_id: String, window: Option<crate::laser::Window>) -> ();
+    lasers::set_laser_settings(
+        venue_id: String,
+        projector_id: Option<String>,
+        settings: BTreeMap<String, f64>,
+    ) -> ();
+    lasers::set_laser_own(venue_id: String, projector_id: String, own: bool) -> ();
+    output::list_laser_devices() -> Vec<crate::models::lasers::LaserDevice>;
+    output::list_laser_routes() -> Vec<crate::models::lasers::LaserRoute>;
+    output::bind_laser_route(
+        fixture_id: String,
+        device_kind: crate::models::lasers::LaserDeviceKind,
+        device_id: String,
+        device_name: Option<String>,
+        address: Option<String>,
+    ) -> ();
+    output::unbind_laser_route(fixture_id: String) -> ();
+    output::get_laser_output() -> crate::models::lasers::LaserOutput;
+    output::set_laser_output(on: bool) -> crate::models::lasers::LaserOutput;
+    output::set_laser_test(projector_id: Option<String>) -> crate::models::lasers::LaserOutput;
+    lasers::set_laser_limit(
+        venue_id: String,
+        projector_id: String,
+        points: Option<Vec<[f64; 2]>>,
+    ) -> ();
 
     groups::generate_venue_groups(venue_id: String) -> ();
     groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, added: Vec<String>, removed: Vec<String>) -> ();
@@ -260,7 +293,15 @@ commands! {
         count: usize,
         layout: DistributeLayout,
     ) -> DistributeReport;
+    distribute::move_light(
+        venue_id: String,
+        node_id: String,
+        host_node_id: Option<String>,
+        host_socket: String,
+        layout: DistributeLayout,
+    ) -> PlacementReport;
     stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
+    stage::set_room(venue_id: String, size: Option<[f64; 3]>) -> ResolvedVenue;
     stage::restore_graph(
         venue_id: String,
         rows: VenueGraphRows,
@@ -421,6 +462,8 @@ commands! {
     auth::verify_login_code(email: String, code: String) -> String;
     auth::terms_accepted() -> bool;
     auth::accept_terms(version: i32) -> ();
+    auth::profile_background() -> Option<handlers::auth::ProfileBackground>;
+    auth::set_profile_background(background: handlers::auth::ProfileBackground) -> ();
     auth::get_session_item(key: String) -> Option<String>;
     auth::set_session_item(key: String, value: String) -> ();
     auth::remove_session_item(key: String) -> ();

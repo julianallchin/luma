@@ -24,16 +24,20 @@ fn shadow_compare_reference(raw_z: f32, near: f32, far: f32, slack: f32) -> f32 
 /// virtual apex `lens_distance` behind the lens centre on the beam axis, so it
 /// is exactly lens-wide at the lens plane; the part behind that plane is not
 /// beam. Light positions are lens centres (the range ball and its taper are
-/// measured from them); angles (profile, gobo, shadow projection) and the
-/// inverse-square falloff are measured from the apex, so a lens spreads the
-/// same light over a wider cone instead of adding light. `lens_distance == 0`
-/// is a point source, and these helpers then reduce to the point-apex
-/// arithmetic bit for bit.
+/// measured from them); the inverse-square falloff, the gobo and shadow
+/// projection are measured from the apex, so a lens spreads the same light
+/// over a wider cone instead of adding light. `lens_distance == 0` is a point
+/// source, and these helpers then reduce to the point-apex arithmetic bit for
+/// bit.
 ///
 /// `q` points from the lens centre to the sample; `dist` is its length.
-/// Returns the cosine of the sample's angle off the axis as seen from the apex,
-/// or -1 (outside every field) behind the lens plane.
-fn lens_cos_angle(q: vec3<f32>, direction: vec3<f32>, lens_distance: f32, dist: f32) -> f32 {
+/// Returns the cosine of the sample's angle off the axis, or -1 (outside
+/// every field) behind the lens plane. The angle is seen from the nearest
+/// point of the lens, as every point of a lens sends out the whole beam: a
+/// sample in front of the lens is on the axis, so the beam leaves the lens
+/// evenly lit across it and softens only towards its edge. At the field's
+/// edge this is the angle from the apex, so the cone is the same.
+fn lens_cos_angle(q: vec3<f32>, direction: vec3<f32>, lens_distance: f32, dist: f32, cos_field: f32) -> f32 {
     let axial = dot(q, direction);
     if lens_distance <= 0.0 {
         return axial / max(dist, 1e-4);
@@ -41,7 +45,11 @@ fn lens_cos_angle(q: vec3<f32>, direction: vec3<f32>, lens_distance: f32, dist: 
     if axial <= 0.0 {
         return -1.0;
     }
-    return (axial + lens_distance) / max(length(q + direction * lens_distance), 1e-4);
+    let cf = clamp(cos_field, 1e-3, 1.0);
+    let radius = lens_distance * sqrt(max(1.0 - cf * cf, 0.0)) / cf;
+    let off_axis = length(q - direction * axial);
+    let beyond = max(off_axis - radius, 0.0);
+    return axial / max(sqrt(axial * axial + beyond * beyond), 1e-4);
 }
 
 /// Squared distance from the virtual apex to the sample: the inverse-square

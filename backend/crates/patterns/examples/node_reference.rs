@@ -112,7 +112,7 @@ const PAGES: [Page; 5] = [
         slug: "lasers",
         title: "Lasers",
         description: "Laser clips: figure nodes and the laser output.",
-        intro: "A laser clip draws on ILDA projectors. Its output is a `laser` node, which draws a list of `figure` nodes in order on each projector in the clip's selection: `laser([sheet, rails, dots])`.\n\nEach figure draws `count` elements: beams, lines, rings, polygons or grid points. The elements are the figure's heads. Space, Random, Shuffle and Mirror read a figure's elements as they read a moving head's heads, apart from any other figure's elements.\n\nA figure draws on the zone's canvas, which runs from −1 to 1 across and up the zone. The same place on the canvas is the same direction from every projector. A projector draws at most {MAX_ELEMENTS} elements, all its figures together.\n\nA laser's color is its figures' color, and the color is its power: black is the light off. Color clips do not reach projectors. A laser clip blends by Replace (it morphs the elements under it into its own) or Add (it draws both).",
+        intro: "A laser clip draws on ILDA projectors. Its output is a `laser` node, which draws a list of `figure` nodes in order on each projector in the clip's selection: `laser([sheet, rails, dots])`.\n\nEach figure draws `count` elements: beams, lines, rings, polygons or grid points. The elements are the figure's heads. Space, Random, Shuffle and Mirror read a figure's elements as they read a moving head's heads, apart from any other figure's elements.\n\nA figure draws on the venue's laser canvas, which runs from −1 to 1 across and up the venue's laser window. The same place on the canvas is the same direction from every projector. A projector draws at most {MAX_ELEMENTS} elements, all its figures together.\n\nA laser's color is its figures' color, and the color is its power: black is the light off. Color clips do not reach projectors. A laser clip blends by Replace (it morphs the elements under it into its own) or Add (it draws both).",
         kinds: &[k(Kind::Figure), k(Kind::Laser)],
     },
 ];
@@ -306,13 +306,13 @@ fn doc(shown: Shown) -> Doc {
             settings: vec![("kind", "`beams` and `grid` draw points; `line`, `ring` and `polygon` draw outlines.")],
         },
         Kind::Laser => Doc {
-            python: "laser(figures, alpha, zone=\"\")",
+            python: "laser(figures, alpha)",
             about: s("The laser output: draws its figures, in order, on each projector in the clip's selection. A projector's elements are every figure's together, and they share its scan, so a figure added dims the others, as on a real projector. Each figure can be in the list once."),
             empty: vec![
                 ("figures", s("Required: one or more figure wires.")),
                 ("alpha", s("1.")),
             ],
-            settings: vec![("zone", "A laser zone id of the venue. Empty, or an id the venue does not have, is the venue's first zone. A venue with no zone draws in a window ahead into the house.")],
+            settings: vec![],
         },
         Kind::Color => Doc {
             python: "color(color, brightness, alpha)",

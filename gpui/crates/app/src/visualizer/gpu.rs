@@ -164,6 +164,8 @@ pub(super) struct LiveFrameInputs<'a> {
     pub(super) state: Option<&'a UniverseState>,
     /// The projectors that turn its beams into point streams.
     pub(super) lasers: &'a luma_lib::laser::LaserRig,
+    /// The projector showing its test pattern.
+    pub(super) laser_test: Option<&'a str>,
     pub(super) size: (u32, u32),
     pub(super) camera: Camera,
     /// Measured in the prepaint that is submitting this frame, so they come
@@ -294,6 +296,7 @@ impl Gpu {
             moment,
             state,
             lasers,
+            laser_test,
             size: (width, height),
             camera,
             spans,
@@ -317,8 +320,15 @@ impl Gpu {
             &mut self.assets,
         )
         .map_err(|error| format!("Could not assemble the frame: {error}"))?;
-        if let Some(state) = state {
-            frame.lasers = stage_render::laser_scans(lasers, state, moment.time);
+        // A test pattern shows with no score playing: over a dark rig.
+        if state.is_some() || laser_test.is_some() {
+            let dark = UniverseState::default();
+            frame.lasers = stage_render::laser_scans(
+                lasers,
+                state.unwrap_or(&dark),
+                laser_test,
+                moment.time,
+            );
         }
         let haze_time_s = frame.time;
         self.work.build_ms = built.elapsed().as_secs_f32() * 1_000.0;

@@ -532,131 +532,6 @@ async fn an_offline_edit_survives_a_restart() {
     b.close().await;
 }
 
-/// Two users and a share code: B joins A's venue, sees the score, edits it, A
-/// sees the edit — and when A revokes the membership B loses the venue's rows.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
-async fn a_share_code_admits_a_second_user_until_it_is_revoked() {
-    let Some(containers) = Containers::from_env() else {
-        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
-        return;
-    };
-    let directory = tempfile::tempdir().expect("temp dir");
-    let a = device(&directory.path().join("a"), &containers, USER).await;
-    let b = device(&directory.path().join("b"), &containers, OTHER).await;
-
-    let venue = unique("venue");
-    let score = unique("score");
-    let code = unique("code");
-    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
-    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
-        .bind(&code)
-        .bind(&venue)
-        .execute(&a.sql)
-        .await
-        .expect("share code");
-    // The code has to be on the server before anyone can redeem it.
-    settles(
-        &b.sql,
-        &count("venues", "id", &venue),
-        "0",
-        "B could see the venue before joining",
-    )
-    .await;
-    wait_for_upload(&a.sql).await;
-
-    // The join is a server RPC: an ordinary client may not insert a membership
-    // into a venue it cannot yet see.
-    let joined = rpc_join(&containers, OTHER, &code).await;
-    assert_eq!(joined, venue);
-
-    settles(
-        &b.sql,
-        &count("clips", "score_id", &score),
-        "1",
-        "B joined but the venue's score never arrived",
-    )
-    .await;
-    settles(
-        &b.sql,
-        &count("venue_members", "venue_id", &venue),
-        "1",
-        "B never received its own membership row",
-    )
-    .await;
-
-    // A member edits venue content and the owner sees it.
-    sqlx::query("UPDATE clips SET duration = 12.0 WHERE score_id = ? AND label = 'one'")
-        .bind(&score)
-        .execute(&b.sql)
-        .await
-        .expect("member edit");
-    settles(
-        &a.sql,
-        &clip_shape(&score),
-        "one=12.0",
-        "the owner never saw the member's edit",
-    )
-    .await;
-
-    // Revocation is a delete of the membership row, which the server keeps
-    // flagged, and it reaches B as a download that empties every bucket the
-    // membership put them in.
-    let membership: String = sqlx::query_scalar("SELECT id FROM venue_members WHERE venue_id = ?")
-        .bind(&venue)
-        .fetch_one(&a.sql)
-        .await
-        .expect("the membership");
-    sqlx::query("DELETE FROM venue_members WHERE venue_id = ?")
-        .bind(&venue)
-        .execute(&a.sql)
-        .await
-        .expect("revoke");
-    wait_for_upload(&a.sql).await;
-    settles(
-        &b.sql,
-        &count("venues", "id", &venue),
-        "0",
-        "B kept the venue after the membership was revoked",
-    )
-    .await;
-    settles(
-        &b.sql,
-        &count("clips", "score_id", &score),
-        "0",
-        "B kept the venue's clips after the membership was revoked",
-    )
-    .await;
-
-    // The flagged membership is still B's row, and clearing a flag is how a
-    // row comes back: B must not be able to walk back in that way.
-    let (status, body) = try_rest(
-        &containers,
-        OTHER,
-        reqwest::Method::PATCH,
-        &format!("/venue_members?id=eq.{membership}"),
-        Some(&serde_json::json!({ "deleted_at": null })),
-    )
-    .await;
-    assert!(
-        status.is_client_error(),
-        "a removed member restored their own membership: {status} {body}"
-    );
-    assert_eq!(
-        get(
-            &containers,
-            OTHER,
-            &format!("/venues?id=eq.{venue}&select=id")
-        )
-        .await,
-        serde_json::json!([]),
-        "a removed member can read the venue again"
-    );
-
-    a.close().await;
-    b.close().await;
-}
-
 /// The app's own sharing commands, end to end: the owner mints a code through
 /// the service, a second account redeems it through the service and gets the
 /// venue back once it has downloaded, a revoked code admits nobody, and the
@@ -948,9 +823,196 @@ async fn a_conversation_follows_its_owner() {
     b.close().await;
 }
 
+/// What the record keeps beside the row: the build that wrote a clip and the
+/// venue it was written against, a copy's source, and a person's verdict,
+/// which follows its author to their other device and is kept when taken
+/// back.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
+async fn the_record_keeps_the_build_the_venue_version_and_a_verdict() {
+    use crate::database::local::feedback::{self, Target, Verdict};
+
+    let Some(containers) = Containers::from_env() else {
+        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
+        return;
+    };
+    let directory = tempfile::tempdir().expect("temp dir");
+    let a = device(&directory.path().join("a"), &containers, USER).await;
+    let b = device(&directory.path().join("b"), &containers, USER).await;
+    let admin = admin(&containers).await;
+
+    let (venue, score) = (unique("venue"), unique("score"));
+    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
+    wait_for_upload(&a.sql).await;
+    let one = clip_id(&a.sql, &score, "one").await;
+
+    // The venue changes, then the score is written again: the second clip
+    // names a later venue than the first.
+    sqlx::query("UPDATE venues SET name = 'Main Room' WHERE id = ?")
+        .bind(&venue)
+        .execute(&a.sql)
+        .await
+        .expect("rename");
+    wait_for_upload(&a.sql).await;
+    clip(&a.sql, USER, &score, &id(), "two", 8.0, 8.0).await;
+    wait_for_upload(&a.sql).await;
+    let entries: Vec<(String, Option<String>, Option<i64>)> = sqlx::query_as(
+        "select after ->> 'label', client_build, venue_seq from public.history
+         where table_name = 'clips' and scope_id = $1 order by seq",
+    )
+    .bind(&score)
+    .fetch_all(&admin)
+    .await
+    .expect("history");
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.0.as_str())
+            .collect::<Vec<_>>(),
+        ["one", "two"]
+    );
+    for (label, build, _) in &entries {
+        assert_eq!(build.as_deref(), Some(crate::build().as_str()), "{label}");
+    }
+    let newest_venue_entry: i64 =
+        sqlx::query_scalar("select max(seq) from public.history where scope_id = $1")
+            .bind(&venue)
+            .fetch_one(&admin)
+            .await
+            .expect("venue history");
+    assert!(entries[0].2.expect("the first clip's venue") < newest_venue_entry);
+    assert_eq!(entries[1].2, Some(newest_venue_entry));
+
+    // A copy names what it was copied from, on the server too.
+    let copy = crate::services::catalog::duplicate_score(&a.sql, &score, "Copy")
+        .await
+        .expect("copy");
+    wait_for_upload(&a.sql).await;
+    let source: Option<String> =
+        sqlx::query_scalar("select copied_from_score_id from public.scores where id = $1")
+            .bind(&copy.id)
+            .fetch_one(&admin)
+            .await
+            .expect("the copy");
+    assert_eq!(source.as_deref(), Some(score.as_str()));
+
+    // A verdict on the clip reaches the other device, changes there, and is
+    // flagged, not removed, when it is taken back.
+    let target = Target::Clip {
+        clip_id: one.clone(),
+    };
+    feedback::set(&a.sql, &target, Some(Verdict::Bad), Some("too busy"), USER)
+        .await
+        .expect("verdict");
+    let held = format!("SELECT group_concat(rating) FROM feedback WHERE clip_id = '{one}'");
+    settles(
+        &b.sql,
+        &held,
+        "-1",
+        "the verdict did not reach the other device",
+    )
+    .await;
+    feedback::set(&b.sql, &target, Some(Verdict::Good), None, USER)
+        .await
+        .expect("a changed mind");
+    settles(&a.sql, &held, "1", "the changed verdict did not come back").await;
+    feedback::set(&a.sql, &target, None, None, USER)
+        .await
+        .expect("taken back");
+    settles(
+        &b.sql,
+        &count("feedback", "clip_id", &one),
+        "0",
+        "the verdict taken back stayed on the other device",
+    )
+    .await;
+    let (rows, flagged, in_scope): (i64, i64, i64) = sqlx::query_as(
+        "select count(*), count(deleted_at),
+                (select count(*) from public.history
+                 where table_name = 'feedback' and scope_id = $2)
+         from public.feedback where clip_id = $1",
+    )
+    .bind(&one)
+    .bind(&score)
+    .fetch_one(&admin)
+    .await
+    .expect("the server's verdict");
+    assert_eq!((rows, flagged), (1, 1), "one row, kept and flagged");
+    assert!(
+        in_scope >= 3,
+        "made, changed and taken back are all in the score's history"
+    );
+
+    // What a conversation cost follows the account too, and the record has
+    // it step by step, as the app's write and not the person's.
+    use crate::database::local::agent_threads::{record_thread_usage, thread_usage};
+    use crate::models::agent_threads::AgentThreadUsage;
+    let thread = unique("thread");
+    sqlx::query(
+        "INSERT INTO agent_threads (id, uid, agent_kind, subject_kind, subject_id, title)
+         VALUES (?, ?, 'track', 'none', NULL, 'Costly')",
+    )
+    .bind(&thread)
+    .bind(USER)
+    .execute(&a.sql)
+    .await
+    .expect("thread");
+    let mut spend = AgentThreadUsage {
+        thread_id: thread.clone(),
+        model: Some("claude-opus-5-5".into()),
+        turns: 1,
+        input_tokens: 1200,
+        output_tokens: 80,
+        cost_usd: Some(0.02),
+        ..AgentThreadUsage::default()
+    };
+    record_thread_usage(&a.sql, &spend).await.expect("usage");
+    spend.turns = 2;
+    spend.output_tokens = 200;
+    record_thread_usage(&a.sql, &spend)
+        .await
+        .expect("more usage");
+    settles(
+        &b.sql,
+        &format!(
+            "SELECT group_concat(turns || ':' || output_tokens) FROM agent_thread_usage
+             WHERE thread_id = '{thread}'"
+        ),
+        "2:200",
+        "the conversation's cost did not reach the other device",
+    )
+    .await;
+    // The other device goes on from the same totals.
+    let seeded = thread_usage(&b.sql, &thread)
+        .await
+        .expect("read")
+        .expect("a row");
+    assert_eq!(seeded.cost_usd, Some(0.02));
+    let steps: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "select op, actor_type, actor, after ->> 'output_tokens' from public.history
+         where table_name = 'agent_thread_usage' and scope_id = $1 order by seq",
+    )
+    .bind(&thread)
+    .fetch_all(&admin)
+    .await
+    .expect("usage history");
+    let step = |op: &str, tokens: &str| {
+        (
+            op.to_owned(),
+            "app".to_owned(),
+            "app:usage".to_owned(),
+            Some(tokens.to_owned()),
+        )
+    };
+    assert_eq!(steps, [step("insert", "80"), step("update", "200")]);
+
+    a.close().await;
+    b.close().await;
+}
+
 /// What a venue shares, and what it does not, from the far side of the wire.
 ///
-/// The share-code test covers the member's happy path. These are the refusals
+/// The sharing-service test covers the member's happy path. These are the refusals
 /// beside it: a stranger sees nothing of the venue, cannot write into it, and
 /// cannot talk their way in with a code that is not the code. Asserted over
 /// PostgREST rather than over a device, because a refusal is the server's

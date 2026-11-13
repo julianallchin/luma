@@ -11,7 +11,6 @@ use luma_scene::venue::{NodeKind, NodeSockets as _, VenueGraph};
 use crate::library::Rig;
 
 use super::hand::{self, Hand, Holding, Room};
-use super::scene::params_of;
 
 /// The builder's whole state.
 pub(crate) struct Build {
@@ -282,6 +281,56 @@ impl Build {
         }
     }
 
+    /// The room itself, its size when it has one (`[width, depth, height]`
+    /// in metres), and how light its walls are painted.
+    pub(crate) fn room(&self) -> (&str, Option<[f64; 3]>, f32) {
+        let root = self.graph.root();
+        let params = self.graph.node(root).map(|node| &node.params);
+        (
+            root,
+            params.and_then(luma_scene::venue::room_size),
+            params.map_or(luma_scene::venue::WALL_SHADE, luma_scene::venue::wall_shade),
+        )
+    }
+
+    /// The run being measured out of a socket, as the stick it would be: its
+    /// generator's parameters and where it would stand.
+    pub(super) fn run_ghost(&self) -> Option<(luma_scene::truss::Procedural, glam::DMat4)> {
+        let run = self.hand.extending()?;
+        let socket = self.room.socket(&run.from_node, &run.from_socket)?;
+        let pose = self.room.pose(&run.from_node)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let params = luma_scene::truss::Procedural::Truss {
+            span: run.length_m as f32,
+        };
+        let held = luma_scene::catalog::procedural_sockets(params);
+        let end = held.iter().find(|s| s.name == "end_a")?;
+        Some((
+            params,
+            luma_scene::venue::place_on(
+                pose,
+                socket,
+                end,
+                NodeKind::Run,
+                luma_scene::venue::SurfacePlacement::FLUSH,
+            ),
+        ))
+    }
+
+    /// Why the run being measured cannot be placed: it is longer than its
+    /// gap, or it would pass through something on the way.
+    pub(crate) fn run_refused(&self) -> Option<String> {
+        let run = self.hand.extending()?;
+        run.refused().or_else(|| {
+            let (params, world) = self.run_ghost()?;
+            self.room.refusal(
+                Some(luma_scene::catalog::procedural_bounds(params)),
+                world,
+                &[Some(run.from_node.as_str())],
+            )
+        })
+    }
+
     /// The held thing's local bounds, for the collision arm of a landing.
     /// `None` — a fixture, an unfetched definition — collides with nothing.
     pub(super) fn held_bounds(&self) -> Option<luma_scene::aabb::DAabb> {
@@ -290,18 +339,15 @@ impl Build {
             Holding::Piece {
                 catalog_ref,
                 params,
+                kind,
                 ..
-            } => match luma_scene::catalog::piece(catalog_ref)?.geometry {
-                luma_scene::catalog::Geometry::Mesh { .. }
-                | luma_scene::catalog::Geometry::Assembly(_) => {
-                    self.sockets.catalog().bounds(catalog_ref)
-                }
-                luma_scene::catalog::Geometry::Procedural(family) => {
-                    Some(luma_scene::catalog::procedural_bounds(
-                        luma_scene::catalog::node_params(family, &params_of(params)),
-                    ))
-                }
-            },
+            } => self.sockets.bounds(&luma_scene::venue::Node {
+                id: hand::GHOST_NODE.to_string(),
+                kind: *kind,
+                catalog_ref: Some(catalog_ref.clone()),
+                label: None,
+                params: params.clone().into_iter().collect(),
+            }),
             Holding::Duplicate { root, .. } => self.room.bounds_of(root),
             // A held light collides by its housing box once the definition
             // has said how big that is — which is what stops a bar being
@@ -334,33 +380,16 @@ impl Build {
         node: &str,
         path_of: &dyn Fn(&str) -> Option<String>,
     ) -> Vec<String> {
-        let Some(edge) = self.graph.edge(node) else {
-            return Vec::new();
-        };
         let Some(path) = path_of(node) else {
             return Vec::new();
         };
-        let across = self
-            .graph
-            .node(node)
-            .map_or(0.0, |node| node.params.get("v", 0.0));
-        let mut out: Vec<(f64, String)> = self
-            .graph
-            .nodes()
-            .filter(|sibling| sibling.kind == luma_scene::venue::NodeKind::Fixture)
-            .filter(|sibling| {
-                self.graph.edge(&sibling.id).is_some_and(|joint| {
-                    joint.parent == edge.parent && joint.their_socket == edge.their_socket
-                })
+        self.graph
+            .row_of(node, |sibling| {
+                path_of(&sibling.id).as_deref() == Some(path.as_str())
             })
-            // One line across the face: lights at another depth of a floor
-            // are beside the row, not in it.
-            .filter(|sibling| (sibling.params.get("v", 0.0) - across).abs() < ROW_LINE_M)
-            .filter(|sibling| path_of(&sibling.id).as_deref() == Some(path.as_str()))
-            .map(|sibling| (sibling.params.get("u", 0.0), sibling.id.clone()))
-            .collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        out.into_iter().map(|(_, id)| id).collect()
+            .into_iter()
+            .map(|sibling| sibling.id.clone())
+            .collect()
     }
 
     /// The room as it stands, as an undo step.
@@ -489,17 +518,11 @@ impl Build {
             relation: self.relation_of(node),
             constraint: self.constraint_of(node),
             trim: param("trim"),
-            // `yaw` is the one freedom that is not a node param: a mate's
-            // turn about the shared normal lives on the *edge*, and it is
-            // radians there and degrees on this sheet. Reading it out of
-            // `params` found nothing and drew every joint at zero.
-            param: match freedom.param() {
-                Some("yaw") => scrubbed("yaw")
-                    .or_else(|| self.graph.edge(node).map(|edge| edge.roll))
-                    .map_or(0.0, |roll| roll.to_degrees().rem_euclid(360.0)),
-                Some(key) => param(key),
-                None => 0.0,
-            },
+            // A mate's turn about the shared normal is not a node param: it
+            // lives on the *edge*, in radians there and degrees on this sheet.
+            turn: scrubbed("yaw")
+                .or_else(|| self.graph.edge(node).map(|edge| edge.roll))
+                .map_or(0.0, |roll| roll.to_degrees().rem_euclid(360.0)),
             span: {
                 let stored = scrubbed("span").or_else(|| {
                     self.solved
@@ -664,10 +687,6 @@ impl Build {
     }
 }
 
-/// How far apart across a face two lights may sit and still be one row, in
-/// metres. The same line `luma_lib`'s `redistribute` re-lays.
-const ROW_LINE_M: f64 = luma_lib::services::distribute::ROW_LINE_M;
-
 /// What a placed node may be moved by.
 ///
 /// Surface placements get a constrained UVZ gizmo. Other joints expose only
@@ -676,23 +695,12 @@ const ROW_LINE_M: f64 = luma_lib::services::distribute::ROW_LINE_M;
 pub(crate) enum Freedom {
     /// Seated on the venue's own floor or grid; rig pieces may also change trim.
     Free,
-    /// Bolted onto a face — it slides along it, and nowhere else.
+    /// Seated on a piece's face: it moves over that face, and nowhere else.
     Slide,
     /// A joint with a roll: a clamp's yaw, a hinge's angle.
     Roll,
     /// A bolt circle with no freedom at all. Dragging it drags the run.
     Bolted,
-}
-
-impl Freedom {
-    /// The parameter this freedom edits, when it edits one.
-    pub(crate) fn param(self) -> Option<&'static str> {
-        match self {
-            Freedom::Slide => Some("u"),
-            Freedom::Roll => Some("yaw"),
-            Freedom::Free | Freedom::Bolted => None,
-        }
-    }
 }
 
 /// Where one body of a row sits, `u` metres along the face from its middle.
@@ -741,7 +749,8 @@ pub(crate) struct SelectedView {
     pub(crate) relation: Option<String>,
     pub(crate) constraint: Option<String>,
     pub(crate) trim: f64,
-    pub(crate) param: f64,
+    /// How far the joint is turned about its normal, in degrees.
+    pub(crate) turn: f64,
     /// How long the piece itself is, for the pieces that have a length.
     ///
     /// Not a freedom: a joint's freedom is how a piece may *move*, and a run's

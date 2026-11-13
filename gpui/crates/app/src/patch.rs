@@ -47,6 +47,7 @@ use crate::{LibraryError, Luma};
 
 mod footprint;
 pub(crate) mod groups;
+mod lasers;
 mod outputs;
 mod table;
 mod venue;
@@ -55,17 +56,18 @@ mod venue;
 ///
 /// Four readings of the same rig: the fixtures as an inventory with its
 /// groups, the structure they hang on, the fixtures as channels in universes,
-/// and where each universe comes out.
+/// and where each universe comes out. A venue with a laser projector has a
+/// fifth: its projectors and what plays them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum View {
     Fixtures,
     Stage,
     Patch,
     Output,
+    Lasers,
 }
 
 impl View {
-    pub(crate) const ALL: [View; 4] = [View::Fixtures, View::Stage, View::Patch, View::Output];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -73,6 +75,7 @@ impl View {
             View::Stage => "Stage",
             View::Patch => "Patch",
             View::Output => "Output",
+            View::Lasers => "Lasers",
         }
     }
 }
@@ -190,6 +193,7 @@ pub(crate) struct Patch {
     pub(crate) anchor: Option<String>,
     pub(crate) editing: Option<Editing>,
     pub(crate) refusal: Option<Refusal>,
+    pub(crate) lasers: lasers::State,
     /// The row menu, and the point it hangs from.
     pub(crate) menu: Option<(String, Point<gpui::Pixels>)>,
     /// The mode menu, hanging off a row's mode cell.
@@ -226,6 +230,7 @@ impl Patch {
             devices: Vec::new(),
             devices_unavailable: None,
             bind_menu: None,
+            lasers: lasers::State::default(),
             selected: HashSet::new(),
             anchor: None,
             editing: None,
@@ -235,6 +240,21 @@ impl Patch {
             notice: None,
             generation: 0,
         }
+    }
+
+    /// The views this venue has: Lasers only with a projector to show.
+    pub(crate) fn views(&self) -> Vec<View> {
+        let mut views = vec![View::Fixtures, View::Stage, View::Patch, View::Output];
+        if self.has_lasers() {
+            views.push(View::Lasers);
+        }
+        views
+    }
+
+    /// The fixtures DMX drives: the ones with an address. A laser projector
+    /// has no channels and is not among them.
+    pub(crate) fn patched(&self) -> impl Iterator<Item = &PatchedFixture> {
+        self.rows().iter().filter(|row| row.num_channels > 0)
     }
 
     pub(crate) fn rows(&self) -> &[PatchedFixture] {
@@ -1004,6 +1024,9 @@ impl Luma {
             state.mode_menu = None;
             state.bind_menu = None;
         }
+        if view == View::Lasers {
+            self.watch_lasers(venue_id, cx);
+        }
         cx.notify();
     }
 
@@ -1235,7 +1258,7 @@ fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
         .flex()
         .items_center()
         .gap(px(8.0))
-        .child(luma_ui::float::segmented().children(View::ALL.map(|view| {
+        .child(luma_ui::float::segmented().children(state.views().into_iter().map(|view| {
             let shown = app.clone();
             let venue = state.venue_id.clone();
             luma_ui::float::segment(view.label(), state.view == view, view.label())
@@ -1329,6 +1352,10 @@ fn subtitle(state: &Patch) -> SharedString {
     let Some(data) = state.data.as_ref() else {
         return "Reading the patch…".into();
     };
+    if state.view == View::Lasers {
+        let projectors = data.fixtures.len() - state.patched().count();
+        return plural(projectors, "projector").into();
+    }
     let mut line = format!(
         "{} · {}",
         plural(data.fixtures.len(), "fixture"),

@@ -653,42 +653,32 @@ impl VenueHost {
         self.groups().await
     }
 
-    async fn laser_zones(&self) -> Result<Value, HostCallError> {
+    /// The window the venue's laser clips draw in; given one, set first.
+    async fn laser_window(&self, request: LaserWindowRequest) -> Result<Value, HostCallError> {
+        let invalid = |error: String| HostCallError::new("invalid_laser_window", error);
+        if let LaserWindowRequest {
+            turn: Some(turn),
+            tilt: Some(tilt),
+        } = request
+        {
+            let mut access = self.write_access().await.map_err(invalid)?;
+            let window = crate::laser::Window { turn, tilt };
+            crate::database::local::lasers::set_window(&mut access, Some(window))
+                .await
+                .map_err(invalid)?;
+            crate::venue_graph::commit_graph(access)
+                .await
+                .map_err(invalid)?;
+        } else if request.turn.is_some() || request.tilt.is_some() {
+            return Err(invalid(
+                "A laser window is set with both its turn and its tilt".into(),
+            ));
+        }
         let mut access = self.read_access().await?;
-        let zones = crate::database::local::lasers::list_zones(&mut access)
+        let rig = crate::laser::LaserRig::load(&mut access, &self.resource_root)
             .await
             .map_err(|error| HostCallError::new("invalid_venue", error))?;
-        Ok(json!({ "zones": zones }))
-    }
-
-    /// Create the zone named `name`, or change the one already called that.
-    async fn laser_zone(&self, request: LaserZoneRequest) -> Result<Value, HostCallError> {
-        let invalid = |error: String| HostCallError::new("invalid_laser_zone", error);
-        let name =
-            crate::models::lasers::LaserZone::check(&request.name, request.turn, request.tilt)
-                .map_err(invalid)?;
-        let mut access = self.write_access().await.map_err(invalid)?;
-        let existing = crate::database::local::lasers::list_zones(&mut access)
-            .await
-            .map_err(invalid)?
-            .into_iter()
-            .find(|zone| zone.name == name)
-            .map(|zone| zone.id);
-        let zone = crate::database::local::lasers::save_zone(
-            &mut access,
-            existing.as_deref(),
-            name,
-            request.turn,
-            request.tilt,
-        )
-        .await
-        .map_err(invalid)?
-        .ok_or_else(|| invalid("the zone vanished while it was saved".into()))?;
-        access
-            .commit()
-            .await
-            .map_err(|error| invalid(error.to_string()))?;
-        Ok(json!({ "zone": zone }))
+        Ok(json!({ "window": rig.window(), "set": rig.window.is_some() }))
     }
 
     async fn reach(&self, request: ReachRequest) -> Result<Value, HostCallError> {
@@ -779,9 +769,62 @@ impl VenueHost {
     async fn params(&self, request: ParamsRequest) -> Result<Value, HostCallError> {
         let report = self
             .stage()
-            .set_params(&request.node_id, request.params, request.label.as_deref())
+            .set_params(
+                &request.node_id,
+                request.params,
+                request.label.as_deref(),
+                crate::services::stage_ops::Frame::Plan,
+            )
             .await?;
         self.placed(report).await
+    }
+
+    /// The face a caller means on a host: the one its vector points at, the
+    /// one it named, or the host's only mounting face.
+    async fn socket(
+        &self,
+        host: Option<&str>,
+        face: Option<[f64; 3]>,
+        named: Option<String>,
+    ) -> Result<String, HostCallError> {
+        Ok(match (face, named) {
+            (Some(face), _) => self.stage().face_socket(host, face).await?,
+            (None, Some(named)) => named,
+            (None, None) => self.stage().default_face(host).await?,
+        })
+    }
+
+    /// Give the room a size, or take it away, and paint its walls. A shade
+    /// alone repaints the room it is.
+    async fn room(&self, request: RoomRequest) -> Result<Value, HostCallError> {
+        if request.size.is_some() || request.shade.is_none() {
+            self.stage().set_room(request.size).await?;
+        }
+        if let Some(shade) = request.shade {
+            self.stage().set_wall_shade(shade).await?;
+        }
+        Ok(json!({ "describe": self.stage().summary().await? }))
+    }
+
+    /// Move one light, keeping its id.
+    async fn move_light(&self, request: MoveRequest) -> Result<Value, HostCallError> {
+        let socket = match (&request.host_node_id, request.face, request.stay) {
+            (None, None, true) => None,
+            (host, face, _) => Some(self.socket(host.as_deref(), face, None).await?),
+        };
+        let moved = self
+            .stage()
+            .move_light(
+                &request.node_id,
+                socket
+                    .as_deref()
+                    .map(|socket| (request.host_node_id.as_deref(), socket)),
+                request.layout,
+            )
+            .await?;
+        let mut placed = self.placed(moved.report).await?;
+        placed["rehung"] = json!(moved.rehung);
+        Ok(placed)
     }
 
     /// The fixture constructor: place, name and patch a row in one
@@ -811,14 +854,31 @@ impl VenueHost {
             // Refuse a face the host does not have *now*, rather than at the
             // stamp: the caller is standing in front of the piece it just
             // built, and that is where the fix is cheapest.
-            draft.face(supply, &host, face)?;
+            let socket = draft.face(supply, &host, face)?;
+            // A point is put on the face now, in the draft's own directions:
+            // the stamp may turn the piece, and the light turns with it.
+            let layout = match request.layout.on_face() {
+                Err(point) if point.trim != 0.0 => {
+                    return Err(HostCallError::new(
+                        "invalid_argument",
+                        "a light in a draft has no height of its own until the stamp; \
+                         lift it afterwards with v.trim(light, trim=...)",
+                    ));
+                }
+                Err(point) => {
+                    let (metres, across) =
+                        draft.surface_point(supply, &host, &socket, [point.u, point.v])?;
+                    DistributeLayout::At { metres, across }
+                }
+                Ok(_) => request.layout,
+            };
             let row = draft.record(crate::services::stage_ops::PendingRow {
                 host,
                 face,
                 fixture_path: request.fixture_path.clone(),
                 mode_name: request.mode_name.clone(),
                 count: request.count,
-                layout: request.layout,
+                layout,
                 label_prefix: request.label_prefix.clone(),
                 aim: None,
             });
@@ -835,14 +895,14 @@ impl VenueHost {
                 "describe": draft.summary(supply),
             }));
         }
-        let socket = match (request.face, request.host_socket.clone()) {
-            (Some(face), _) => Some(
-                self.stage()
-                    .face_socket(request.host_node_id.as_deref(), face)
-                    .await?,
-            ),
-            (None, named) => named,
-        };
+        let socket = Some(
+            self.socket(
+                request.host_node_id.as_deref(),
+                request.face,
+                request.host_socket.clone(),
+            )
+            .await?,
+        );
         let distributed = self
             .stage()
             .distribute(
@@ -1229,8 +1289,7 @@ impl HostCallHandler for VenueHost {
                     "venue.patch" => self.patch(decode(payload)?).await,
                     "venue.remove_group" => self.remove_group(decode(payload)?).await,
                     "venue.generate_groups" => self.generate_groups().await,
-                    "venue.laser_zones" => self.laser_zones().await,
-                    "venue.laser_zone" => self.laser_zone(decode(payload)?).await,
+                    "venue.laser_window" => self.laser_window(decode(payload)?).await,
                     "venue.reach" => self.reach(decode(payload)?).await,
                     "venue.place" => self.place(decode(payload)?).await,
                     "venue.attach" => self.attach(decode(payload)?).await,
@@ -1239,6 +1298,8 @@ impl HostCallHandler for VenueHost {
                     "venue.remove" => self.remove(decode(payload)?).await,
                     "venue.params" => self.params(decode(payload)?).await,
                     "venue.distribute" => self.distribute(decode(payload)?).await,
+                    "venue.move" => self.move_light(decode(payload)?).await,
+                    "venue.room" => self.room(decode(payload)?).await,
                     "venue.chain" => self.chain(decode(payload)?).await,
                     "venue.query" => self.query(decode(payload)?).await,
                     "venue.extent" => self.extent(decode(payload)?).await,
@@ -1419,12 +1480,12 @@ fn described_haze(haze: VenueHaze) -> Value {
     value
 }
 
-/// A laser zone by name: its window, in degrees.
+/// The venue's laser window, in degrees; empty to read it.
 #[derive(Deserialize)]
-struct LaserZoneRequest {
-    name: String,
-    turn: [f64; 2],
-    tilt: [f64; 2],
+#[serde(deny_unknown_fields)]
+struct LaserWindowRequest {
+    turn: Option<[f64; 2]>,
+    tilt: Option<[f64; 2]>,
 }
 
 /// One fixture's DMX address, set by hand.
@@ -1565,6 +1626,29 @@ struct TilesRequest {
 #[serde(rename_all = "camelCase")]
 struct RemoveRequest {
     node_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RoomRequest {
+    /// `[width, depth, height]` in metres; `None` is open floor.
+    size: Option<[f64; 3]>,
+    /// How light the walls and ceiling are painted, 0 to 1.
+    shade: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MoveRequest {
+    node_id: String,
+    /// The host to hang it on; `None` is the room, or with `stay` the host
+    /// the light already has.
+    host_node_id: Option<String>,
+    face: Option<[f64; 3]>,
+    /// Keep the face it hangs on and move along it.
+    #[serde(default)]
+    stay: bool,
+    layout: DistributeLayout,
 }
 
 #[derive(Deserialize)]

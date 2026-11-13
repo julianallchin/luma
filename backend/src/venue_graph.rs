@@ -332,6 +332,7 @@ mod tests {
                 target_node: "tower".into(),
                 target_socket: "end_a".into(),
             }],
+            memberships: Vec::new(),
         }
     }
 

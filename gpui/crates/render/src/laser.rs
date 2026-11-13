@@ -22,13 +22,14 @@ use glam::Vec3;
 
 /// How long an eye adds a scanned laser's light up for, seconds.
 pub const PERSISTENCE_S: f32 = 0.05;
-/// The mirrors' natural frequency, radians a second: a damped spring each.
-/// A 30 kpps scanner settles a 0.1° step in 100–130 µs with a small mirror
-/// (Cambridge Technology 6210H, 6215H datasheets); a show scanner's larger
-/// mirror at ILDA's 8° test angle is slower, and at 30 kpps it still just
-/// draws the test pattern's corners: a rise of about three points, 85 µs,
-/// which 4 kHz gives.
-const GALVO_OMEGA: f32 = std::f32::consts::TAU * 4_000.0;
+/// How far the mirrors' natural oscillation turns in one point, radians: a
+/// damped spring each. A scanner is rated by the points a second at which it
+/// still just draws ILDA's test pattern's corners, a rise of about three
+/// points, and a projector is sent points at its rating. So the mirrors
+/// answer a point the same way whatever the rating: 4 kHz at 30 kpps
+/// (a small mirror settles a 0.1° step in 100–130 µs, Cambridge Technology
+/// 6210H and 6215H datasheets; a show scanner's larger mirror is slower).
+const GALVO_TURN: f32 = std::f32::consts::TAU * 4_000.0 / 30_000.0;
 /// The mirrors' damping ratio: a servo tuned a little under critical, as
 /// shipped, overshoots a step by about 5% and settles within 0.3 ms.
 const GALVO_ZETA: f32 = 0.7;
@@ -38,12 +39,12 @@ const BEAM_ANGLE: f32 = 0.002;
 pub const RANGE_M: f32 = 80.0;
 
 /// One point of a projector's stream: galvo coordinates −1 to 1 across and up
-/// its field, and its light per emitter, 0 to 1.
+/// its scan, and how hard each diode is driven, 0 to 1.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LaserPoint {
-    /// Across the field, −1 to 1.
+    /// Across the scan, −1 to 1.
     pub x: f32,
-    /// Up the field, −1 to 1.
+    /// Up the scan, −1 to 1.
     pub y: f32,
     /// Red, green and blue, 0 to 1; black is the light off.
     pub rgb: [f32; 3],
@@ -54,15 +55,22 @@ pub struct LaserPoint {
 pub struct LaserScan {
     /// Where the light leaves.
     pub origin: Vec3,
-    /// Unit vector: the field's middle.
+    /// Unit vector: the scan's middle.
     pub forward: Vec3,
     /// Unit vector: the axis the across mirror moves the light along.
     pub right: Vec3,
     /// Unit vector: the axis the up mirror moves the light along.
     pub up: Vec3,
-    /// Half the scan angle across and up, degrees.
-    pub half_field: [f32; 2],
-    /// Points a second.
+    /// Half the scan angle, degrees: one galvo unit.
+    pub half_angle: f32,
+    /// What the red, green and blue diode each give at full drive: linear
+    /// sRGB whose luminance is lumens.
+    pub light: [Vec3; 3],
+    /// The beam's diameter where it leaves, metres.
+    pub beam_m: f32,
+    /// How fast it widens, radians (full angle).
+    pub divergence: f32,
+    /// Points a second: the scanner's rating.
     pub rate: f32,
     /// One scan, played on repeat.
     pub points: Vec<LaserPoint>,
@@ -72,30 +80,45 @@ pub struct LaserScan {
 }
 
 impl LaserScan {
-    /// The unit world direction of galvo coordinates `(x, y)`.
+    /// The unit world direction of galvo coordinates `(x, y)`. The across
+    /// mirror turns the beam first and the up mirror tips that whole fan,
+    /// as the solver has it (`Projector::direction`).
     pub fn direction(&self, x: f32, y: f32) -> Vec3 {
-        let tan = |c: f32, half: f32| (c * half).to_radians().tan();
-        (self.forward
-            + self.right * tan(x, self.half_field[0])
-            + self.up * tan(y, self.half_field[1]))
-        .normalize()
+        let (across, up) = (
+            (x * self.half_angle).to_radians(),
+            (y * self.half_angle).to_radians(),
+        );
+        self.forward * (across.cos() * up.cos())
+            + self.right * across.sin()
+            + self.up * (across.cos() * up.sin())
+    }
+
+    /// The light of a point driven at `rgb`. A laser line lies outside
+    /// sRGB, so one diode alone has a component below zero; a screen shows
+    /// none of that.
+    fn emitted(&self, rgb: [f32; 3]) -> Vec3 {
+        (self.light[0] * rgb[0] + self.light[1] * rgb[1] + self.light[2] * rgb[2]).max(Vec3::ZERO)
     }
 }
 
-/// A beam: from `origin` along `direction`, with `power` per emitter, the
-/// light it holds averaged over the window.
+/// A beam: from `origin` along `direction`, with the light it holds
+/// averaged over the window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Beam {
     /// Where it leaves the projector.
     pub origin: Vec3,
     /// Unit vector it travels along.
     pub direction: Vec3,
-    /// Its light per emitter, averaged over the window.
+    /// Its light, averaged over the window: linear sRGB, luminance lumens.
     pub power: Vec3,
+    /// Half its thickness where it leaves, metres.
+    pub half_width: f32,
+    /// Half the angle it spreads by, radians.
+    pub half_divergence: f32,
 }
 
-/// A sheet: from `origin` between two directions, with `density` per emitter
-/// per radian of the angle between them.
+/// A sheet: from `origin` between two directions, with `density` light per
+/// radian of the angle between them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sheet {
     /// Where it leaves the projector.
@@ -104,7 +127,7 @@ pub struct Sheet {
     pub from: Vec3,
     /// Unit vector of the other edge.
     pub to: Vec3,
-    /// Its light per emitter per radian, averaged over the window.
+    /// Its light per radian, averaged over the window.
     pub density: Vec3,
 }
 
@@ -137,20 +160,20 @@ pub(crate) struct Galvo {
 }
 
 impl Galvo {
-    /// Mirrors at rest at `(x, y)`, sent a point `rate` times a second.
-    pub(crate) fn new(x: f32, y: f32, rate: f32) -> Self {
-        let t = 1.0 / rate;
-        let decay = GALVO_ZETA * GALVO_OMEGA;
-        let ringing = GALVO_OMEGA * (1.0 - GALVO_ZETA * GALVO_ZETA).sqrt();
-        let fade = (-decay * t).exp();
-        let (sin, cos) = (ringing * t).sin_cos();
+    /// Mirrors at rest at `(x, y)`. Time is in points, so velocity is
+    /// galvo units a point.
+    pub(crate) fn new(x: f32, y: f32) -> Self {
+        let decay = GALVO_ZETA * GALVO_TURN;
+        let ringing = GALVO_TURN * (1.0 - GALVO_ZETA * GALVO_ZETA).sqrt();
+        let fade = (-decay).exp();
+        let (sin, cos) = ringing.sin_cos();
         Self {
             position: [x, y],
             velocity: [0.0; 2],
             step: [
                 [fade * (cos + decay / ringing * sin), fade * sin / ringing],
                 [
-                    -fade * GALVO_OMEGA * GALVO_OMEGA / ringing * sin,
+                    -fade * GALVO_TURN * GALVO_TURN / ringing * sin,
                     fade * (cos - decay / ringing * sin),
                 ],
             ],
@@ -189,7 +212,7 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
     // The mirrors lag the stream; run them over the scan before the window
     // so they arrive where a projector's would.
     let last = at(start + n - 1);
-    let mut galvo = Galvo::new(last.x, last.y, scan.rate);
+    let mut galvo = Galvo::new(last.x, last.y);
     for k in start..start + n {
         galvo.follow(at(k));
     }
@@ -215,6 +238,8 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
                 origin: scan.origin,
                 direction,
                 power,
+                half_width: 0.5 * scan.beam_m,
+                half_divergence: 0.5 * scan.divergence,
             });
         }
     };
@@ -224,7 +249,7 @@ pub fn light(scan: &LaserScan) -> (Vec<Beam>, Vec<Sheet>) {
         let p = at(k);
         let [x, y] = galvo.follow(p);
         let to = scan.direction(x, y);
-        let light = Vec3::from(p.rgb) * (weight(k - start) / total);
+        let light = scan.emitted(p.rgb) * (weight(k - start) / total);
         if light.max_element() <= 0.0 {
             flush(&mut gathering, &mut beams);
         } else {
@@ -264,7 +289,8 @@ struct Uniform {
     viewport: [f32; 4],
 }
 
-/// A beam as the shader reads it.
+/// A beam as the shader reads it: `origin.w` half its thickness where it
+/// leaves, `direction.w` half the angle it spreads by.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BeamInstance {
@@ -422,8 +448,8 @@ impl Pipelines {
         for scan in input.scans {
             let (b, s) = light(scan);
             beams.extend(b.into_iter().map(|beam| BeamInstance {
-                origin: beam.origin.extend(0.0).to_array(),
-                direction: beam.direction.extend(0.0).to_array(),
+                origin: beam.origin.extend(beam.half_width).to_array(),
+                direction: beam.direction.extend(beam.half_divergence).to_array(),
                 power: beam.power.extend(0.0).to_array(),
             }));
             for sheet in s {
@@ -546,7 +572,11 @@ mod tests {
             forward: Vec3::Y,
             right: Vec3::X,
             up: Vec3::Z,
-            half_field: [30.0, 30.0],
+            half_angle: 30.0,
+            // Each diode gives one unit, so light is the share of the time.
+            light: [Vec3::X, Vec3::Y, Vec3::Z],
+            beam_m: 0.004,
+            divergence: 0.0015,
             rate: 30_000.0,
             points,
             phase: 0.0,
@@ -695,19 +725,15 @@ mod tests {
     }
 
     /// Sent a jump and held there, the mirrors overshoot a little and
-    /// settle on it, at any point rate: the spring never runs away.
+    /// settle on it: the spring never runs away.
     #[test]
     fn a_step_settles() {
-        for rate in [1_000.0, 30_000.0, 100_000.0] {
-            let mut galvo = Galvo::new(-0.5, 0.0, rate);
-            let path: Vec<f32> = (0..(rate * 0.01) as usize)
-                .map(|_| galvo.follow(dot(0.5, true))[0])
-                .collect();
-            let most = path.iter().copied().fold(f32::MIN, f32::max);
-            assert!(most < 0.5 + 0.1, "{rate}: overshoots to {most}");
-            let end = path.last().copied().unwrap_or(0.0);
-            assert!((end - 0.5).abs() < 1e-4, "{rate}: ends at {end}");
-        }
+        let mut galvo = Galvo::new(-0.5, 0.0);
+        let path: Vec<f32> = (0..300).map(|_| galvo.follow(dot(0.5, true))[0]).collect();
+        let most = path.iter().copied().fold(f32::MIN, f32::max);
+        assert!(most > 0.5 && most < 0.5 + 0.1, "overshoots to {most}");
+        let end = path.last().copied().unwrap_or(0.0);
+        assert!((end - 0.5).abs() < 1e-4, "ends at {end}");
     }
 
     /// Galvo coordinates of a direction from the test projector.

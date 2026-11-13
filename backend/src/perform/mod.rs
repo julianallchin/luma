@@ -1035,13 +1035,16 @@ async fn deck_scene(
     let mut annotations = Vec::new();
     let mut rig = crate::eval::aim::Rig::default();
     for score in scores {
-        let scene = crate::compositor::build_score_scene(
+        // Only the clips and the rig are taken from each score: the deck's
+        // one scene below samples when its heads are lit.
+        let scene = crate::compositor::score_scene(
             &shared.pool,
             &shared.storage,
             &shared.fixtures_root,
             &shared.controls,
             &score.id,
             None,
+            crate::eval::aim::LookAhead::Deferred,
         )
         .await?;
         if let Some(aimed) = scene.rig() {

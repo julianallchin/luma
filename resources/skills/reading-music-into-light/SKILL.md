@@ -62,6 +62,14 @@ it. Hypnotic music that changes one thing every sixteen bars wants light
 that does the same; variety there breaks the spell. Music that never repeats
 a bar wants each event placed on its own.
 
+**Is the voice a singer or a sample?**
+A voice in the track does not make it a sung song. In electronic music it is
+most often a sample: a chopped phrase, a shout, a loop the DJ rides. That is
+one more sound to light, placed where it lands, and the track has no verse
+or chorus to build around. Read it as a singer only when the song is built
+on the voice: long phrases that carry the melody and sections that follow
+the lyric.
+
 **What is the one thing a listener would point at?**
 Every passage has a sound that makes it this song: a vocal chop, a bass
 shape, a snare fill, a strange texture. Find it, give it the clearest

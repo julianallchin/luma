@@ -70,6 +70,10 @@ pub fn build_index(root_path: &Path) -> Result<FixtureIndex, std::io::Error> {
 }
 
 pub fn parse_definition(path: &Path) -> Result<FixtureDefinition, String> {
-    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    from_str(&content).map_err(|e| e.to_string())
+    parse(&fs::read_to_string(path).map_err(|e| e.to_string())?)
+}
+
+/// A QLC+ definition from its XML.
+pub fn parse(content: &str) -> Result<FixtureDefinition, String> {
+    from_str(content).map_err(|e| e.to_string())
 }

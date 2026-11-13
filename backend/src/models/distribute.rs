@@ -32,33 +32,48 @@ pub enum DistributeLayout {
         #[serde(default)]
         across: f64,
     },
+    /// One light at a point in plan: `(u, v)` stage metres from the middle of
+    /// a level face, in the **room's** directions whichever way the host is
+    /// turned, lifted `trim` metres above it. This is how a person pointing
+    /// at a floor and an agent naming a coordinate both say "here"; the stage
+    /// turns it into the face's own along and across before the row is laid.
+    Point {
+        u: f64,
+        v: f64,
+        #[serde(default)]
+        trim: f64,
+    },
+}
+
+/// A point in plan that has yet to be put on a face. See
+/// [`DistributeLayout::Point`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlanPoint {
+    pub u: f64,
+    pub v: f64,
+    pub trim: f64,
 }
 
 impl DistributeLayout {
-    /// How far off the face's middle the row sits across it, in metres.
-    #[must_use]
-    pub fn across_m(self) -> f64 {
+    /// The row along its face and how far across it sits, in metres.
+    ///
+    /// # Errors
+    /// The point itself, for a [`DistributeLayout::Point`]: only a caller
+    /// holding the venue can say where on the face that is.
+    pub fn on_face(self) -> Result<(Layout, f64), PlanPoint> {
         match self {
-            DistributeLayout::At { across, .. } => across,
-            _ => 0.0,
+            DistributeLayout::Even => Ok((Layout::Even, 0.0)),
+            DistributeLayout::Spacing { metres } => Ok((Layout::Spacing(metres), 0.0)),
+            DistributeLayout::Span { from, to } => Ok((Layout::Span(from, to), 0.0)),
+            DistributeLayout::At { metres, across } => Ok((Layout::At(metres), across)),
+            DistributeLayout::Point { u, v, trim } => Err(PlanPoint { u, v, trim }),
         }
     }
 }
 
-impl From<DistributeLayout> for Layout {
-    fn from(layout: DistributeLayout) -> Layout {
-        match layout {
-            DistributeLayout::Even => Layout::Even,
-            DistributeLayout::Spacing { metres } => Layout::Spacing(metres),
-            DistributeLayout::Span { from, to } => Layout::Span(from, to),
-            DistributeLayout::At { metres, .. } => Layout::At(metres),
-        }
-    }
-}
-
-/// The inverse, for a caller that solved a preview locally and has to say what
-/// it previewed. Beside the forward conversion so the two spellings of one
-/// union cannot drift apart unnoticed.
+/// The inverse of [`DistributeLayout::on_face`], for a caller that solved a
+/// preview locally and has to say what it previewed. Beside the forward
+/// conversion so the two spellings of one union cannot drift apart unnoticed.
 impl From<Layout> for DistributeLayout {
     fn from(layout: Layout) -> DistributeLayout {
         match layout {
@@ -80,8 +95,10 @@ pub struct DistributedFixture {
     /// The `fixtures` row id, which is also its venue-graph node id.
     pub id: String,
     pub label: String,
-    pub universe: u16,
-    pub address: u16,
+    /// Where it is patched; `None` for a fixture with no DMX channels (a
+    /// laser projector).
+    pub universe: Option<u16>,
+    pub address: Option<u16>,
     /// Metres along the host face from its middle, ascending across the row.
     ///
     /// Not the same axis as the address order: addresses run along the *run*,

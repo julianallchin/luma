@@ -143,8 +143,7 @@ fn fills(state: &Patch, universe: u16, cells: &[UniverseCell]) -> Vec<Hsla> {
     };
     let lifted = state.drag.as_ref().map(|drag| drag.fixture.as_str());
     for (index, row) in state
-        .rows()
-        .iter()
+        .patched()
         .filter(|row| row.universe == i64::from(universe))
         .enumerate()
     {
@@ -239,8 +238,7 @@ fn grid(state: &Patch, universe: u16, cells: &[UniverseCell], app: &Entity<Luma>
         .aspect_ratio(columns as f32 / rows as f32)
         .child(painted);
     for row in state
-        .rows()
-        .iter()
+        .patched()
         .filter(|row| row.universe == i64::from(universe))
     {
         cells_area = cells_area.children(run(state, universe, row, app));

@@ -147,6 +147,20 @@ mod tests {
     }
 }
 
+/// How much two placed bodies' boxes are shrunk before they are tested
+/// against each other, metres.
+const CLEARANCE_M: f64 = 0.02;
+
+/// Whether two placed bodies pass through each other. Touching is not: a
+/// piece mated flush on a face touches its host by construction.
+///
+/// The one rule for "in the way": a preview, a plan and the write that
+/// follows them all ask here, so none can admit what another refuses.
+#[must_use]
+pub fn collides(a: DAabb, a_world: &glam::DMat4, b: DAabb, b_world: &glam::DMat4) -> bool {
+    obb_intersects(a, a_world, b, b_world, CLEARANCE_M)
+}
+
 /// Whether two oriented boxes overlap: each a local-space [`DAabb`] carried by
 /// a rigid world transform. Separating-axis test over the 15 candidate axes.
 ///

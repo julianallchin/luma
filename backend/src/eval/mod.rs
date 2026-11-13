@@ -35,6 +35,10 @@ pub struct Plan {
     pub outputs: OutputBinding,
     /// The clip's absolute `[start, end]` time span in seconds.
     pub span: (f32, f32),
+    /// A digest of everything the plan was compiled from, when its compiler
+    /// gives one: two plans with the same source render the same light.
+    /// Live controls are not part of it; they are read at every frame.
+    pub source: Option<u64>,
 }
 /// Last batch of canonical values, reusable by output assembly and diagnostics.
 #[derive(Default)]

@@ -341,6 +341,19 @@ impl Library {
         })
     }
 
+    /// Give the venue's room a size, `[width, depth, height]` in metres, or
+    /// take it away with `None`.
+    pub fn set_room(
+        &self,
+        venue_id: &str,
+        size: Option<[f64; 3]>,
+    ) -> impl Future<Output = Result<ResolvedVenue, LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("set_room", move |services| async move {
+            handlers::stage::set_room(&services, venue_id, size).await
+        })
+    }
+
     /// One command, one transaction: place, name, group and patch a row of
     /// fixtures along a host feature.
     #[allow(clippy::too_many_arguments)]
@@ -376,9 +389,36 @@ impl Library {
         })
     }
 
+    /// Move one placed light onto `host`'s face (`None` is the room's floor),
+    /// keeping its id, its address and its groups.
+    pub fn move_light(
+        &self,
+        venue_id: &str,
+        node_id: &str,
+        host: Option<(&str, &str)>,
+        layout: DistributeLayout,
+    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
+        let (host_node_id, host_socket) = match host {
+            Some((node, socket)) => (Some(node.to_owned()), socket.to_owned()),
+            None => (None, luma_scene::venue::FLOOR_SOCKET.to_owned()),
+        };
+        let (venue_id, node_id) = (venue_id.to_owned(), node_id.to_owned());
+        self.call("move_light", move |services| async move {
+            handlers::distribute::move_light(
+                &services,
+                venue_id,
+                node_id,
+                host_node_id,
+                host_socket,
+                layout,
+            )
+            .await
+        })
+    }
+
     /// Re-lay the row `member_node_id` belongs to at a new count or layout.
-    /// The row is derived server-side; a count that does not fit rolls back
-    /// to the row that did.
+    /// The row is derived server-side; the lights it had stay the lights they
+    /// were, and a count that does not fit changes nothing.
     pub fn redistribute(
         &self,
         venue_id: &str,

@@ -612,7 +612,9 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
                 count: 2,
                 layout: Layout::At(if step < 2 { -2.0 } else { -3.0 }),
                 across_m: 0.0,
+                trim_m: 0.0,
                 label_prefix: None,
+                relay: &[],
             };
             let report = distribute(&mut access, &fixtures_root(), request.clone())
                 .await
@@ -654,7 +656,12 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
             // A second row placed physically before the first must receive
             // addresses before it even though it was created later.
             if step >= 2 {
-                let new_last = report.fixtures.iter().map(|f| f.address).max().unwrap();
+                let new_last = report
+                    .fixtures
+                    .iter()
+                    .map(|f| f.address.expect("a DMX fixture is patched"))
+                    .max()
+                    .unwrap();
                 let old_first = before
                     .iter()
                     .filter(|f| {
@@ -957,7 +964,9 @@ async fn lights_on_the_floor_land_where_asked_and_only_collide_in_place() {
         count: 1,
         layout: Layout::At(1.5),
         across_m,
+        trim_m: 0.0,
         label_prefix: None,
+        relay: &[],
     };
     let mut placed = Vec::new();
     for across in [2.0, -3.0] {

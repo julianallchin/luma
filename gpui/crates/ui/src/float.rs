@@ -510,6 +510,18 @@ pub fn key_hint_text(cap: impl Into<SharedString>, label: impl Into<SharedString
         .child(key_hint_label(label))
 }
 
+/// [`key_hint`] for a chord whose modifier has no glyph: the word, then the
+/// key's glyph, in one cap (`[Ctrl/Cmd ↵] Apply`).
+pub fn key_hint_chord(
+    modifier: impl Into<SharedString>,
+    icon: IconName,
+    label: impl Into<SharedString>,
+) -> Div {
+    hint_row()
+        .child(key_cap().child(modifier.into()).child(cap_glyph(icon)))
+        .child(key_hint_label(label))
+}
+
 /// [`key_hint`] for a pair of keys that share one verb — `[↑|↓] Navigate`.
 /// Two caps would claim two behaviours; one split cap says "either of these".
 pub fn key_hint_pair(first: IconName, second: IconName, label: impl Into<SharedString>) -> Div {
@@ -1020,7 +1032,7 @@ pub fn scrub_with_power(
 /// Derived from the step rather than passed alongside it because the two can
 /// only ever disagree: a control that steps by 0.5 and prints no decimals
 /// shows the same digit for two different values.
-fn format_step(value: f64, step: f64) -> String {
+pub(crate) fn format_step(value: f64, step: f64) -> String {
     let places = if step >= 1.0 {
         0
     } else if step >= 0.1 {

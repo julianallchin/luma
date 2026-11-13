@@ -159,9 +159,9 @@ and the selection cage is its box. `.qxf` fixtures draw exactly as before.
 
 ## Search
 
-`services::fixtures::catalogue` lists the library's fixtures and one `.qxf`:
-the ILDA laser projector (`models::fixtures::LASER_PROJECTOR_PATH`), which the
-library does not carry. No other `.qxf` is offered while a library is present;
+`services::fixtures::catalogue` lists the library's fixtures and one built-in:
+the laser projector (`models::fixtures::LASER_PROJECTOR_PATH`), whose
+definition is compiled in and which the library does not carry. No other `.qxf` is offered while a library is present;
 a tree with no library beside it is searched as QLC+ alone. A library entry
 carries its modes, footprints and quality, and the add dialog's preview shows
 them under a render of the fixture. The `.qxf` files stay on disk for the
@@ -196,7 +196,6 @@ Not done here. Existing rows still name `.qxf` paths. The migration maps
 `aliases.jsonl` (`qlc_path`, `qlc_modes`), checks `num_channels` against the
 new footprint, and rewrites `fixtures.fixture_path`, `fixtures.mode_name` and
 the node's `catalog_ref` together, in both migration folders (local and
-Supabase). Rows that do not map keep their `.qxf`. The laser SQL predicates
-compare `fixture_path` against `'Generic/Generic-ILDA-Laser-Projector.qxf'`;
-the ILDA projector stays a QLC+ built-in, so they stay valid, but any new laser
-predicate must keep naming that path.
+Supabase). Rows that do not map keep their `.qxf`. The laser projector is not
+a `.qxf` any more: data format 3 moved its rows to `builtin:laser-projector`
+([lasers.md](lasers.md)), and a laser SQL predicate names that path.

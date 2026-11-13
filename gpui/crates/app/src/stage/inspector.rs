@@ -32,19 +32,6 @@ fn note(text: String) -> AnyElement {
         .into_any_element()
 }
 
-/// The word an editable freedom goes by in the inspector.
-///
-/// The graph's parameter keys are `u`, `yaw`, `trim` — the names the solver
-/// argues in. A person adjusting a light is sliding it, turning it or lifting
-/// it, so the row is titled for the gesture and the key stays in the model.
-fn axis_title(key: &str) -> &'static str {
-    match key {
-        "u" => "Slide",
-        "yaw" => "Turn",
-        _ => "Trim",
-    }
-}
-
 /// Object controls belong to the scene, beside the selected object.
 pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<AnyElement> {
     if !matches!(build.hand, Hand::Idle) {
@@ -66,10 +53,23 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
                 .agent_node(Role::Text, selected.label.clone()),
         ),
     );
+    let is_light = build
+        .graph
+        .node(&selected.node)
+        .is_some_and(|node| node.kind == luma_scene::venue::NodeKind::Fixture);
     let actions = div()
         .flex()
         .items_center()
         .gap(px(8.0))
+        .when(is_light, |actions| {
+            let pick_up = app.clone();
+            actions.child(
+                float::btn("Move", "selection-move")
+                    .id("selection-move")
+                    .on_click(move |_, _, cx| pick_up.update(cx, |this, cx| this.stage_move(cx)))
+                    .agent_node(Role::Button, "Move light"),
+            )
+        })
         .child(
             float::btn("Duplicate", "selection-duplicate")
                 .id("selection-duplicate")
@@ -217,37 +217,26 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
             card = card.child(note("Above floor · follows its mount".to_string()));
         }
     }
-    let editable = selected
-        .freedom
-        .param()
-        .map(|key| (key, selected.param, if key == "u" { 1.0 } else { 360.0 }));
-    if let Some((key, value, max)) = editable {
+    // A joint that turns is turned here. Where a thing sits on a face is
+    // not a number on this card: it is dragged, or picked up and put down.
+    if selected.freedom == super::build::Freedom::Roll {
         let app = app.clone();
         let node = selected.node.clone();
-        // The joint says what a turn lands on: 90° at a bolt
-        // circle, 5° at a rail post.
-        let step = if key == "yaw" {
-            selected.roll_step
-        } else {
-            0.05
-        };
         card = card.child(float::inline_field_row(
-            axis_title(key),
+            "Turn",
             float::scrub(
-                format!("stage-{key}"),
-                value,
+                "stage-yaw",
+                selected.turn,
                 0.0,
-                max,
-                step,
+                360.0,
+                // The joint says what a turn lands on: 90° at a bolt
+                // circle, 5° at a rail post.
+                selected.roll_step,
                 SELECTED_CARD_CONTROL_W,
                 move |value, _, cx| {
                     let node = node.clone();
                     app.update(cx, |this, cx| {
-                        if key == "yaw" {
-                            this.stage_set_param(&node, key, value.to_radians(), cx);
-                        } else {
-                            this.stage_set_param(&node, key, value, cx);
-                        }
+                        this.stage_set_param(&node, "yaw", value.to_radians(), cx);
                     });
                 },
             ),

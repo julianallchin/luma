@@ -1,4 +1,5 @@
-//! `dmx_routes`: which device and port each DMX universe goes to.
+//! `dmx_routes`: which device and port each DMX universe goes to, and
+//! `laser_routes`: which DAC plays each laser projector.
 //!
 //! Rows in, rows out. App-global rather than venue-scoped — which box is
 //! plugged in where is a property of the room, not of the venue document — so
@@ -6,6 +7,7 @@
 
 use sqlx::SqlitePool;
 
+use crate::models::lasers::LaserRoute;
 use crate::models::patch::{DeviceKind, DmxRoute};
 
 /// Every route, by universe.
@@ -72,5 +74,62 @@ pub async fn unbind(
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to unbind universe {universe}: {e}"))?;
+    Ok(())
+}
+
+// -- Laser DACs --
+
+/// Which DAC plays each projector, by projector.
+///
+/// # Errors
+/// Fails if `laser_routes` cannot be read.
+pub async fn laser_routes(pool: &SqlitePool) -> Result<Vec<LaserRoute>, String> {
+    sqlx::query_as::<_, LaserRoute>(
+        "SELECT fixture_id, device_kind, device_id, device_name, address
+         FROM laser_routes ORDER BY fixture_id ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to read laser routes: {e}"))
+}
+
+/// Play `route.fixture_id` through `route`'s DAC, in place of whichever it
+/// was played through.
+///
+/// # Errors
+/// Fails if the row cannot be written.
+pub async fn bind_laser(pool: &SqlitePool, route: &LaserRoute) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO laser_routes (fixture_id, device_kind, device_id, device_name, address)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(fixture_id) DO UPDATE SET
+             device_kind = excluded.device_kind,
+             device_id = excluded.device_id,
+             device_name = excluded.device_name,
+             address = excluded.address,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
+    )
+    .bind(&route.fixture_id)
+    .bind(route.device_kind.as_str())
+    .bind(&route.device_id)
+    .bind(&route.device_name)
+    .bind(&route.address)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to bind the projector: {e}"))?;
+    Ok(())
+}
+
+/// Play `fixture_id` through nothing. A projector that was not bound stays
+/// unbound.
+///
+/// # Errors
+/// Fails if the row cannot be deleted.
+pub async fn unbind_laser(pool: &SqlitePool, fixture_id: &str) -> Result<(), String> {
+    sqlx::query("DELETE FROM laser_routes WHERE fixture_id = ?")
+        .bind(fixture_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to unbind the projector: {e}"))?;
     Ok(())
 }

@@ -101,6 +101,7 @@ impl TrackHost {
             &self.controls,
             self.scope.grid(),
             candidate,
+            crate::eval::aim::LookAhead::UpFront,
         )
         .await
         .map_err(|error| HostCallError::new("compile_error", error))

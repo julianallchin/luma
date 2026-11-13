@@ -40,13 +40,9 @@ pub(crate) struct QualityBudget {
     pub msaa: u32,
     /// Output pixels per ambient-visibility texel along each axis.
     pub ambient_divisor: u32,
-    /// Whether the local reflection probes run; without them surfaces are
-    /// lit from the sky probe alone.
-    pub reflection_probes: bool,
-    /// Probes a layer holds, and layers.
-    pub probe_grid: (u32, u32),
-    /// The probes' base mip for capture, relight and sampling.
-    pub probe_base_mip: u32,
+    /// What the bounced light (`bounce.rs`) may spend; without it surfaces
+    /// take the house's flat fill and the sky probe alone.
+    pub bounce: Option<crate::bounce::stage::Budget>,
     /// Sun shafts: output pixels per texel along each axis, and samples per
     /// ray.
     pub sun_shafts: (u32, u32),
@@ -88,9 +84,12 @@ impl QualityBudget {
                 fog_tile: crate::fog_grid::TILE_SIZE,
                 msaa: crate::gpu::MSAA_SAMPLES,
                 ambient_divisor: 1,
-                reflection_probes: true,
-                probe_grid: (12, 2),
-                probe_base_mip: 0,
+                bounce: Some(crate::bounce::stage::Budget {
+                    spacing: 0.5,
+                    discs: 12_000.0,
+                    error: 0.02,
+                    step: 4,
+                }),
                 sun_shafts: (2, 24),
                 haze_glow: crate::haze_glow::HIGH,
                 clouds: clouds::Budget {
@@ -109,8 +108,8 @@ impl QualityBudget {
             },
             // A laptop budget: twice the shadow walk's footprint allowance
             // and half its steps, and twice again while the camera moves.
-            // The reflection probes cost about 0.17 ms here against a 0.1 ms
-            // budget, so surfaces light from the sky probe alone.
+            // The bounce is coarser: discs further apart, fewer of them,
+            // and looser links.
             Quality::Medium => Self {
                 marched: true,
                 fixture_shadows: true,
@@ -122,9 +121,12 @@ impl QualityBudget {
                 fog_tile: crate::fog_grid::LOW_TILE_SIZE,
                 msaa: 1,
                 ambient_divisor: 1,
-                reflection_probes: false,
-                probe_grid: (8, 1),
-                probe_base_mip: 1,
+                bounce: Some(crate::bounce::stage::Budget {
+                    spacing: 0.8,
+                    discs: 4_000.0,
+                    error: 0.04,
+                    step: 8,
+                }),
                 sun_shafts: (4, 12),
                 haze_glow: crate::haze_glow::LOW,
                 clouds: clouds::Budget {
@@ -145,6 +147,7 @@ impl QualityBudget {
                 marched: false,
                 fixture_shadows: false,
                 ambient_divisor: 2,
+                bounce: None,
                 haze_resolution_cap: Some(0.25),
                 frame_rate: 120.0,
                 ..Self::of(Quality::Medium)

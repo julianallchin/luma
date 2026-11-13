@@ -174,7 +174,16 @@ impl VenueGeometry {
         scene_desc::Scene,
         BTreeMap<String, luma_scene::definition::Definition>,
     ) {
-        let render = offscreen_render(self.environment, self.haze);
+        let mut render = offscreen_render(self.environment, self.haze);
+        if let Some(root) = self
+            .venue
+            .poses()
+            .find(|pose| pose.kind == luma_scene::venue::NodeKind::Venue)
+        {
+            render.room = luma_scene::venue::room_size(&root.params)
+                .map(|size| size.map(|metres| metres as f32));
+            render.wall_shade = luma_scene::venue::wall_shade(&root.params);
+        }
         let definitions: BTreeMap<String, luma_scene::definition::Definition> = self
             .definitions
             .iter()
@@ -379,7 +388,10 @@ impl StageLights {
                             return None;
                         }
                         let realized = light.realize(&requests, 1.0, slice);
-                        Some((id.clone(), light.emit(&realized)))
+                        let positions = (0..light.cells())
+                            .map(|cell| light.position(cell, &requests))
+                            .collect();
+                        Some((id.clone(), (light.emit(&realized), positions)))
                     })
                     .collect()
             })
@@ -391,25 +403,23 @@ impl StageLights {
 /// One frame of a rig's light, as the renderer asks for it: `(fixture, head)`.
 pub struct FrameLights<'a> {
     state: Option<&'a UniverseState>,
-    /// The library fixtures' cells, by fixture id.
-    cells: HashMap<String, Vec<CellLight>>,
+    /// The library fixtures' cells, by fixture id: the light each gives and
+    /// where its mode's motors put it, `[pan, tilt]` degrees.
+    cells: HashMap<String, (Vec<CellLight>, Vec<[f32; 2]>)>,
 }
 
 impl FrameLights<'_> {
     /// One head's state. A library fixture's cell is the light it gives,
     /// strobing only where its own shutter flashes it (a strobe the engine
-    /// gates is already in its brightness). Any other head is its primitive
+    /// gates is already in its brightness), turned where its mode's motors
+    /// put it. Any other head is its primitive
     /// as asked: the eval engine keys a single-head fixture by its bare id
     /// and a multi-head one by `"<id>:<head>"`, and both answer here, so the
     /// renderer need not know which it has.
     #[must_use]
     pub fn primitive(&self, id: &str, head: usize) -> Option<scene_desc::PrimitiveState> {
         let state = self.state?;
-        let p = state
-            .primitives
-            .get(&format!("{id}:{head}"))
-            .or_else(|| state.primitives.get(id));
-        if let Some(cells) = self.cells.get(id) {
+        if let Some((cells, positions)) = self.cells.get(id) {
             let cell = cells.get(head)?;
             let peak = cell.rgb.iter().copied().fold(0.0_f32, f32::max);
             return Some(scene_desc::PrimitiveState {
@@ -420,12 +430,15 @@ impl FrameLights<'_> {
                     [0.0; 3]
                 },
                 strobe: cell.own_strobe,
-                position: p.map_or([0.0, 0.0], |p| p.position),
+                position: positions[head],
                 gobo: 0,
                 gobo_rotation: 0.0,
             });
         }
-        let p = p?;
+        let p = state
+            .primitives
+            .get(&format!("{id}:{head}"))
+            .or_else(|| state.primitives.get(id))?;
         // The renderer works in linear light with sRGB primaries and presents
         // it in sRGB, SDR or HDR alike; a wider color is mapped into sRGB by
         // the same rule a fixture's emitters use.
@@ -944,7 +957,7 @@ fn one_frame(
     )
     .map_err(|error| format!("could not assemble the frame: {error}"))?;
     if let Some(state) = state {
-        frame.lasers = laser_scans(&scene.lasers, state, moment.time);
+        frame.lasers = laser_scans(&scene.lasers, state, None, moment.time);
     }
     // The fitted camera, turned by the footage look's shake at this moment
     // as `build_frame_at` turns the scene's own.
@@ -952,6 +965,7 @@ fn one_frame(
         camera,
         footage::shake(&scene.scene.render.look.footage, &moment),
     );
+    frame.open_room_to_camera();
     match continuity {
         Continuity::Next => renderer.render_next(&frame, width, height, subframes),
         Continuity::Cut => renderer.render(&frame, width, height, subframes),
@@ -966,24 +980,31 @@ fn one_frame(
 pub fn laser_scans(
     rig: &crate::laser::LaserRig,
     state: &UniverseState,
+    testing: Option<&str>,
     clock: f64,
 ) -> Vec<luma_render::laser::LaserScan> {
     if rig.is_empty() {
         return Vec::new();
     }
+    use crate::laser::Key;
     let world =
         |v: glam::DVec3| coords::three_to_world_basis() * coords::three_from_data(v.as_vec3());
-    rig.solve(state)
+    rig.solve_testing(state, testing)
         .into_iter()
         .filter_map(|frame| {
             let projector = rig.projector(&frame.projector)?;
-            let basis = projector.basis;
+            let (basis, settings) = (projector.basis, &projector.settings);
             Some(luma_render::laser::LaserScan {
                 origin: world(basis.origin),
                 forward: world(basis.forward),
                 right: world(basis.right),
                 up: world(basis.up),
-                half_field: projector.field.map(|f| (f / 2.) as f32),
+                half_angle: settings.reach() as f32,
+                light: settings
+                    .light()
+                    .map(|diode| glam::Vec3::from(diode.map(|c| c as f32))),
+                beam_m: (settings.get(Key::Beam) / 1e3) as f32,
+                divergence: (settings.get(Key::Divergence) / 1e3) as f32,
                 rate: frame.rate as f32,
                 phase: (clock * f64::from(frame.rate)).rem_euclid(frame.points.len().max(1) as f64)
                     as f32,
@@ -1004,7 +1025,7 @@ pub fn laser_scans(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::laser::{Basis, LaserRig, Projector};
+    use crate::laser::{Basis, LaserRig, Projector, Settings};
     use crate::models::universe::PrimitiveState;
     use glam::DVec3;
     use luma_patterns::laser::{Element, Outline, Sample};
@@ -1377,11 +1398,11 @@ mod tests {
 
     #[test]
     fn a_venue_with_no_projectors_draws_no_lasers() {
-        assert!(laser_scans(&LaserRig::default(), &UniverseState::default(), 0.).is_empty());
+        assert!(laser_scans(&LaserRig::default(), &UniverseState::default(), None, 0.).is_empty());
     }
 
     /// A projector upstage at data (2, 3, 1) facing the house: its scan
-    /// starts where it hangs, and the beam in the middle of the default zone
+    /// starts where it hangs, and the beam in the middle of the default window
     /// leaves toward the house, a little above level, in the renderer's
     /// world (data with Y mirrored).
     #[test]
@@ -1395,16 +1416,16 @@ mod tests {
                     right: DVec3::X,
                     up: DVec3::Z,
                 },
-                field: [60., 60.],
-                rate: 30_000,
+                settings: Settings::default(),
+                own: false,
                 limit: None,
             }],
-            zones: Vec::new(),
+            window: None,
+            shared: Settings::default(),
         };
         let state = UniverseState {
             lasers: vec![Element {
                 projector: "p".into(),
-                zone: String::new(),
                 layer: 0,
                 outline: Outline::Point,
                 s: 0.,
@@ -1417,7 +1438,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let scans = laser_scans(&rig, &state, 0.);
+        let scans = laser_scans(&rig, &state, None, 0.);
         let [scan] = scans.as_slice() else {
             panic!("one projector, one scan: {scans:?}");
         };

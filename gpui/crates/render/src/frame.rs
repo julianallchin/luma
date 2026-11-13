@@ -51,6 +51,31 @@ fn luminaire_face(built: &luma_fixture::Built, worlds: &[Mat4]) -> Option<(Vec3,
     Some((at, along.normalize_or_zero()))
 }
 
+/// The mesh-key prefix of a room's own walls and ceiling.
+pub(crate) const ROOM_PANEL: &str = "::room-panel:";
+
+impl Frame {
+    /// Take away the walls and the ceiling that stand between the camera and
+    /// the room, so a camera outside a room sees into it. A panel faces in:
+    /// the camera sees it from the side it faces, or not at all.
+    ///
+    /// Run again whenever the camera is replaced after the frame was built.
+    pub fn open_room_to_camera(&mut self) {
+        let eye = self.camera.eye;
+        let hidden = |draw: &Draw, meshes: &[MeshData]| {
+            meshes[draw.mesh].key.starts_with(ROOM_PANEL)
+                && (eye - draw.model.transform_point3(Vec3::ZERO))
+                    .dot(draw.model.transform_vector3(Vec3::Z))
+                    <= 0.0
+        };
+        let (hidden, shown) = std::mem::take(&mut self.draws)
+            .into_iter()
+            .partition(|draw| hidden(draw, &self.meshes));
+        self.draws = shown;
+        self.room_hidden.extend::<Vec<Draw>>(hidden);
+    }
+}
+
 /// Whether `mesh_key` names the ground plane, indoors or out. The ground only
 /// receives: everything it could shade stands on it.
 pub(crate) fn is_ground(mesh_key: &str) -> bool {
@@ -251,6 +276,10 @@ pub struct Frame {
     /// order. Depth-only passes take the opaque prefix; nothing in the tail
     /// writes depth.
     pub draws: Vec<Draw>,
+    /// The room's walls and ceiling that [`Frame::open_room_to_camera`] took
+    /// out of `draws`: not drawn, and still where light bounces
+    /// (`bounce.rs`).
+    pub room_hidden: Vec<Draw>,
     /// The pipeline each trailing transparent draw is painted with, in paint
     /// order. One list rather than a count per kind: a second count is a
     /// second definition of where the opaque prefix ends.
@@ -282,8 +311,8 @@ pub struct Frame {
     pub geometry_shadows: bool,
     /// Whether the surface shader visualizes cluster occupancy.
     pub cluster_debug: bool,
-    /// The local reflection probes, and whether to draw them.
-    pub probes: crate::scene_desc::ProbeView,
+    /// Whether the lit stage's bounced light is drawn (`bounce.rs`).
+    pub bounce: crate::scene_desc::BounceView,
     /// Linear, the `<color attach="background">` value.
     pub clear_color: Vec3,
     /// Linear ambient-light colour multiplied by its intensity.
@@ -481,7 +510,7 @@ pub(crate) fn housing_draws(
 ) -> anyhow::Result<Vec<Draw>> {
     // A library fixture is its own build, emitters dark.
     if let Some(built) = &def.built {
-        let worlds = luma_scene::library::worlds(built, pan_tilt);
+        let worlds = luma_scene::library::worlds(built, &[]);
         return Ok(crate::library_housing::draws(
             built,
             fixture_path,
@@ -491,6 +520,14 @@ pub(crate) fn housing_draws(
             bank,
             editor_object.as_ref(),
             |_, _| {},
+        ));
+    }
+    if def.is_laser_projector() {
+        return Ok(crate::laser_housing::draws(
+            def,
+            base,
+            bank,
+            editor_object.as_ref(),
         ));
     }
     // A bar, and anything the mesh table has no answer for. Drawing the stated
@@ -701,7 +738,7 @@ fn pixel_positions(def: &Definition, head_count: usize) -> Vec<Vec3> {
 }
 
 /// Axis-aligned box, six quads, flat normals.
-fn box_mesh(size: Vec3) -> MeshData {
+pub(crate) fn box_mesh(size: Vec3) -> MeshData {
     let h = size / 2.0;
     let faces: [(Vec3, Vec3, Vec3); 6] = [
         (Vec3::X, Vec3::Y, Vec3::Z),
@@ -776,6 +813,39 @@ pub(crate) fn ground_mesh(extent: f32) -> MeshData {
         for i in 0..n - 1 {
             let a = j * n + i;
             let (b, c, d) = (a + 1, a + n + 1, a + n);
+            indices.extend([a, b, c, a, c, d]);
+        }
+    }
+    MeshData {
+        key: String::new(),
+        vertices: vertices.into(),
+        indices: indices.into(),
+    }
+}
+
+/// An XY panel centred on the origin, normal +Z, cut into cells of a metre
+/// or less: a wall is lit per point like the floor, and one triangle the
+/// size of a wall would be lit from a handful of them.
+pub(crate) fn panel_mesh(width: f32, height: f32) -> MeshData {
+    let (nx, ny) = (width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
+    let vertices: Vec<Vertex> = (0..=ny)
+        .flat_map(|j| {
+            (0..=nx).map(move |i| {
+                let (u, v) = (i as f32 / nx as f32, j as f32 / ny as f32);
+                Vertex {
+                    position: [(u - 0.5) * width, (v - 0.5) * height, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [u, v],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                }
+            })
+        })
+        .collect();
+    let mut indices = Vec::new();
+    for j in 0..ny {
+        for i in 0..nx {
+            let a = j * (nx + 1) + i;
+            let (b, c, d) = (a + 1, a + nx + 2, a + nx + 1);
             indices.extend([a, b, c, a, c, d]);
         }
     }
@@ -909,6 +979,61 @@ pub fn build_at(
     let mut panels = Vec::new();
     let mut fixture_shadow_capacity_hint: usize = 0;
 
+    // --- walls and ceiling -------------------------------------------------
+    // A room with a size is a box around a floor centred on the origin. Each
+    // panel faces in, and the pipeline culls back faces, so a camera outside
+    // the room looks in through the wall nearest it.
+    if let Some([width, depth, height]) = scene.render.walls() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let panels = [
+            (
+                width,
+                height,
+                Vec3::new(0.0, height / 2.0, depth / 2.0),
+                Mat4::from_rotation_y(PI),
+            ),
+            (
+                width,
+                height,
+                Vec3::new(0.0, height / 2.0, -depth / 2.0),
+                Mat4::IDENTITY,
+            ),
+            (
+                depth,
+                height,
+                Vec3::new(-width / 2.0, height / 2.0, 0.0),
+                Mat4::from_rotation_y(FRAC_PI_2),
+            ),
+            (
+                depth,
+                height,
+                Vec3::new(width / 2.0, height / 2.0, 0.0),
+                Mat4::from_rotation_y(-FRAC_PI_2),
+            ),
+            (
+                width,
+                depth,
+                Vec3::new(0.0, height, 0.0),
+                Mat4::from_rotation_x(FRAC_PI_2),
+            ),
+        ];
+        for (along, across, at, turn) in panels {
+            let mesh = bank.insert(format!("{ROOM_PANEL}{along}x{across}"), || {
+                panel_mesh(along, across)
+            });
+            draws.push(Draw {
+                mesh,
+                textures: MaterialTextures::default(),
+                model: Mat4::from_mat3(r) * Mat4::from_translation(at) * turn,
+                material: Material {
+                    base_color: Vec3::splat(scene.render.wall_shade),
+                    ..crate::materials::VENUE_WALL
+                },
+                editor_object: None,
+            });
+        }
+    }
+
     // --- sky ---------------------------------------------------------------
     // An atmosphere answers three questions a scene would otherwise answer
     // separately — what is behind the geometry, what fills the shadows, and
@@ -997,8 +1122,16 @@ pub fn build_at(
         if let Some(built) = &def.built {
             let cells = built.cells.len().max(1);
             let cell_state = |cell: usize| state(&fixture.id, cell.min(cells - 1)).unwrap_or(DARK);
-            let pan_tilt = cell_state(0).position;
-            let (back, worlds) = luma_scene::library::aimed(built, pan_tilt, fixture.aim);
+            // Each head turns by its own pan and tilt, which its lowest
+            // cell's primitive carries.
+            let heads: Vec<[f32; 2]> = (0..built.head_count())
+                .map(|head| {
+                    built
+                        .head_cell(head)
+                        .map_or([0.0; 2], |cell| cell_state(cell).position)
+                })
+                .collect();
+            let (back, worlds) = luma_scene::library::aimed(built, &heads, fixture.aim);
             let base = base * back;
             draws.extend(crate::library_housing::draws(
                 built,
@@ -1328,19 +1461,21 @@ pub fn build_at(
     // beam that vanished would be a lie about the score.
     let lit_room = scene.render.house.and_then(|environment| {
         let bounds = scene.room_bounds();
+        let ceiling = scene.render.walls().map(|[_, _, height]| height);
         if matches!(
             environment,
             luma_scene::environment::VenueEnvironment::Indoor { .. }
         ) {
-            let potential = crate::house::lamps(
+            let potential = crate::house::lamps_under(
                 luma_scene::environment::VenueEnvironment::indoor(1.0),
                 bounds,
+                ceiling,
             );
             fixture_shadow_capacity_hint = fixture_shadow_capacity_hint
                 .saturating_add(potential.len())
                 .min(MAX_FIXTURE_CONES);
         }
-        let lamps = crate::house::lamps(environment, bounds);
+        let lamps = crate::house::lamps_under(environment, bounds, ceiling);
         for lamp in &lamps {
             if fixture_cones.len() >= MAX_FIXTURE_CONES {
                 break;
@@ -1349,14 +1484,14 @@ pub fn build_at(
         }
         // The lamps' bodies hang there whether they are lit or not.
         if let Some(pendant) = lib.fixture(crate::house::PENDANT) {
-            let (back, worlds) = luma_scene::library::aimed(&pendant, [0.0; 2], [0.0; 2]);
+            let (back, worlds) = luma_scene::library::aimed(&pendant, &[], [0.0; 2]);
             let hung = to_world * three_pose_from_data([0.0; 3], [0.0; 3]) * back;
             if let Some((face, along)) = luminaire_face(&pendant, &worlds) {
                 let area = crate::library_housing::emitting_area(&pendant, &worlds, 0, along);
                 let beam = crate::house::Lamp::beam(hung.transform_vector3(along).normalize());
                 let reach = crate::library_housing::reach(&pendant, &worlds, along);
                 let mouth = face + along * (reach - face.dot(along));
-                for (i, at) in crate::house::rig(environment, bounds)
+                for (i, at) in crate::house::rig(environment, bounds, ceiling)
                     .into_iter()
                     .enumerate()
                 {
@@ -1487,10 +1622,11 @@ pub fn build_at(
         })
         .transpose()?;
 
-    Ok(Frame {
+    let mut frame = Frame {
         meshes: bank.meshes,
         images: bank.images,
         draws,
+        room_hidden: Vec::new(),
         transparent,
         gizmo_pivot,
         fixture_cones,
@@ -1501,7 +1637,7 @@ pub fn build_at(
         fixture_shadows: scene.render.fixture_shadows,
         geometry_shadows: scene.render.geometry_shadows,
         cluster_debug: scene.render.cluster_debug,
-        probes: scene.render.probes,
+        bounce: scene.render.bounce,
         clear_color: Vec3::from(scene.render.environment.background),
         room: lit_room,
         // Under a sky the fill is the sky itself, arriving as an image-based
@@ -1560,7 +1696,9 @@ pub fn build_at(
         camera,
         overlays,
         floor: floor_surface,
-    })
+    };
+    frame.open_room_to_camera();
+    Ok(frame)
 }
 
 /// The authored directional light, when a frame has no sky.
@@ -1677,6 +1815,57 @@ mod tests {
             gobo: 0,
             gobo_rotation: 0.0,
         }
+    }
+
+    /// A room with a size is a box of five panels. A camera inside sees all
+    /// of them; one outside sees in, through the side it stands on, and one
+    /// overhead looks down through where the ceiling is.
+    #[test]
+    fn a_camera_outside_a_room_sees_into_it() {
+        let mut scene = scene(Vec::new());
+        scene.render = RenderSettings::room(
+            VenueEnvironment::indoor(1.0),
+            VenueHaze::default(),
+            50.0,
+            1.0,
+        );
+        let panels = |frame: &Frame| {
+            frame
+                .draws
+                .iter()
+                .filter(|draw| frame.meshes[draw.mesh].key.starts_with(ROOM_PANEL))
+                .count()
+        };
+        let mut library = library();
+        let open = build(&scene, &Definitions::new(), 0.0, &mut library).unwrap();
+        assert_eq!(panels(&open), 0, "a room with no size has no walls");
+
+        scene.render.room = Some([10.0, 8.0, 5.0]);
+        // Built from inside, two metres up in the middle (three space).
+        scene.camera.position = [0.0, 2.0, 0.0];
+        let mut seen_from = |eye: Vec3| {
+            let mut frame = build(&scene, &Definitions::new(), 0.0, &mut library).unwrap();
+            let inside = panels(&frame);
+            frame.camera.eye = eye;
+            frame.open_room_to_camera();
+            (inside, panels(&frame))
+        };
+        let (inside, beside) = seen_from(Vec3::new(30.0, 1.0, 2.0));
+        assert_eq!(inside, 5);
+        assert_eq!(beside, inside - 1, "the wall on the camera's side is open");
+        let (_, above) = seen_from(Vec3::new(1.0, 1.0, 40.0));
+        assert_eq!(above, inside - 1, "the ceiling is open from above");
+
+        // Open air has no walls, whatever size the venue kept.
+        scene.render = RenderSettings::room(
+            VenueEnvironment::outdoor(30.0),
+            VenueHaze::default(),
+            50.0,
+            1.0,
+        );
+        scene.render.room = Some([10.0, 8.0, 5.0]);
+        let outdoors = build(&scene, &Definitions::new(), 0.0, &mut library).unwrap();
+        assert_eq!(panels(&outdoors), 0);
     }
 
     #[test]
@@ -1908,9 +2097,9 @@ mod tests {
 
     /// A laser projector has no bundled mesh, and used to be skipped
     /// outright: placed, it vanished from the room while its ghost showed a
-    /// box. It draws that box, and no cone.
+    /// box. It draws its body, built from its dimensions, and no cone.
     #[test]
-    fn a_laser_projector_draws_its_box_and_no_cone() {
+    fn a_laser_projector_draws_its_body_and_no_cone() {
         let definitions =
             Definitions::from([("laser.qxf".into(), definition("Laser Projector", "One", 1))]);
         let scene = scene(vec![fixture("laser", "laser.qxf", "One")]);
@@ -1920,7 +2109,7 @@ mod tests {
             .iter()
             .filter(|d| d.editor_object == Some(EditorObject::Fixture("laser".into())))
             .count();
-        assert_eq!(bodies, 1);
+        assert!(bodies > 1, "a chassis and what is on it");
         assert!(frame.fixture_cones.is_empty());
     }
 

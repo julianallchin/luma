@@ -33,7 +33,9 @@ struct Uniform {
 };
 
 struct BeamInstance {
+    // w: half its thickness at the projector, metres.
     origin: vec4<f32>,
+    // w: half the angle it spreads by, radians.
     direction: vec4<f32>,
     power: vec4<f32>,
 };
@@ -52,10 +54,6 @@ struct SheetVertex {
 @group(0) @binding(4) var haze_noise_field: texture_3d<f32>;
 @group(0) @binding(5) var haze_noise_sampler: sampler;
 
-// Half a beam's thickness at the projector, metres.
-const HALF_WIDTH_M: f32 = 0.002;
-// Half the angle a beam spreads by, radians: a projector's 1.5 mrad.
-const HALF_DIVERGENCE: f32 = 0.00075;
 // The strip is at least this many pixels wide: enough for its fade across
 // to blend into the pixels rather than alias.
 const MIN_PIXELS: f32 = 2.5;
@@ -99,7 +97,7 @@ fn vs_beam(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance
     let direction = beam.direction.xyz;
     let r = along * u.haze.w;
     let world = beam.origin.xyz + direction * r;
-    let half_width = HALF_WIDTH_M + r * HALF_DIVERGENCE;
+    let half_width = beam.origin.w + r * beam.direction.w;
     let across = cross(direction, u.camera_pos.xyz - world);
     let reach = length(across);
     let side = select(vec3<f32>(0.0, 0.0, 1.0), across / max(reach, 1e-6), reach > 1e-5);

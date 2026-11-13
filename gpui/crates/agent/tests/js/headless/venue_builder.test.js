@@ -248,12 +248,13 @@ test("a run measures its gap, refuses a longer one and bridges an exact one", ()
   open();
   arm("Truss · straight");
   shorten();
-  dropAt(0.3, 0.8);
+  // Both to one side of the deck: a run through it is refused.
+  dropAt(0.1, 0.8);
   // Place mode is sticky: the second stick keeps the shortened span.
-  dropAt(0.7, 0.8);
+  dropAt(0.3, 0.8);
   app.key("escape");
   app.frames(4);
-  select(0.7, 0.8);
+  select(0.3, 0.8);
 
   // The end facing the other stick is the one with the widest gap; which
   // end that is is a fact about the room. Each measurement starts from rest,
@@ -269,12 +270,12 @@ test("a run measures its gap, refuses a longer one and bridges an exact one", ()
     }
     app.key("escape");
     app.frames(4);
-    select(0.7, 0.8);
+    select(0.3, 0.8);
   }
   assert(measured !== null, `no end measured a gap: ${sockets().map((n) => n.label).join(", ")}`);
   app.key("escape");
   app.frames(4);
-  select(0.7, 0.8);
+  select(0.3, 0.8);
   menu(socket(measured.socket.slice("Socket ".length)), "Extend run");
   // Feet are display-only; their presence proves a measurement.
   const started = one("Gap: ");
@@ -292,6 +293,32 @@ test("a run measures its gap, refuses a longer one and bridges an exact one", ()
   settle("the run to land", hasText("Constraint: "));
   expect(one("Constraint: ")).toContain("satisfied");
   expect(one("Edge: ")).toContain("end_");
+});
+
+// The gap is measured to the next end, and the deck stands between these
+// two: a run that long is shown refused and cannot be placed.
+test("a run through a deck is refused before it is placed", () => {
+  open();
+  arm("Truss · straight");
+  shorten();
+  dropAt(0.3, 0.8);
+  dropAt(0.7, 0.8);
+  app.key("escape");
+  app.frames(4);
+  select(0.7, 0.8);
+  const ends = sockets().filter((n) => n.label.includes("end_")).map((n) => n.label.slice("Socket ".length));
+  const across = ends.filter((end) => {
+    menu(socket(end), "Extend run");
+    const gap = one("Gap: ");
+    const far = gap !== undefined && Number(gap.slice(5, gap.indexOf(" m"))) > 2;
+    if (far) expect(setScrub("stage-length", Number(gap.slice(5, gap.indexOf(" m"))))).toBe(Number(gap.slice(5, gap.indexOf(" m"))));
+    const refused = far && app.snapshot().find({ role: "button", label: "Place run" }).enabled === false;
+    app.key("escape");
+    app.frames(4);
+    select(0.7, 0.8);
+    return refused;
+  });
+  expect(across.length).toBe(1);
 });
 
 // A free placement flies: trim moves it, and the number the box comes back
@@ -597,4 +624,27 @@ test("a light's tilt drags, sticks and undoes", () => {
   until("the kept tilt", () => settled("stage-tilt") === aimed);
   app.action("luma::Undo");
   until("the tilt to come back", () => settled("stage-tilt") === before);
+});
+
+// A placed light is picked up from its card and put down somewhere else. It
+// is the same light afterwards: the patch rows, addresses and groups are the
+// ones it had, and the card says it now hangs on what it was dropped on.
+test("a light is picked up and put down as the same light", () => {
+  open();
+  const patch = () => said().filter((l) => l.startsWith("Mover ")).sort();
+  const edge = () => one("Edge: Mover 0 ");
+  nav.step("a light", "text", "Mover 0 label = Mover 0");
+  until("the card", (s) => s.find({ role: "button", label: "Move light" }));
+  const before = patch();
+  const hung = edge();
+  press("Move light");
+  until("the light in the hand", () => heldSurface());
+  const pane = app.snapshot().find({ role: "card", label: "Stage drop surface" });
+  app.drag({ x: pane.bounds.x + pane.bounds.width * 0.3, y: pane.bounds.y + pane.bounds.height * 0.78 }, { dx: 1, dy: 0 }, { steps: 2 });
+  settle("the light to land", () => edge() !== undefined && edge() !== hung);
+  // One drop, and the hand is empty: a moved light is not a stamp.
+  expect(heldSurface()).toBe(false);
+  expect(patch()).toEqual(before);
+  app.action("luma::Undo");
+  settle("the light to go back", () => edge() === hung);
 });

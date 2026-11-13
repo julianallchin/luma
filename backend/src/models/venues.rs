@@ -55,8 +55,8 @@ pub struct Venue {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct VenueCapability {
-    /// Change anything in it — its rig, stage, groups, perform set and every
-    /// score, whoever wrote it.
+    /// Change what is in it — its rig, stage, groups and perform set — and
+    /// add scores to it. A score itself is written by its owner alone.
     pub edit: bool,
     /// Change who has it: its share code and its memberships.
     pub manage: bool,

@@ -60,7 +60,8 @@ impl Luma {
         let footing = what.footing().map(str::to_string);
         let exclude = match what {
             Holding::Duplicate { root, .. } => Some(root.clone()),
-            _ => None,
+            Holding::Fixture { moving, .. } => moving.clone(),
+            Holding::Piece { .. } => None,
         };
         let latch = latched.clone();
         let solved = build.room.land(
@@ -166,6 +167,33 @@ impl Luma {
             return;
         }
         let what = held.what.clone();
+        // A light being moved goes where the ghost stands, on whatever face
+        // that is: the same seat a new one would be refused or accepted at.
+        if let Holding::Fixture {
+            moving: Some(node), ..
+        } = &what
+        {
+            let (host, at) = match &landed.how {
+                Landing::Free { surface, seat, .. } => (surface.clone(), (seat.u, seat.v)),
+                Landing::Socket {
+                    parent,
+                    their_socket,
+                    ..
+                } => (Some((parent.clone(), their_socket.clone())), (0.0, 0.0)),
+            };
+            build.hand = Hand::Idle;
+            let pending = self.library.move_light(
+                &venue,
+                node,
+                host.as_ref().map(|(n, s)| (n.as_str(), s.as_str())),
+                luma_lib::models::distribute::DistributeLayout::At {
+                    metres: at.0,
+                    across: at.1,
+                },
+            );
+            self.stage_verb(pending, cx);
+            return;
+        }
         // A fixture on the venue's own floor is one light at the point under
         // the pointer, which is what the ghost showed. Anywhere else it is a
         // *row*, and a row needs a face to lie along: whatever the ghost is
@@ -193,9 +221,10 @@ impl Luma {
                 path,
                 &mode,
                 1,
-                luma_lib::models::distribute::DistributeLayout::At {
-                    metres: seat.u,
-                    across: seat.v,
+                luma_lib::models::distribute::DistributeLayout::Point {
+                    u: seat.u,
+                    v: seat.v,
+                    trim: 0.0,
                 },
                 None,
             );
@@ -354,7 +383,7 @@ impl Luma {
         let Some(run) = build.hand.extending() else {
             return;
         };
-        if run.refused().is_some() {
+        if build.run_refused().is_some() {
             return;
         }
         let venue = build.venue_id.clone();
@@ -364,6 +393,32 @@ impl Luma {
         build.hand = Hand::Idle;
         let pending = self.library.extend(&venue, &parent, &socket, Some(length));
         self.stage_verb(Box::pin(pending), cx);
+    }
+
+    /// Pick the selected light up, to put it down somewhere else.
+    pub(crate) fn stage_move(&mut self, cx: &mut Context<Self>) {
+        let Some(build) = self.build_state() else {
+            return;
+        };
+        let Some((node, path)) = build.selected.as_ref().and_then(|id| {
+            let node = build.graph.node(id)?;
+            (node.kind == luma_scene::venue::NodeKind::Fixture)
+                .then(|| Some((id.clone(), node.catalog_ref.clone()?)))?
+        }) else {
+            return;
+        };
+        let label = build.label_of(&node);
+        self.stage_take(
+            Holding::Fixture {
+                path,
+                label,
+                mode: None,
+                width_m: luma_lib::services::distribute::DEFAULT_FIXTURE_WIDTH_M,
+                dims: None,
+                moving: Some(node),
+            },
+            cx,
+        );
     }
 
     /// ⌘D: copy the selected subtree and put it in the hand.

@@ -25,6 +25,7 @@
 
 pub mod assets;
 pub mod atmosphere;
+mod bounce;
 pub(crate) mod cables;
 pub mod camera_export;
 pub mod colour;
@@ -44,6 +45,7 @@ pub mod house;
 pub mod image_out;
 pub mod interval_cache;
 pub mod laser;
+mod laser_housing;
 pub mod light_index;
 mod library_housing;
 pub mod materials;
@@ -54,7 +56,6 @@ pub mod panel;
 mod pass_profile;
 pub mod photometry;
 mod post;
-mod probes;
 mod psf;
 mod quality;
 pub mod scene_desc;

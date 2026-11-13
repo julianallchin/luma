@@ -370,7 +370,11 @@ impl AppServices {
         loop {
             tokio::select! {
                 _ = ticks.tick() => {
-                    let frame = self.render_engine.sample(self.host_audio.render_time());
+                    // A laser test pattern shows though nothing plays.
+                    let frame = self
+                        .render_engine
+                        .sample(self.host_audio.render_time())
+                        .or_else(|| output.testing_lasers().then(Default::default));
                     if let Some(frame) = frame {
                         output.publish(&frame);
                         had_output = true;

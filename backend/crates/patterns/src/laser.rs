@@ -1,4 +1,4 @@
-//! Laser elements on a zone's canvas: what a clip's elements draw, and how a
+//! Laser elements on a venue's laser canvas: what a clip's elements draw, and how a
 //! layer of elements combines with the elements under it.
 //!
 //! A laser clip draws figures, each `count` elements of one kind: beams,
@@ -9,7 +9,7 @@
 //! count. Within an element, `along` runs 0 to 1 from a line's start to its
 //! end, or once round a ring; an input that reads it is sampled at
 //! [`ALONG_SAMPLES`] places and read between them as finely as the solver
-//! draws. Canvas coordinates run from −1 to 1 across and up a zone; a solver
+//! draws. Canvas coordinates run from −1 to 1 across and up the venue's window; a solver
 //! turns them into directions and then into galvo angles.
 use crate::runtime::EvaluatedValue;
 use crate::{Error, Result};
@@ -225,8 +225,6 @@ impl Sample {
 pub struct Element {
     /// The projector fixture's id.
     pub projector: String,
-    /// The zone's id; empty is the venue's first zone.
-    pub zone: String,
     /// The layer that drew it.
     pub layer: u32,
     pub outline: Outline,
@@ -328,9 +326,6 @@ impl Element {
         breaks
     }
 
-    fn surface(&self) -> (&str, &str) {
-        (&self.projector, &self.zone)
-    }
 }
 
 /// Element `index` of `count`'s place along its clip's order, 0 to 1. A lone
@@ -343,7 +338,7 @@ pub fn order(index: usize, count: usize) -> f64 {
     }
 }
 
-/// The elements of one projector and zone, sorted along their order, read
+/// The elements of one projector, sorted along their order, read
 /// as one surface over `s` and along: a sample and an intensity at any `s`
 /// by linear interpolation, held flat past either end.
 struct Curve<'a> {
@@ -393,32 +388,27 @@ pub fn add(under: &mut Vec<Element>, top: Vec<Element>) {
     under.extend(top);
 }
 
-/// Lay `top` over `under` as a Replace layer: on each projector and zone the
-/// top layer draws, the elements under it and the top's elements morph into
+/// Lay `top` over `under` as a Replace layer: on each projector the top
+/// layer draws, the elements under it and the top's elements morph into
 /// each other by the top's alpha, matched by their place along their order
 /// and along each element. Under elements move toward the top's and fade by
 /// `1 − alpha`; top elements start on the ones under them and show at
 /// `alpha`. Each keeps its own outline and colour: an element is never a
 /// blend of two colours. At alpha 1 only the top's elements show.
-/// Elements on a projector or zone the top layer does not draw stay as they
-/// are.
+/// Elements on a projector the top layer does not draw stay as they are.
 pub fn replace(under: &mut Vec<Element>, mut top: Vec<Element>) {
-    let surfaces: Vec<(String, String)> = {
-        let mut seen: Vec<(String, String)> = Vec::new();
-        for element in &top {
-            let key = (element.projector.clone(), element.zone.clone());
-            if !seen.contains(&key) {
-                seen.push(key);
-            }
+    let mut projectors: Vec<String> = Vec::new();
+    for element in &top {
+        if !projectors.contains(&element.projector) {
+            projectors.push(element.projector.clone());
         }
-        seen
-    };
-    for (projector, zone) in &surfaces {
-        let on = |e: &&Element| e.surface() == (projector.as_str(), zone.as_str());
+    }
+    for projector in &projectors {
+        let on = |e: &&Element| e.projector == *projector;
         let below: Vec<Element> = under.iter().filter(on).cloned().collect();
         let above: Vec<Element> = top.iter().filter(on).cloned().collect();
         let below = Curve::new(&below);
-        let above = Curve::new(&above).expect("a surface the top draws has elements");
+        let above = Curve::new(&above).expect("a projector the top draws has elements");
         for element in under.iter_mut().filter(|e| on(&&**e)) {
             let alpha = above.at(element.s, 0.).1;
             let samples = places(element)
@@ -456,7 +446,6 @@ mod tests {
     fn element(layer: u32, s: f64, x: f64, intensity: f64) -> Element {
         Element {
             projector: "p".into(),
-            zone: String::new(),
             layer,
             outline: Outline::Point,
             s,

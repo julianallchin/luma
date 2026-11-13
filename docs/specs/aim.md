@@ -57,7 +57,13 @@ setting and no clip.
 - The move starts as soon as the head goes dark. If the dark gap is too short
   for the motor, the preview shows the lag like any other move.
 - The engine needs look-ahead per head: when the head is next lit. The score
-  is a timeline, so this is known.
+  is a timeline, so this is known: its light is sampled 128 times a second,
+  in two-second stretches.
+- An export, a preview and a deck sample the whole score before their first
+  frame. The editor shows light first and samples in the background, from
+  the playhead on; until a stretch is sampled, a head dark there holds the
+  aim its clips give it. After an edit, only the stretches the edited clip
+  is on are sampled again.
 
 ### Preview motor lag
 
