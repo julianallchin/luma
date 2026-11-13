@@ -410,6 +410,7 @@ fn stream_command(cwd: &std::path::Path) -> Result<tokio::process::Command, Agen
 /// own list only adds ids missing here, because its names and descriptions
 /// change between releases.
 const CURATED: &[(&str, &str, &[&str])] = &[
+    ("claude-fable-5-2", "Fable 5.2", FULL_EFFORT),
     ("claude-fable-5-1", "Fable 5.1", FULL_EFFORT),
     ("claude-fable-5", "Fable 5", FULL_EFFORT),
     ("claude-opus-5-5", "Opus 5.5", FULL_EFFORT),
@@ -425,8 +426,10 @@ const FULL_EFFORT: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// say; it reports a window only in a turn's `modelUsage`. Each value is
 /// from the model's page under platform.claude.com/docs/en/models/, read
 /// 2026-10-01, and the windows Claude Code 2.1.286 reported in turns agree
-/// (Fable 5.1, Opus 5.5, Sonnet 5: 1M; Haiku 4.5: 200K).
+/// (Fable 5.1, Opus 5.5, Sonnet 5: 1M; Haiku 4.5: 200K). Fable 5.2 and
+/// Haiku 5.5 are from Anthropic's model table as of 2026-11-03.
 const WINDOWS: &[(&str, u32)] = &[
+    ("claude-fable-5-2", 1_000_000),
     ("claude-fable-5-1", 1_000_000),
     ("claude-fable-5", 1_000_000),
     ("claude-opus-5-5", 1_000_000),
@@ -437,6 +440,7 @@ const WINDOWS: &[(&str, u32)] = &[
     ("claude-sonnet-5-5", 1_000_000),
     ("claude-sonnet-5", 1_000_000),
     ("claude-sonnet-4-6", 1_000_000),
+    ("claude-haiku-5-5", 1_000_000),
     ("claude-haiku-4-5", 200_000),
 ];
 
