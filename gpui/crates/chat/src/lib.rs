@@ -57,7 +57,7 @@ pub mod usage;
 pub mod working;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::{
@@ -69,6 +69,7 @@ use luma_lib::agent::{
     engine::catalog::{ModelChoice, Selection, Service},
     AgentService, ThreadScope, Transcript, TurnContext, TurnEvent, TurnOutcome, UserPrompt,
 };
+use luma_lib::database::local::feedback::{Feedback, Target, Verdict};
 use luma_lib::models::agent_threads::{AgentThread, AgentThreadDetail};
 use luma_ui::float::MenuVisibility;
 use luma_ui::icons::IconName;
@@ -309,6 +310,18 @@ pub enum ChatEvent {
     /// A request rather than an action for the same reason rewind is: the
     /// panel is a region and cannot mount an overlay.
     SubagentsRequested(Option<SharedString>),
+    /// This thread is now on screen: read the reader's verdicts on its turns
+    /// and hand them to [`AgentChat::set_verdicts`].
+    ///
+    /// Requests rather than calls because verdicts are the signed-in
+    /// account's, and the account is the host's to know.
+    FeedbackRequested(String),
+    /// The reader judged a turn, or with `None` took the verdict back. The
+    /// panel already shows it; the host stores it.
+    FeedbackGiven {
+        target: Target,
+        verdict: Option<Verdict>,
+    },
 }
 
 /// One turn's events, in order. Dropping it cancels the turn.
@@ -470,6 +483,9 @@ pub struct AgentChat {
     expanded: HashSet<SharedString>,
     /// Compact turns the reader has opened, by message id.
     open_work: HashSet<SharedString>,
+    /// The reader's verdicts on the shown thread's turns, by the id of the
+    /// user message that started each one.
+    verdicts: HashMap<SharedString, Verdict>,
     /// Whether finished turns fold their work behind a header, as of the last
     /// frame; a change re-splits the rows. See [`set_compact_turns`].
     compact: bool,
@@ -570,6 +586,7 @@ impl AgentChat {
             error: None,
             expanded: HashSet::new(),
             open_work: HashSet::new(),
+            verdicts: HashMap::new(),
             compact: false,
             cells: RefCell::default(),
             viewed: transcript::Viewed::default(),
@@ -739,6 +756,7 @@ impl AgentChat {
         self.selection_saving = false;
         self.queued_selection = None;
         self.error = None;
+        self.verdicts.clear();
         self.seat(Transcript::default(), cx);
         self.reads
     }
@@ -1181,6 +1199,9 @@ impl AgentChat {
                         .read(cx)
                         .live(&detail.thread.id)
                         .map(|live| (live.since, live.transcript.clone()));
+                    if !self.read_only {
+                        cx.emit(ChatEvent::FeedbackRequested(detail.thread.id.clone()));
+                    }
                     self.conversation = Conversation::Open(detail.thread.id);
                     match live {
                         Some((since, transcript)) => {
@@ -1246,6 +1267,81 @@ impl AgentChat {
             Conversation::Open(id) => Some(id.as_str()),
             Conversation::Idle | Conversation::Loading(_) => None,
         }
+    }
+
+    /// Seat the reader's stored verdicts on `thread_id`'s turns: the host's
+    /// answer to [`ChatEvent::FeedbackRequested`]. Dropped when the panel has
+    /// moved on to another thread.
+    pub fn set_verdicts(
+        &mut self,
+        thread_id: &str,
+        feedback: Vec<Feedback>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.thread_id() != Some(thread_id) {
+            return;
+        }
+        self.verdicts = feedback
+            .into_iter()
+            .filter_map(|feedback| match feedback.target {
+                Target::Turn { message_id, .. } => Some((message_id.into(), feedback.verdict)),
+                Target::Clip { .. } => None,
+            })
+            .collect();
+        cx.notify();
+    }
+
+    /// A press on one of a turn's thumbs: give `verdict` on the turn `asked`
+    /// started, or take it back when it is the one already given.
+    pub(crate) fn judge(&mut self, asked: SharedString, verdict: Verdict, cx: &mut Context<Self>) {
+        let Some(thread_id) = self.thread_id().map(str::to_owned) else {
+            return;
+        };
+        let next = (self.verdicts.get(&asked) != Some(&verdict)).then_some(verdict);
+        match next {
+            Some(verdict) => self.verdicts.insert(asked.clone(), verdict),
+            None => self.verdicts.remove(&asked),
+        };
+        cx.emit(ChatEvent::FeedbackGiven {
+            target: Target::Turn {
+                thread_id,
+                message_id: asked.to_string(),
+            },
+            verdict: next,
+        });
+        cx.notify();
+    }
+
+    /// The thumbs under message `ix`: the user message that started its turn,
+    /// and the verdict on it. `None` unless `ix` is the last assistant
+    /// message of a turn that has ended.
+    ///
+    /// A verdict names the user message because that is what the turn's
+    /// writes are recorded against; a steer starts a turn of its own.
+    fn turn_verdict(&self, ix: usize) -> Option<transcript::TurnVerdict> {
+        use luma_lib::agent::Role;
+        let messages = &self.transcript.messages;
+        if self.read_only || !matches!(messages.get(ix)?.role, Role::Assistant) {
+            return None;
+        }
+        let running = match messages.get(ix + 1) {
+            Some(next) => matches!(next.role, Role::Assistant),
+            // A prompt still on its way in belongs to the next turn.
+            None => self.is_streaming() && self.send_motion.pending.is_empty(),
+        };
+        if running || self.live == Some(ix) {
+            return None;
+        }
+        let asked = messages[..ix]
+            .iter()
+            .rev()
+            .find(|message| !matches!(message.role, Role::Assistant))
+            .filter(|message| matches!(message.role, Role::User))?;
+        let asked = SharedString::from(asked.id.clone());
+        Some(transcript::TurnVerdict {
+            verdict: self.verdicts.get(&asked).copied(),
+            asked,
+        })
     }
 
     /// Whether the panel is showing a conversation rather than waiting for
@@ -2002,6 +2098,7 @@ impl AgentChat {
                         fold: fold.as_ref().map(|(call, progress)| (call, *progress)),
                         fold_px: &state.fold_px,
                         awaiting_setup: &awaiting_setup,
+                        verdict: last_of_turn.then(|| state.turn_verdict(key.turn)).flatten(),
                         theme: &state.theme,
                     },
                     window,

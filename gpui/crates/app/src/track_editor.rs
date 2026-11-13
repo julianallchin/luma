@@ -107,6 +107,7 @@ use crate::{LibraryError, Luma};
 
 mod beat_grid;
 mod canvas;
+mod clip_menu;
 mod commands;
 mod composite;
 mod document;
@@ -137,6 +138,7 @@ use beat_grid::{
     bar_length, bars_after, mean_lengths, shift_time, snap, Grid, SNAP_CAPTURE, SNAP_CAPTURE_DRAG,
 };
 use canvas::{canvas_element, clip_bounds, Scene};
+use clip_menu::ClipMenu;
 use commands::{clear_region, row_to_z, z_ladder, Clipboard, Snapshot, MIN_CLIP};
 use composite::sync_composite;
 use draw::{clip_body, fade, ghost_box, hairline, label, LOOP_BAND};
@@ -223,6 +225,10 @@ pub struct Editor {
     /// pattern into view — a cursor past the clip edge otherwise commits a row
     /// the user cannot see.
     menu_scroll: ScrollHandle,
+    /// The menu a right-click on a clip opened, if one is up.
+    clip_menu: Option<ClipMenu>,
+    /// The clips the reader marked as bad, by id.
+    bad_clips: HashSet<SharedString>,
     /// Every selected clip, in the order they were added. A list rather than
     /// one id because shift-click, marquee and group drag all act on
     /// a set, and "one selected clip" is only the common case of that.

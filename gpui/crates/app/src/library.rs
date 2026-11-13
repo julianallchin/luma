@@ -63,6 +63,7 @@ use luma_lib::storage::StorageRoot;
 mod account;
 mod agent;
 mod audio;
+mod feedback;
 #[cfg(feature = "agent")]
 mod fixtures;
 mod groups;

@@ -54,6 +54,7 @@ impl Luma {
         let beats = self.library.track_beats(track_id, Some(&score.id));
         let validation = self.library.track_beat_validation(track_id);
         let contents = self.library.score_contents(&score.id, track_id);
+        let verdicts = self.library.score_clip_feedback(&score.id);
 
         let menu_search =
             cx.new(|cx| luma_ui::text_input::TextInput::search("Search patterns…", cx));
@@ -104,6 +105,8 @@ impl Luma {
             menu_search,
             _menu_subscription: menu_subscription,
             menu_scroll: ScrollHandle::new(),
+            clip_menu: None,
+            bad_clips: HashSet::new(),
             selected: Vec::new(),
             graph_open: false,
             pressed_clip: None,
@@ -140,6 +143,7 @@ impl Luma {
             let waveform = waveform.await;
             let beats = beats.await;
             let validation = validation.await;
+            let verdicts = verdicts.await;
             let contents = match contents.await {
                 Ok(contents) => Ok(cx
                     .background_spawn(async move { document::Resolved::of(contents) })
@@ -175,6 +179,11 @@ impl Luma {
                         // The verdict is a nicety on a timeline that works
                         // without it.
                         Err(error) => log::warn!("Could not read the beat check: {error}"),
+                    }
+                    match verdicts {
+                        Ok(verdicts) => editor.bad_clips = clip_menu::bad_clips(verdicts),
+                        // Only the clip menu's wording depends on it.
+                        Err(error) => log::warn!("Could not read the clips' feedback: {error}"),
                     }
                 });
                 this.install_score(target, contents, cx);

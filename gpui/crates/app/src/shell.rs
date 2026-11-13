@@ -347,7 +347,7 @@ impl Luma {
             self.close_overlay(cx);
             return;
         }
-        if self.dismiss_insert_menu() {
+        if self.dismiss_insert_menu() || self.dismiss_clip_menu() {
             cx.notify();
             return;
         }
