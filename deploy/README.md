@@ -28,6 +28,12 @@ before a release, run what the job runs from the repository root:
 `scripts/release/check_migrations.py` on the files it lists, then the push
 without `--dry-run`.
 
+A function the app calls is called through PostgREST before it ships, on
+the test stack (`test-stack/run.py`). What the app receives is what
+PostgREST makes of the function's return type, and neither a test fixture
+nor Postgres on its own shows that: 0.9.0's "About you" page was tested
+both ways and still read a function that returns nothing as a failure.
+
 ### Expand, then contract
 
 A client keeps running for weeks after a newer release ships, so a migration
