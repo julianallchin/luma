@@ -1,4 +1,4 @@
 [submodule "backend/python/consonance-ACE"]
 	path = backend/python/consonance-ACE
-	url = git@github.com:andreamust/consonance-ACE.git
+	url = https://github.com/andreamust/consonance-ACE.git
 
