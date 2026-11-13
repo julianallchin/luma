@@ -532,131 +532,6 @@ async fn an_offline_edit_survives_a_restart() {
     b.close().await;
 }
 
-/// Two users and a share code: B joins A's venue, sees the score, edits it, A
-/// sees the edit — and when A revokes the membership B loses the venue's rows.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the PowerSync test containers; see deploy/test-stack/run.py"]
-async fn a_share_code_admits_a_second_user_until_it_is_revoked() {
-    let Some(containers) = Containers::from_env() else {
-        eprintln!("skipping: LUMA_TEST_POWERSYNC_URL / _POSTGREST_URL / _JWT_SECRET unset");
-        return;
-    };
-    let directory = tempfile::tempdir().expect("temp dir");
-    let a = device(&directory.path().join("a"), &containers, USER).await;
-    let b = device(&directory.path().join("b"), &containers, OTHER).await;
-
-    let venue = unique("venue");
-    let score = unique("score");
-    let code = unique("code");
-    seed(&a.sql, USER, &venue, &score, &[("one", 0.0)]).await;
-    sqlx::query("UPDATE venues SET share_code = ? WHERE id = ?")
-        .bind(&code)
-        .bind(&venue)
-        .execute(&a.sql)
-        .await
-        .expect("share code");
-    // The code has to be on the server before anyone can redeem it.
-    settles(
-        &b.sql,
-        &count("venues", "id", &venue),
-        "0",
-        "B could see the venue before joining",
-    )
-    .await;
-    wait_for_upload(&a.sql).await;
-
-    // The join is a server RPC: an ordinary client may not insert a membership
-    // into a venue it cannot yet see.
-    let joined = rpc_join(&containers, OTHER, &code).await;
-    assert_eq!(joined, venue);
-
-    settles(
-        &b.sql,
-        &count("clips", "score_id", &score),
-        "1",
-        "B joined but the venue's score never arrived",
-    )
-    .await;
-    settles(
-        &b.sql,
-        &count("venue_members", "venue_id", &venue),
-        "1",
-        "B never received its own membership row",
-    )
-    .await;
-
-    // A member edits venue content and the owner sees it.
-    sqlx::query("UPDATE clips SET duration = 12.0 WHERE score_id = ? AND label = 'one'")
-        .bind(&score)
-        .execute(&b.sql)
-        .await
-        .expect("member edit");
-    settles(
-        &a.sql,
-        &clip_shape(&score),
-        "one=12.0",
-        "the owner never saw the member's edit",
-    )
-    .await;
-
-    // Revocation is a delete of the membership row, which the server keeps
-    // flagged, and it reaches B as a download that empties every bucket the
-    // membership put them in.
-    let membership: String = sqlx::query_scalar("SELECT id FROM venue_members WHERE venue_id = ?")
-        .bind(&venue)
-        .fetch_one(&a.sql)
-        .await
-        .expect("the membership");
-    sqlx::query("DELETE FROM venue_members WHERE venue_id = ?")
-        .bind(&venue)
-        .execute(&a.sql)
-        .await
-        .expect("revoke");
-    wait_for_upload(&a.sql).await;
-    settles(
-        &b.sql,
-        &count("venues", "id", &venue),
-        "0",
-        "B kept the venue after the membership was revoked",
-    )
-    .await;
-    settles(
-        &b.sql,
-        &count("clips", "score_id", &score),
-        "0",
-        "B kept the venue's clips after the membership was revoked",
-    )
-    .await;
-
-    // The flagged membership is still B's row, and clearing a flag is how a
-    // row comes back: B must not be able to walk back in that way.
-    let (status, body) = try_rest(
-        &containers,
-        OTHER,
-        reqwest::Method::PATCH,
-        &format!("/venue_members?id=eq.{membership}"),
-        Some(&serde_json::json!({ "deleted_at": null })),
-    )
-    .await;
-    assert!(
-        status.is_client_error(),
-        "a removed member restored their own membership: {status} {body}"
-    );
-    assert_eq!(
-        get(
-            &containers,
-            OTHER,
-            &format!("/venues?id=eq.{venue}&select=id")
-        )
-        .await,
-        serde_json::json!([]),
-        "a removed member can read the venue again"
-    );
-
-    a.close().await;
-    b.close().await;
-}
-
 /// The app's own sharing commands, end to end: the owner mints a code through
 /// the service, a second account redeems it through the service and gets the
 /// venue back once it has downloaded, a revoked code admits nobody, and the
@@ -1137,7 +1012,7 @@ async fn the_record_keeps_the_build_the_venue_version_and_a_verdict() {
 
 /// What a venue shares, and what it does not, from the far side of the wire.
 ///
-/// The share-code test covers the member's happy path. These are the refusals
+/// The sharing-service test covers the member's happy path. These are the refusals
 /// beside it: a stranger sees nothing of the venue, cannot write into it, and
 /// cannot talk their way in with a code that is not the code. Asserted over
 /// PostgREST rather than over a device, because a refusal is the server's
