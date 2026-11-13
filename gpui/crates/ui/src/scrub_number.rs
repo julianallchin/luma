@@ -146,7 +146,12 @@ impl Render for Editor {
                 .into_any_element();
         }
         let entity = cx.entity();
-        let reading = format!("{:.2} {}", self.value, self.config.unit);
+        let reading = format!(
+            "{} {}",
+            float::format_step(self.value, self.config.step),
+            self.config.unit
+        );
+        let reading = reading.trim_end().to_owned();
         float::field()
             .id(self.config.id.clone())
             .w(rpx(self.config.width))
@@ -212,7 +217,10 @@ impl Render for Editor {
                                 } else {
                                     this.editing = true;
                                     this.input.update(cx, |input, cx| {
-                                        input.set_text(format!("{:.2}", this.value), cx)
+                                        input.set_text(
+                                            float::format_step(this.value, this.config.step),
+                                            cx,
+                                        )
                                     });
                                     window.focus(&this.input.focus_handle(cx), cx);
                                 }

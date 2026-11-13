@@ -1,12 +1,15 @@
-//! The patch page: a venue's DMX paperwork (addresses, modes, auto-patch)
-//! and the output devices its universes are routed to.
+//! The patch page: a venue's DMX paperwork (addresses, modes, auto-patch),
+//! the output devices its universes are routed to, and its laser projectors
+//! with the DACs that play them.
 
 use std::collections::HashMap;
 use std::future::Future;
 
 use luma_lib::dispatch::handlers;
+use luma_lib::laser::{LaserRig, Window};
 use luma_lib::models::fixtures::{FixtureDefinition, PatchedFixture};
 use luma_lib::models::groups::GroupTreeNode;
+use luma_lib::models::lasers::{LaserDevice, LaserOutput, LaserRoute};
 use luma_lib::models::patch::{AutoPatchReport, DmxRoute, OutputDevice, OutputPort, UniverseCell};
 
 use super::{refused, Library, LibraryError};
@@ -72,6 +75,20 @@ impl Library {
                     definitions.insert(path, def);
                 }
             }
+            let lasers = Lasers {
+                rig: handlers::lasers::get_laser_rig(&services, venue_id.clone())
+                    .await
+                    .map_err(refused("get_laser_rig"))?,
+                routes: handlers::output::list_laser_routes(&services)
+                    .await
+                    .map_err(refused("list_laser_routes"))?,
+                // A host with no physical output sees no DAC and has no
+                // switch to show.
+                devices: handlers::output::list_laser_devices(&services)
+                    .await
+                    .unwrap_or_default(),
+                output: handlers::output::get_laser_output(&services).await.ok(),
+            };
             Ok(Patch {
                 fixtures,
                 definitions,
@@ -80,6 +97,7 @@ impl Library {
                 universes,
                 occupancy,
                 routes,
+                lasers,
             })
         })
     }
@@ -219,6 +237,107 @@ impl Library {
         })
     }
 
+    // -- lasers --------------------------------------------------------------
+
+    /// Laser output's switch and each bound projector's DAC, with the DACs
+    /// in reach: what changes while the page is open. `None` on a host with
+    /// no physical output.
+    pub fn laser_output(
+        &self,
+    ) -> impl Future<Output = Option<(LaserOutput, Vec<LaserDevice>)>> + use<> {
+        let pending = self.call("get_laser_output", |services| async move {
+            let output = handlers::output::get_laser_output(&services).await?;
+            let devices = handlers::output::list_laser_devices(&services).await?;
+            Ok((output, devices))
+        });
+        async move { pending.await.ok() }
+    }
+
+    pub fn set_laser_output(
+        &self,
+        on: bool,
+    ) -> impl Future<Output = Result<LaserOutput, LibraryError>> + use<> {
+        self.call("set_laser_output", move |services| async move {
+            handlers::output::set_laser_output(&services, on).await
+        })
+    }
+
+    /// Show `projector`'s test pattern, or with `None` none.
+    pub fn set_laser_test(
+        &self,
+        projector: Option<String>,
+    ) -> impl Future<Output = Result<LaserOutput, LibraryError>> + use<> {
+        self.call("set_laser_test", move |services| async move {
+            handlers::output::set_laser_test(&services, projector).await
+        })
+    }
+
+    /// Play `projector` through `device`.
+    pub fn bind_laser(
+        &self,
+        projector: &str,
+        device: &LaserDevice,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let (projector, device) = (projector.to_owned(), device.clone());
+        self.call("bind_laser_route", move |services| async move {
+            handlers::output::bind_laser_route(
+                &services,
+                projector,
+                device.kind,
+                device.id,
+                Some(device.name),
+                Some(device.address),
+            )
+            .await
+        })
+    }
+
+    pub fn unbind_laser(
+        &self,
+        projector: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let projector = projector.to_owned();
+        self.call("unbind_laser_route", move |services| async move {
+            handlers::output::unbind_laser_route(&services, projector).await
+        })
+    }
+
+    /// Write a batch of laser edits to a venue, in order: which projectors
+    /// have a kind of their own, the changed settings, limits, and the
+    /// venue's window.
+    pub fn write_lasers(
+        &self,
+        venue_id: &str,
+        edits: LaserEdits,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let venue_id = venue_id.to_owned();
+        self.call("set_laser_settings", move |services| async move {
+            // A projector's own kind starts from the venue's, so before the
+            // settings that then change it.
+            for (projector, own) in edits.own {
+                handlers::lasers::set_laser_own(&services, venue_id.clone(), projector, own)
+                    .await?;
+            }
+            for (projector, settings) in edits.settings {
+                handlers::lasers::set_laser_settings(
+                    &services,
+                    venue_id.clone(),
+                    projector,
+                    settings,
+                )
+                .await?;
+            }
+            for (projector, points) in edits.limits {
+                handlers::lasers::set_laser_limit(&services, venue_id.clone(), projector, points)
+                    .await?;
+            }
+            if let Some(window) = edits.window {
+                handlers::lasers::set_laser_window(&services, venue_id.clone(), window).await?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn unbind_route(
         &self,
         route: &DmxRoute,
@@ -254,4 +373,46 @@ pub struct Patch {
     /// Where each universe goes. Not per-venue: an output is a fact about
     /// this machine's wiring.
     pub routes: Vec<DmxRoute>,
+    pub lasers: Lasers,
+}
+
+/// A venue's laser projectors and what plays them.
+pub struct Lasers {
+    /// The projectors, set up, and the venue's window.
+    pub rig: LaserRig,
+    /// Which DAC plays each projector: this machine's wiring.
+    pub routes: Vec<LaserRoute>,
+    /// The DACs in reach now.
+    pub devices: Vec<LaserDevice>,
+    /// Laser output's switch and links; `None` on a host with no physical
+    /// output.
+    pub output: Option<LaserOutput>,
+}
+
+/// Laser edits waiting to be written: the newest value of each thing
+/// changed.
+#[derive(Default)]
+pub struct LaserEdits {
+    /// By projector, or `None` for what the venue's projectors share, by
+    /// the parameter each setting is stored under.
+    pub settings:
+        std::collections::BTreeMap<Option<String>, std::collections::BTreeMap<String, f64>>,
+    /// By projector: whether it has a kind of its own.
+    pub own: std::collections::BTreeMap<String, bool>,
+    /// By projector: its limit, or `None` to lift it.
+    pub limits: std::collections::BTreeMap<String, Option<Vec<[f64; 2]>>>,
+    /// The venue's window, or `None` to fit it to the projectors again.
+    pub window: Option<Option<Window>>,
+}
+
+impl LaserEdits {
+    pub fn is_empty(&self) -> bool {
+        !self.changes_graph() && self.limits.is_empty()
+    }
+
+    /// Whether any of it is stored in the venue's graph, and so is a step
+    /// the stage's undo takes back. A limit is not.
+    pub fn changes_graph(&self) -> bool {
+        !self.settings.is_empty() || !self.own.is_empty() || self.window.is_some()
+    }
 }

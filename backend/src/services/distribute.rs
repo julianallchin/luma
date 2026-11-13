@@ -397,18 +397,26 @@ pub async fn distribute(
     // see the re-derivation below.
     let solved = luma_scene::venue::resolve(&graph, sockets);
     let run = run_of(&solved, &host_id);
-    let footprints = offer(
-        &solved,
-        &rows,
-        run.as_deref(),
-        channels,
-        stations.len() - kept,
-    )?;
+    // A fixture with no channels takes no address.
+    let footprints: Vec<Option<Footprint>> = if channels == 0 {
+        vec![None; stations.len() - kept]
+    } else {
+        offer(
+            &solved,
+            &rows,
+            run.as_deref(),
+            channels,
+            stations.len() - kept,
+        )?
+        .into_iter()
+        .map(Some)
+        .collect()
+    };
 
     let mut numbering = fixture_create::numbering(access)
         .await
         .map_err(|e| e.to_string())?;
-    let mut placed: Vec<(String, String, Footprint, f64)> = Vec::new();
+    let mut placed: Vec<(String, String, Option<Footprint>, f64)> = Vec::new();
     // A light that stays keeps its turn, its aim, its address and its
     // groups: only where it sits along the face is written.
     for (id, station) in request.relay[..kept].iter().zip(&stations) {
@@ -416,12 +424,18 @@ pub async fn distribute(
             .iter()
             .find(|row| &row.id == id)
             .ok_or_else(|| format!("`{id}` has no patch row"))?;
-        let footprint = Footprint::new(
-            u16::try_from(row.universe).unwrap_or_default(),
-            u16::try_from(row.address).unwrap_or_default(),
-            channels,
-        )
-        .ok_or_else(|| format!("`{id}` is patched outside a universe"))?;
+        let footprint = if channels == 0 {
+            None
+        } else {
+            Some(
+                Footprint::new(
+                    u16::try_from(row.universe).unwrap_or_default(),
+                    u16::try_from(row.address).unwrap_or_default(),
+                    channels,
+                )
+                .ok_or_else(|| format!("`{id}` is patched outside a universe"))?,
+            )
+        };
         venue_graph_db::set_params(
             access,
             id,
@@ -518,15 +532,17 @@ pub async fn distribute(
         fixtures: placed
             .into_iter()
             .map(|(id, label, footprint, along)| {
-                let row = addressed.iter().find(|row| row.id == id);
+                let row = addressed
+                    .iter()
+                    .find(|row| row.id == id && row.num_channels > 0);
                 DistributedFixture {
                     label,
                     universe: row
                         .and_then(|row| u16::try_from(row.universe).ok())
-                        .unwrap_or_else(|| footprint.universe()),
+                        .or(footprint.map(|footprint| footprint.universe())),
                     address: row
                         .and_then(|row| u16::try_from(row.address).ok())
-                        .unwrap_or_else(|| footprint.address()),
+                        .or(footprint.map(|footprint| footprint.address())),
                     along_m: along,
                     group_path: paths.get(&id).cloned().unwrap_or_default(),
                     id,

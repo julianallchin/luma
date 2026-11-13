@@ -286,8 +286,10 @@ struct Stage {
     lights: luma_lib::stage_render::StageLights,
     /// The rig's fixtures that strobe on their own clock, and that clock.
     strobes: FixtureStrobes,
-    /// The rig's laser projectors and zones, solved each frame.
+    /// The rig's laser projectors and their window, solved each frame.
     lasers: luma_lib::laser::LaserRig,
+    /// The projector showing its test pattern in place of what it plays.
+    laser_test: Option<String>,
     /// Acquired lazily on the first frame that has something to draw — see
     /// [`Visualizer::gpu_ready`].
     gpu: Option<Gpu>,

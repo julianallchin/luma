@@ -139,7 +139,9 @@ pub(crate) async fn resolve_selection_primitives_with_access(
         let mount = fixture_mount(pose);
         let geom = match head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name)? {
             Heads::Projector => {
-                let basis = crate::laser::Basis::of(&mount);
+                // Elements are spread about the mount, not the aperture: a
+                // pattern places them by where the box hangs.
+                let basis = crate::laser::Basis::of(&mount, 0.);
                 let count = elements.unwrap_or(0);
                 for i in 0..count {
                     let pos = basis.head(i, count).as_vec3().to_array();

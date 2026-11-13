@@ -13,7 +13,8 @@ works and the decisions behind it.
 - [specs/clip-graphs.md](specs/clip-graphs.md) — every clip is a small typed graph: node kinds, types, checks, lowering
 - [specs/composable-patterns.md](specs/composable-patterns.md) — the evaluation and persistence contract under clip graphs
 - [specs/aim.md](specs/aim.md) — the room frame, the pan/tilt solver, moving in black, motor lag
-- [design/lasers.md](design/lasers.md) — beam shows from ILDA projectors: zones, figures, output
+- [design/lasers.md](design/lasers.md) — beam shows from laser projectors: settings, the window, figures, the solver, DAC output
+- [design/laser-hardware.md](design/laser-hardware.md) — bringing a projector and its DAC up on the bench: what is unverified, and writing a driver
 - [design/live-control.md](design/live-control.md) — controls, controllers, MIDI and OSC bindings, Live and its Perform set
 - [design/score-video.md](design/score-video.md) — recording a score as video (`luma-cli record`, Export show)
 

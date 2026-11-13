@@ -1,5 +1,5 @@
 //! Laser clips: the checker's rules for figures, `count`, `along` and the
-//! zone, and the elements a laser graph draws over two projectors.
+//! canvas, and the elements a laser graph draws over two projectors.
 use luma_patterns::clip_graph::ClipGraph;
 use luma_patterns::laser::{element_output, Sample, ALONG_SAMPLES};
 use luma_patterns::{standard_library, Cell, Frame, PreparedGraph};
@@ -272,17 +272,6 @@ fn count_and_sides_take_a_whole_number_and_no_wire() {
         error(json!({"figure1": {"kind": "figure", "inputs": {"sides": 2}}}))
             .starts_with("figure1.sides: expected")
     );
-}
-
-#[test]
-fn a_zone_is_any_text() {
-    graph(json!({
-        "figure1": {"kind": "figure", "settings": {"kind": "polygon"}},
-        "laser1": {"kind": "laser", "settings": {"zone": "a1b2"},
-                   "inputs": {"figures": [{"node": "figure1"}]}},
-    }))
-    .check()
-    .unwrap();
 }
 
 /// A sheet with rails and beams: three figures, one clip. Each figure's

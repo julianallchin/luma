@@ -653,42 +653,32 @@ impl VenueHost {
         self.groups().await
     }
 
-    async fn laser_zones(&self) -> Result<Value, HostCallError> {
+    /// The window the venue's laser clips draw in; given one, set first.
+    async fn laser_window(&self, request: LaserWindowRequest) -> Result<Value, HostCallError> {
+        let invalid = |error: String| HostCallError::new("invalid_laser_window", error);
+        if let LaserWindowRequest {
+            turn: Some(turn),
+            tilt: Some(tilt),
+        } = request
+        {
+            let mut access = self.write_access().await.map_err(invalid)?;
+            let window = crate::laser::Window { turn, tilt };
+            crate::database::local::lasers::set_window(&mut access, Some(window))
+                .await
+                .map_err(invalid)?;
+            crate::venue_graph::commit_graph(access)
+                .await
+                .map_err(invalid)?;
+        } else if request.turn.is_some() || request.tilt.is_some() {
+            return Err(invalid(
+                "A laser window is set with both its turn and its tilt".into(),
+            ));
+        }
         let mut access = self.read_access().await?;
-        let zones = crate::database::local::lasers::list_zones(&mut access)
+        let rig = crate::laser::LaserRig::load(&mut access, &self.resource_root)
             .await
             .map_err(|error| HostCallError::new("invalid_venue", error))?;
-        Ok(json!({ "zones": zones }))
-    }
-
-    /// Create the zone named `name`, or change the one already called that.
-    async fn laser_zone(&self, request: LaserZoneRequest) -> Result<Value, HostCallError> {
-        let invalid = |error: String| HostCallError::new("invalid_laser_zone", error);
-        let name =
-            crate::models::lasers::LaserZone::check(&request.name, request.turn, request.tilt)
-                .map_err(invalid)?;
-        let mut access = self.write_access().await.map_err(invalid)?;
-        let existing = crate::database::local::lasers::list_zones(&mut access)
-            .await
-            .map_err(invalid)?
-            .into_iter()
-            .find(|zone| zone.name == name)
-            .map(|zone| zone.id);
-        let zone = crate::database::local::lasers::save_zone(
-            &mut access,
-            existing.as_deref(),
-            name,
-            request.turn,
-            request.tilt,
-        )
-        .await
-        .map_err(invalid)?
-        .ok_or_else(|| invalid("the zone vanished while it was saved".into()))?;
-        access
-            .commit()
-            .await
-            .map_err(|error| invalid(error.to_string()))?;
-        Ok(json!({ "zone": zone }))
+        Ok(json!({ "window": rig.window(), "set": rig.window.is_some() }))
     }
 
     async fn reach(&self, request: ReachRequest) -> Result<Value, HostCallError> {
@@ -1299,8 +1289,7 @@ impl HostCallHandler for VenueHost {
                     "venue.patch" => self.patch(decode(payload)?).await,
                     "venue.remove_group" => self.remove_group(decode(payload)?).await,
                     "venue.generate_groups" => self.generate_groups().await,
-                    "venue.laser_zones" => self.laser_zones().await,
-                    "venue.laser_zone" => self.laser_zone(decode(payload)?).await,
+                    "venue.laser_window" => self.laser_window(decode(payload)?).await,
                     "venue.reach" => self.reach(decode(payload)?).await,
                     "venue.place" => self.place(decode(payload)?).await,
                     "venue.attach" => self.attach(decode(payload)?).await,
@@ -1491,12 +1480,12 @@ fn described_haze(haze: VenueHaze) -> Value {
     value
 }
 
-/// A laser zone by name: its window, in degrees.
+/// The venue's laser window, in degrees; empty to read it.
 #[derive(Deserialize)]
-struct LaserZoneRequest {
-    name: String,
-    turn: [f64; 2],
-    tilt: [f64; 2],
+#[serde(deny_unknown_fields)]
+struct LaserWindowRequest {
+    turn: Option<[f64; 2]>,
+    tilt: Option<[f64; 2]>,
 }
 
 /// One fixture's DMX address, set by hand.

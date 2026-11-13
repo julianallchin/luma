@@ -522,6 +522,14 @@ pub(crate) fn housing_draws(
             |_, _| {},
         ));
     }
+    if def.is_laser_projector() {
+        return Ok(crate::laser_housing::draws(
+            def,
+            base,
+            bank,
+            editor_object.as_ref(),
+        ));
+    }
     // A bar, and anything the mesh table has no answer for. Drawing the stated
     // box is not a guess — the dimensions are the definition's own — and it is
     // the only alternative to a fixture with arrows, a cone and no body, which
@@ -730,7 +738,7 @@ fn pixel_positions(def: &Definition, head_count: usize) -> Vec<Vec3> {
 }
 
 /// Axis-aligned box, six quads, flat normals.
-fn box_mesh(size: Vec3) -> MeshData {
+pub(crate) fn box_mesh(size: Vec3) -> MeshData {
     let h = size / 2.0;
     let faces: [(Vec3, Vec3, Vec3); 6] = [
         (Vec3::X, Vec3::Y, Vec3::Z),
@@ -2089,9 +2097,9 @@ mod tests {
 
     /// A laser projector has no bundled mesh, and used to be skipped
     /// outright: placed, it vanished from the room while its ghost showed a
-    /// box. It draws that box, and no cone.
+    /// box. It draws its body, built from its dimensions, and no cone.
     #[test]
-    fn a_laser_projector_draws_its_box_and_no_cone() {
+    fn a_laser_projector_draws_its_body_and_no_cone() {
         let definitions =
             Definitions::from([("laser.qxf".into(), definition("Laser Projector", "One", 1))]);
         let scene = scene(vec![fixture("laser", "laser.qxf", "One")]);
@@ -2101,7 +2109,7 @@ mod tests {
             .iter()
             .filter(|d| d.editor_object == Some(EditorObject::Fixture("laser".into())))
             .count();
-        assert_eq!(bodies, 1);
+        assert!(bodies > 1, "a chassis and what is on it");
         assert!(frame.fixture_cones.is_empty());
     }
 

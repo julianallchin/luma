@@ -250,7 +250,13 @@ fn composite_from(
         // gives a laser clip no other mode.
         if ann.plan.outputs.laser {
             let elements = try_elements(ann.plan.as_ref(), &sample_times, layer as u32, scratch)?;
-            for ((k, _), elements) in slots.zip(elements) {
+            for ((k, _), mut elements) in slots.zip(elements) {
+                // A fader on a laser pattern, and the master, dim its light.
+                if level < 1.0 {
+                    for element in &mut elements {
+                        element.intensity *= f64::from(level);
+                    }
+                }
                 let under = &mut frames[k].lasers;
                 if ann.blend_mode == BlendMode::Add {
                     luma_patterns::laser::add(under, elements);

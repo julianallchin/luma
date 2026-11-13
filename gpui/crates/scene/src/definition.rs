@@ -6,6 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The QLC+ type of a laser projector.
+pub const LASER_PROJECTOR: &str = "Laser Projector";
+
 /// The QLC+ `.qxf` subset the renderer reads, or a library fixture's
 /// lowering of itself into it plus its [`Built`](luma_fixture::Built).
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -129,6 +132,22 @@ impl Definition {
             .iter()
             .find(|m| m.name == mode_name)
             .map_or(0, |m| m.heads.len())
+    }
+
+    /// Whether this is a laser projector: a box that scans a beam through
+    /// its aperture, with no heads and no DMX.
+    #[must_use]
+    pub fn is_laser_projector(&self) -> bool {
+        self.kind == LASER_PROJECTOR
+    }
+
+    /// How far ahead of its origin, along the mount normal, a laser
+    /// projector's aperture is: the middle of its front face, just proud of
+    /// it, where its glass is. The beam leaves from here, in the picture
+    /// and in the solve.
+    #[must_use]
+    pub fn aperture_m(&self) -> f32 {
+        self.dimensions_m()[2] / 2.0 + 0.006
     }
 
     /// Physical size in metres, defaulting each missing axis to 300 mm the way

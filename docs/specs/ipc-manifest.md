@@ -5,7 +5,7 @@ Every command crossing the host boundary, generated from the `commands!` table i
 `cargo test --manifest-path backend/Cargo.toml ipc_manifest` fails when it is stale and
 rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 
-**141 commands** across **27 domains**
+**152 commands** across **27 domains**
 
 ## Domains
 
@@ -26,8 +26,8 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `groups` | 6 | `backend/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 6 | `backend/src/dispatch/handlers/host_audio.rs` |
 | `inputs` | 8 | `backend/src/dispatch/handlers/inputs.rs` |
-| `lasers` | 1 | `backend/src/dispatch/handlers/lasers.rs` |
-| `output` | 4 | `backend/src/dispatch/handlers/output.rs` |
+| `lasers` | 5 | `backend/src/dispatch/handlers/lasers.rs` |
+| `output` | 11 | `backend/src/dispatch/handlers/output.rs` |
 | `perform` | 14 | `backend/src/dispatch/handlers/perform.rs` |
 | `rekordbox` | 6 | `backend/src/dispatch/handlers/rekordbox.rs` |
 | `scores` | 10 | `backend/src/dispatch/handlers/scores.rs` |
@@ -38,7 +38,7 @@ rewrites it when run with `LUMA_UPDATE_GOLDENS=1`.
 | `tracks` | 6 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 11 | `backend/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 1 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **141** | |
+| **total** | **152** | |
 
 ## Commands
 
@@ -206,11 +206,22 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `unbind_route` | `universe: i64`<br>`deviceKind: DeviceKind`<br>`deviceId: String`<br>`port: i64` | `()` |
 
 ### `perform`
+| `set_laser_window` | `venueId: String`<br>`window: Option<crate::laser::Window>` | `()` |
+| `set_laser_settings` | `venueId: String`<br>`projectorId: Option<String>`<br>`settings: BTreeMap<String, f64>` | `()` |
+| `set_laser_own` | `venueId: String`<br>`projectorId: String`<br>`own: bool` | `()` |
+| `set_laser_limit` | `venueId: String`<br>`projectorId: String`<br>`points: Option<Vec<[f64; 2]>>` | `()` |
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `perform_start` | `venueId: String`<br>`source: PerformSource` | `()` |
 | `perform_stop` | — | `()` |
+| `list_laser_devices` | — | `Vec<crate::models::lasers::LaserDevice>` |
+| `list_laser_routes` | — | `Vec<crate::models::lasers::LaserRoute>` |
+| `bind_laser_route` | `fixtureId: String`<br>`deviceKind: crate::models::lasers::LaserDeviceKind`<br>`deviceId: String`<br>`deviceName: Option<String>`<br>`address: Option<String>` | `()` |
+| `unbind_laser_route` | `fixtureId: String` | `()` |
+| `get_laser_output` | — | `crate::models::lasers::LaserOutput` |
+| `set_laser_output` | `on: bool` | `crate::models::lasers::LaserOutput` |
+| `set_laser_test` | `projectorId: Option<String>` | `crate::models::lasers::LaserOutput` |
 | `perform_state` | — | `PerformState` |
 | `perform_set_latency` | `latencyMs: f32` | `()` |
 | `list_perform_patterns` | `venueId: String` | `Vec<PerformPattern>` |

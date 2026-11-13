@@ -67,7 +67,10 @@ fn projector(points: Vec<LaserPoint>) -> LaserScan {
         forward: Vec3::X,
         right: Vec3::Y,
         up: Vec3::Z,
-        half_field: [30.0, 30.0],
+        half_angle: 30.0,
+        light: [Vec3::X, Vec3::Y, Vec3::Z].map(|diode| diode * 600.0),
+        beam_m: 0.004,
+        divergence: 0.0015,
         rate: 30_000.0,
         points,
         phase: 0.0,
@@ -395,7 +398,10 @@ fn upstage(points: Vec<LaserPoint>) -> LaserScan {
         forward,
         right,
         up: right.cross(forward).normalize(),
-        half_field: [30.0, 30.0],
+        half_angle: 30.0,
+        light: [Vec3::X, Vec3::Y, Vec3::Z].map(|diode| diode * 600.0),
+        beam_m: 0.004,
+        divergence: 0.0015,
         rate: 30_000.0,
         points,
         phase: 0.0,
@@ -548,4 +554,23 @@ fn a_deck_shades_the_glow_under_it() {
     let shaded = glow(deck(), "glow-under-deck");
     assert!(shaded > 0.0, "some light still reaches round the deck");
     assert!(shaded < 0.6 * open, "{shaded} vs {open}");
+}
+
+/// A beam scatters back toward a camera behind its projector about as much
+/// as it does to one beside it: it shows from the stage as from the house.
+#[test]
+fn beams_show_from_behind_the_projector() {
+    let mut renderer = Renderer::new().unwrap();
+    // The projector is upstage, 3 m up, aimed out over the house.
+    let behind = CameraPose {
+        position: [0.5, 3.6, -8.0],
+        target: [0.0, 3.0, 5.0],
+    };
+    let mut seen = |lasers: Vec<LaserScan>, name: &str| {
+        let frame = staged(0.6, behind.clone(), Vec::new(), lasers);
+        brightness(&render(&mut renderer, &frame, name))
+    };
+    let dark = seen(Vec::new(), "behind-dark");
+    let lit = seen(vec![upstage(beams())], "behind-beams");
+    assert!(lit > dark + dark / 2 + 10_000, "{lit} vs {dark}");
 }

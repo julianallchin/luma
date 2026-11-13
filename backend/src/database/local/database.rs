@@ -13,7 +13,7 @@ use std::path::Path;
 /// Edits still waiting to upload were written in the old format and cannot be
 /// sent, so they are listed as not saved first: see
 /// [`reset_stale_projection`].
-pub const PROJECTION_VERSION: i64 = 2;
+pub const PROJECTION_VERSION: i64 = 3;
 
 /// `SqlitePool` is itself a shared handle, so cloning `Db` hands out another
 /// reference to the same pool, never a second pool.

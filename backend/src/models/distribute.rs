@@ -95,8 +95,10 @@ pub struct DistributedFixture {
     /// The `fixtures` row id, which is also its venue-graph node id.
     pub id: String,
     pub label: String,
-    pub universe: u16,
-    pub address: u16,
+    /// Where it is patched; `None` for a fixture with no DMX channels (a
+    /// laser projector).
+    pub universe: Option<u16>,
+    pub address: Option<u16>,
     /// Metres along the host face from its middle, ascending across the row.
     ///
     /// Not the same axis as the address order: addresses run along the *run*,

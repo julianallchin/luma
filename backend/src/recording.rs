@@ -738,7 +738,7 @@ impl Session {
                 RecordError::Library(format!("could not assemble the frame: {error}"))
             })?;
             if let Some(state) = &universe {
-                frame.lasers = stage_render::laser_scans(&self.geometry.lasers, state, time);
+                frame.lasers = stage_render::laser_scans(&self.geometry.lasers, state, None, time);
             }
             in_flight.push_back(kept);
             let done = recorder.push(&frame, width, height).map_err(|error| {

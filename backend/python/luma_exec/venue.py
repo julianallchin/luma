@@ -147,8 +147,8 @@ Reading this surface
 
 Everything that *asks the room* is a verb and takes parentheses: `render()`,
 `tiles()`, `catalog()`, `fixture_library()`, `describe()`, `nodes()`, `extent()`,
-`tip()`, `dangling()`, `groups()`, `group()`, `generate_groups()`, `laser_zones()`,
-`laser_zone()`, and the build verbs. Everything already
+`tip()`, `dangling()`, `groups()`, `group()`, `generate_groups()`, `laser_window()`,
+and the build verbs. Everything already
 *in your hand* is a plain attribute — `venue.views`, `cursor.at`,
 `cursor.size`, `placement.parent_id`, `distribution.ok`, `head.path`.
 `draft.extent` is a convenience property that queries the whole draft. A
@@ -723,18 +723,18 @@ class DistributedFixture:
         #: The fixture id. It is also its venue-graph node id.
         self.id = str(row["id"])
         self.label = str(row["label"])
-        self.universe = int(row["universe"])
-        self.address = int(row["address"])
+        #: Where it is patched; None for a fixture with no DMX channels (a
+        #: laser projector).
+        self.universe = None if row["universe"] is None else int(row["universe"])
+        self.address = None if row["address"] is None else int(row["address"])
         #: Metres along the host face from its middle, ascending across the row.
         self.along_m = float(row["alongM"])
         #: Suggested placement-derived display path, not a saved group selector.
         self.group_path = tuple(str(name) for name in row.get("groupPath") or ())
 
     def __repr__(self) -> str:
-        return (
-            f"<{self.label} {self.id} u{self.universe}/{self.address} "
-            f"at {self.along_m:+.2f} m>"
-        )
+        patched = "" if self.address is None else f"u{self.universe}/{self.address} "
+        return f"<{self.label} {self.id} {patched}at {self.along_m:+.2f} m>"
 
 
 class Placement:
@@ -1198,26 +1198,26 @@ class GroupFixture:
         return f"<{self.id} {self.label}{part}>"
 
 
-class LaserZone:
-    """A named window of directions that laser clips draw in, shared by
+class LaserWindow:
+    """The window of directions the venue's laser clips draw in, shared by
     every projector.
 
     `turn` is degrees round the vertical, 0 toward the house and positive
     toward stage right; `tilt` is degrees up from level; each is `(min, max)`.
-    A laser clip's canvas runs from -1 to 1 across `turn` and up `tilt`, and
-    names its zone by `id`: `laser(zone=zone.id)`.
+    A laser clip's canvas runs from -1 to 1 across `turn` and up `tilt`.
+    `set` is False while the venue has not chosen its window and draws in
+    one fitted to its projectors.
     """
 
-    __slots__ = ("id", "name", "turn", "tilt")
+    __slots__ = ("turn", "tilt", "set")
 
     def __init__(self, row: Mapping[str, Any]) -> None:
-        self.id = str(row["id"])
-        self.name = str(row["name"])
-        self.turn = tuple(float(v) for v in row["turn"])
-        self.tilt = tuple(float(v) for v in row["tilt"])
+        self.turn = tuple(float(v) for v in row["window"]["turn"])
+        self.tilt = tuple(float(v) for v in row["window"]["tilt"])
+        self.set = bool(row["set"])
 
     def __repr__(self) -> str:
-        return f"LaserZone({self.name!r}, id={self.id!r}, turn={self.turn}, tilt={self.tilt})"
+        return f"LaserWindow(turn={self.turn}, tilt={self.tilt}, set={self.set})"
 
 
 class Group:
@@ -1821,22 +1821,17 @@ class Venue:
         """
         return GroupTree(self._verb("venue.generate_groups", {})["groups"])
 
-    def laser_zones(self) -> tuple[LaserZone, ...]:
-        """The venue's laser zones, read live, in order. A laser clip with no
-        zone draws in the first; with none at all, ahead into the house from 5
-        degrees up, two thirds of the narrowest projector's scan across and
-        up."""
-        return tuple(LaserZone(row) for row in self._verb("venue.laser_zones", {})["zones"])
-
-    def laser_zone(self, name: str, *, turn: Sequence[float], tilt: Sequence[float]) -> LaserZone:
-        """Create the zone called `name`, or change the one already called
-        that, and return it. `turn` and `tilt` are `(min, max)` in degrees:
-        `laser_zone("Over the crowd", turn=(-40, 40), tilt=(10, 25))`."""
+    def laser_window(self, *, turn: Sequence[float] | None = None,
+                     tilt: Sequence[float] | None = None) -> LaserWindow:
+        """The window the venue's laser clips draw in, read live. Given
+        `turn` and `tilt`, each `(min, max)` in degrees, sets it first:
+        `laser_window(turn=(-40, 40), tilt=(10, 25))`."""
         window = {
             axis: [_finite(axis, v) for v in values]
             for axis, values in (("turn", turn), ("tilt", tilt))
+            if values is not None
         }
-        return LaserZone(self._verb("venue.laser_zone", {"name": str(name), **window})["zone"])
+        return LaserWindow(self._verb("venue.laser_window", window))
 
     def reach(self, node: Any, socket: str) -> Reach | None:
         """What a run out of `socket` would meet, and the buildable gap to it.

@@ -460,24 +460,6 @@ pub const SYNCED_TABLES: &[SyncedTable] = &[
         ["id", "uid", "venue_id", "name", "created_at", "updated_at"]
     ),
     table!(
-        "laser_zones",
-        Source,
-        "@.id",
-        "uid",
-        [
-            "id",
-            "uid",
-            "venue_id",
-            "name",
-            "turn_min",
-            "turn_max",
-            "tilt_min",
-            "tilt_max",
-            "created_at",
-            "updated_at"
-        ]
-    ),
-    table!(
         "perform_patterns",
         Source,
         "@.id",

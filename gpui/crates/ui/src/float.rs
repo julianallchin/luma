@@ -1032,7 +1032,7 @@ pub fn scrub_with_power(
 /// Derived from the step rather than passed alongside it because the two can
 /// only ever disagree: a control that steps by 0.5 and prints no decimals
 /// shows the same digit for two different values.
-fn format_step(value: f64, step: f64) -> String {
+pub(crate) fn format_step(value: f64, step: f64) -> String {
     let places = if step >= 1.0 {
         0
     } else if step >= 0.1 {

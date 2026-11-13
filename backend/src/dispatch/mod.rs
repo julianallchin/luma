@@ -200,6 +200,31 @@ commands! {
     groups::list_group_tree(venue_id: String) -> Vec<GroupTreeNode>;
     groups::highlight_selection(
         venue_id: String,
+    lasers::set_laser_window(venue_id: String, window: Option<crate::laser::Window>) -> ();
+    lasers::set_laser_settings(
+        venue_id: String,
+        projector_id: Option<String>,
+        settings: BTreeMap<String, f64>,
+    ) -> ();
+    lasers::set_laser_own(venue_id: String, projector_id: String, own: bool) -> ();
+    output::list_laser_devices() -> Vec<crate::models::lasers::LaserDevice>;
+    output::list_laser_routes() -> Vec<crate::models::lasers::LaserRoute>;
+    output::bind_laser_route(
+        fixture_id: String,
+        device_kind: crate::models::lasers::LaserDeviceKind,
+        device_id: String,
+        device_name: Option<String>,
+        address: Option<String>,
+    ) -> ();
+    output::unbind_laser_route(fixture_id: String) -> ();
+    output::get_laser_output() -> crate::models::lasers::LaserOutput;
+    output::set_laser_output(on: bool) -> crate::models::lasers::LaserOutput;
+    output::set_laser_test(projector_id: Option<String>) -> crate::models::lasers::LaserOutput;
+    lasers::set_laser_limit(
+        venue_id: String,
+        projector_id: String,
+        points: Option<Vec<[f64; 2]>>,
+    ) -> ();
         selection: Selection,
     ) -> UniverseState;
 

@@ -51,6 +51,7 @@ pub mod patch;
 pub mod selection;
 pub mod snap;
 pub mod sockets;
+pub mod spectrum;
 pub mod strobe;
 pub mod truss;
 pub mod venue;

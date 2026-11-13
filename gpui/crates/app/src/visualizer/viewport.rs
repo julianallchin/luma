@@ -446,6 +446,7 @@ pub(super) fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library
                                     moment,
                                     state: universe.as_ref(),
                                     lasers: &stage.lasers,
+                                    laser_test: stage.laser_test.as_deref(),
                                     size: (width, height),
                                     camera,
                                     spans,

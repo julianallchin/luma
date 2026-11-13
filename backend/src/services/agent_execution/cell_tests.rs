@@ -1504,9 +1504,9 @@ async fn a_python_laser_clip_draws_beams_on_the_stage() {
             r#"
 v = luma.venue
 v.haze(enabled=True, density=0.4)
-projector = v.fixture_library("ILDA laser projector")[0]
+projector = v.fixture_library("laser projector")[0]
 tower = v.place("truss", at=(0.0, -2.0), length=2.0, direction=(0, 0, 1))
-row = v.distribute(projector, 1, on=tower, face=(0, 1, 0), mode=projector.mode(1))
+row = v.distribute(projector, 1, on=tower, face=(0, 1, 0), mode=projector.mode("ILDA"))
 v.group("lasers", row.fixtures)
 projector.path
 "#,
@@ -1515,7 +1515,7 @@ projector.path
     expect_ok(&built, "laser rig");
     assert_eq!(
         built.repr.as_deref(),
-        Some("'Generic/Generic-ILDA-Laser-Projector.qxf'")
+        Some("'builtin:laser-projector'")
     );
     // The score is the owner's, written through a session turn.
     let track = f.editable_thread().await;

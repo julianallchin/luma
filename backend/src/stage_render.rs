@@ -957,7 +957,7 @@ fn one_frame(
     )
     .map_err(|error| format!("could not assemble the frame: {error}"))?;
     if let Some(state) = state {
-        frame.lasers = laser_scans(&scene.lasers, state, moment.time);
+        frame.lasers = laser_scans(&scene.lasers, state, None, moment.time);
     }
     // The fitted camera, turned by the footage look's shake at this moment
     // as `build_frame_at` turns the scene's own.
@@ -980,24 +980,31 @@ fn one_frame(
 pub fn laser_scans(
     rig: &crate::laser::LaserRig,
     state: &UniverseState,
+    testing: Option<&str>,
     clock: f64,
 ) -> Vec<luma_render::laser::LaserScan> {
     if rig.is_empty() {
         return Vec::new();
     }
+    use crate::laser::Key;
     let world =
         |v: glam::DVec3| coords::three_to_world_basis() * coords::three_from_data(v.as_vec3());
-    rig.solve(state)
+    rig.solve_testing(state, testing)
         .into_iter()
         .filter_map(|frame| {
             let projector = rig.projector(&frame.projector)?;
-            let basis = projector.basis;
+            let (basis, settings) = (projector.basis, &projector.settings);
             Some(luma_render::laser::LaserScan {
                 origin: world(basis.origin),
                 forward: world(basis.forward),
                 right: world(basis.right),
                 up: world(basis.up),
-                half_field: projector.field.map(|f| (f / 2.) as f32),
+                half_angle: settings.reach() as f32,
+                light: settings
+                    .light()
+                    .map(|diode| glam::Vec3::from(diode.map(|c| c as f32))),
+                beam_m: (settings.get(Key::Beam) / 1e3) as f32,
+                divergence: (settings.get(Key::Divergence) / 1e3) as f32,
                 rate: frame.rate as f32,
                 phase: (clock * f64::from(frame.rate)).rem_euclid(frame.points.len().max(1) as f64)
                     as f32,
@@ -1018,7 +1025,7 @@ pub fn laser_scans(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::laser::{Basis, LaserRig, Projector};
+    use crate::laser::{Basis, LaserRig, Projector, Settings};
     use crate::models::universe::PrimitiveState;
     use glam::DVec3;
     use luma_patterns::laser::{Element, Outline, Sample};
@@ -1391,11 +1398,11 @@ mod tests {
 
     #[test]
     fn a_venue_with_no_projectors_draws_no_lasers() {
-        assert!(laser_scans(&LaserRig::default(), &UniverseState::default(), 0.).is_empty());
+        assert!(laser_scans(&LaserRig::default(), &UniverseState::default(), None, 0.).is_empty());
     }
 
     /// A projector upstage at data (2, 3, 1) facing the house: its scan
-    /// starts where it hangs, and the beam in the middle of the default zone
+    /// starts where it hangs, and the beam in the middle of the default window
     /// leaves toward the house, a little above level, in the renderer's
     /// world (data with Y mirrored).
     #[test]
@@ -1409,16 +1416,16 @@ mod tests {
                     right: DVec3::X,
                     up: DVec3::Z,
                 },
-                field: [60., 60.],
-                rate: 30_000,
+                settings: Settings::default(),
+                own: false,
                 limit: None,
             }],
-            zones: Vec::new(),
+            window: None,
+            shared: Settings::default(),
         };
         let state = UniverseState {
             lasers: vec![Element {
                 projector: "p".into(),
-                zone: String::new(),
                 layer: 0,
                 outline: Outline::Point,
                 s: 0.,
@@ -1431,7 +1438,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let scans = laser_scans(&rig, &state, 0.);
+        let scans = laser_scans(&rig, &state, None, 0.);
         let [scan] = scans.as_slice() else {
             panic!("one projector, one scan: {scans:?}");
         };

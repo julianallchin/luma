@@ -11,7 +11,7 @@ transport underneath.
 
 | Kind | Tables | Rule |
 |---|---|---|
-| Source | `venues`, `venue_members`, `fixtures`, `fixture_groups`, `fixture_group_members`, `venue_nodes`, `venue_node_params`, `venue_constraints`, `folders`, `folder_tracks`, `laser_zones`, `laser_limits`, `perform_patterns`, `perform_layouts`, `perform_controllers`, `control_bindings`, `tracks`, `track_beats`, `track_beat_validations`, `scores`, `clips`, `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` | The contract below |
+| Source | `venues`, `venue_members`, `fixtures`, `fixture_groups`, `fixture_group_members`, `venue_nodes`, `venue_node_params`, `venue_constraints`, `folders`, `folder_tracks`, `laser_limits`, `perform_patterns`, `perform_layouts`, `perform_controllers`, `control_bindings`, `tracks`, `track_beats`, `track_beat_validations`, `scores`, `clips`, `agent_threads`, `agent_thread_messages`, `agent_thread_transcript_heads` | The contract below |
 | Derived | `track_stems`, `track_roots`, `track_drum_onsets`, `track_bar_classifications`, `track_genres`, and the local-only waveforms and embeddings | A cache: no flag, no history, deleted for real, rebuilt from audio |
 | Scratch | `drafts` | As before: private, hard-deleted |
 
@@ -113,7 +113,11 @@ The client sends these as request headers: `x-luma-actor`, `x-luma-thread`,
   with `PROJECTION_VERSION`. The cutover itself is the exception: it rebuilds
   the log, so it writes no entries, and `public.legacy_ids` is its record.
 - Each ships a function that reads a row of the previous format as the new
-  one (`public.row_from_format_1`), so old history entries stay readable.
+  one (`public.row_from_format_1`, `public.row_from_format_2`), so old
+  history entries stay readable.
+- Format 3 (`20261112150000_laser_projectors.sql`) is the laser projector
+  as a built-in fixture with no channels, one window a venue, and laser
+  nodes without a zone ([lasers.md](lasers.md)).
   `public.legacy_ids` maps the ids format 1 built from other columns to the
   ones that replaced them.
 

@@ -45,6 +45,7 @@ pub mod house;
 pub mod image_out;
 pub mod interval_cache;
 pub mod laser;
+mod laser_housing;
 pub mod light_index;
 mod library_housing;
 pub mod materials;

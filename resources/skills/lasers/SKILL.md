@@ -1,6 +1,6 @@
 ---
 name: lasers
-description: How laser projectors work in a clip graph and when a show should use them. What a figure, an element, a zone and its canvas are, the mistakes that make lasers glitch or clump, and worked looks. Read before building any laser clip.
+description: How laser projectors work in a clip graph and when a show should use them. What a figure, an element and the venue's canvas are, the mistakes that make lasers glitch or clump, and worked looks. Read before building any laser clip.
 ---
 # Lasers
 
@@ -11,12 +11,15 @@ wants one at all.
 
 ## How a laser clip works
 
-- **A projector draws on a canvas.** Each projector has a zone
-  (`luma.venue.laser_zones()`), and the zone's canvas runs from -1 to 1
-  across and from -1 to 1 up. Every `x`, `y` and `size` is in canvas units,
-  not metres and not degrees. If the venue has no zone the beams fall back
-  to a default canvas and fire wherever the projector faces: check the zones
-  before the first clip, and ask the user to set one up if there is none.
+- **A projector draws on a canvas.** The venue has one laser window
+  (`luma.venue.laser_window()`), a range of directions in the room, and
+  the canvas runs from -1 to 1 across it and from -1 to 1 up it. Every
+  `x`, `y` and `size` is in canvas units, not metres and not degrees, and
+  the same place on the canvas is the same direction from every projector.
+  Until the venue sets its window (`window.set` is false) it is fitted to
+  the projectors: ahead into the house, just above level. Check it before
+  the first clip, and ask the user where the beams should go if it is not
+  set.
 - **A figure is elements of one kind.** `figure(count=8)` is eight beams;
   `figure("line")` is a sheet; rings, polygons and grids are the others. A
   clip is `laser([figure, ...])`, at most 64 elements per projector.

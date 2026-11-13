@@ -38,7 +38,7 @@ pub async fn initialize_fixtures(root: &Path, state: &FixtureState) -> Result<us
 }
 
 /// Every fixture a venue can be given: the Luma fixture library's, and the
-/// one built-in the library does not carry, the ILDA laser projector
+/// one built-in the library does not carry, the laser projector
 /// ([`LASER_PROJECTOR_PATH`]).
 ///
 /// The QLC+ files under `root` are not offered once there is a library
@@ -48,26 +48,30 @@ pub async fn initialize_fixtures(root: &Path, state: &FixtureState) -> Result<us
 /// # Errors
 /// Fails only if `root` cannot be walked or the library's index is unreadable.
 pub fn catalogue(root: &Path) -> Result<FixtureIndex, String> {
-    let qlc = parser::build_index(root).map_err(|e| e.to_string())?;
-    let Some(library_root) = crate::resources::fixture_library_root(Some(root)) else {
-        return Ok(qlc);
+    let mut entries = match crate::resources::fixture_library_root(Some(root)) {
+        Some(library_root) => crate::fixtures::library::index(&library_root)?
+            .fixtures
+            .iter()
+            .map(|entry| FixtureEntry {
+                manufacturer: entry.manufacturer.clone(),
+                model: entry.model.clone(),
+                path: crate::fixtures::library::fixture_path(&entry.id),
+                library: Some(entry.clone()),
+            })
+            .collect(),
+        None => {
+            parser::build_index(root)
+                .map_err(|e| e.to_string())?
+                .entries
+        }
     };
-    let index = crate::fixtures::library::index(&library_root)?;
-    let mut entries: Vec<FixtureEntry> = index
-        .fixtures
-        .iter()
-        .map(|entry| FixtureEntry {
-            manufacturer: entry.manufacturer.clone(),
-            model: entry.model.clone(),
-            path: crate::fixtures::library::fixture_path(&entry.id),
-            library: Some(entry.clone()),
-        })
-        .collect();
-    entries.extend(
-        qlc.entries
-            .into_iter()
-            .filter(|entry| entry.path == LASER_PROJECTOR_PATH),
-    );
+    let projector = crate::fixtures::definition(root, LASER_PROJECTOR_PATH)?;
+    entries.push(FixtureEntry {
+        manufacturer: projector.manufacturer.clone(),
+        model: projector.model.clone(),
+        path: LASER_PROJECTOR_PATH.into(),
+        library: None,
+    });
     entries.sort_by(|a, b| {
         a.manufacturer
             .to_lowercase()

@@ -51,13 +51,15 @@ pub struct FixtureDefinition {
     pub library: Option<std::sync::Arc<crate::fixtures::library::Source>>,
 }
 
-/// The QXF `<Type>` of an ILDA laser projector: a fixture Luma draws beams
-/// with from laser clips, through a point stream rather than DMX.
-pub const LASER_PROJECTOR: &str = "Laser Projector";
+/// The `<Type>` of a laser projector: a fixture Luma draws beams with from
+/// laser clips, through a point stream to a DAC rather than DMX.
+pub const LASER_PROJECTOR: &str = luma_scene::definition::LASER_PROJECTOR;
 
-/// The bundled definition of the ILDA laser projector: the one fixture Luma
-/// offers that the fixture library does not carry.
-pub const LASER_PROJECTOR_PATH: &str = "Generic/Generic-ILDA-Laser-Projector.qxf";
+/// The fixture path of the laser projector. It is built in
+/// (`crate::fixtures::definition`), not a file: every projector is a box
+/// with an aperture, so there is one definition, with no channels, and what
+/// tells two projectors apart is their settings (`crate::laser::Settings`).
+pub const LASER_PROJECTOR_PATH: &str = "builtin:laser-projector";
 
 impl FixtureDefinition {
     /// Whether Luma can drive `mode`'s light: false for a library mode it
@@ -70,7 +72,7 @@ impl FixtureDefinition {
             .is_none_or(|light| light.lights())
     }
 
-    /// Whether this is an ILDA laser projector ([`LASER_PROJECTOR`]).
+    /// Whether this is a laser projector ([`LASER_PROJECTOR`]).
     pub fn is_laser_projector(&self) -> bool {
         self.type_ == LASER_PROJECTOR
     }

@@ -80,7 +80,6 @@ streams:
       - SELECT * FROM venue_constraints WHERE venue_id IN accessible_venues AND deleted_at IS NULL
       - SELECT * FROM folders WHERE venue_id IN accessible_venues AND deleted_at IS NULL
       - SELECT * FROM folder_tracks WHERE venue_id IN accessible_venues AND deleted_at IS NULL
-      - SELECT * FROM laser_zones WHERE venue_id IN accessible_venues AND deleted_at IS NULL
       - SELECT * FROM laser_limits WHERE venue_id IN accessible_venues AND deleted_at IS NULL
       - SELECT * FROM perform_patterns WHERE venue_id IN accessible_venues AND deleted_at IS NULL
       - SELECT * FROM perform_layouts WHERE venue_id IN accessible_venues AND deleted_at IS NULL

@@ -15,7 +15,7 @@ const SONG = "Night Bloom";
 // -- the rig -----------------------------------------------------------------
 
 const BEAM = "Northlight/Northlight-Arc-Beam.qxf";
-const LASER = "Northlight/Northlight-Prism-Laser.qxf";
+const LASER = "builtin:laser-projector";
 const ROOT = "venue-main:venue";
 
 const sql = [];
@@ -58,7 +58,7 @@ for (let i = 0; i < FRONT; i++) {
 for (let i = 0; i < 4; i++) {
   const id = `laser-${i}`;
   const u = (i / 3 - 0.5) * 7.5;
-  patch(id, LASER, "Prism Laser", "ILDA", 1, `Laser ${i + 1}`, [u, 0.9, 0], "floor", { tilt: 0.95 });
+  patch(id, LASER, "Laser Projector", "ILDA", 0, `Laser ${i + 1}`, [u, 0.9, 0], "floor", { tilt: 0.95 });
   member("lasers", id);
 }
 // A stage of decks, three wide and two deep.
@@ -194,7 +194,6 @@ fixture({
     ...Object.fromEntries(["night-bloom", ...SONGS.map((s) => s[3])]
       .map((art) => [`art/${art}.jpg`, `${SHOWCASE}/art/${art}.jpg`])),
     [`fixtures/${BEAM}`]: `${SHOWCASE}/fixtures/${BEAM}`,
-    [`fixtures/${LASER}`]: `${SHOWCASE}/fixtures/${LASER}`,
   },
   clips,
   model: [

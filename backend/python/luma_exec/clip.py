@@ -692,8 +692,8 @@ def figure(kind="beams", count=None, sides=None, x=None, y=None, size=None, rota
            color=None, heads=None) -> Figure:
     """A laser figure: `count` elements (a whole number, 1-64, fixed for the
     clip; default 8 beams or a grid's 8 points, else 1) on each projector in
-    the clip's selection, on the zone's canvas, which runs -1 to 1 across
-    and up the zone. Wire it into laser(figures).
+    the clip's selection, on the venue's laser canvas, which runs -1 to 1
+    across and up its window (luma.venue.laser_window()). Wire it into laser(figures).
 
     `kind`: "beams" (points), "line", "ring", "polygon" (`sides`, 3-12,
     default 3) or "grid" (points in rows). Each element is a head of its
@@ -713,14 +713,13 @@ def figure(kind="beams", count=None, sides=None, x=None, y=None, size=None, rota
                  size=size, rotation=rotation, color=color)
 
 
-def laser(figures, alpha=None, zone="") -> "Graph":
+def laser(figures, alpha=None) -> "Graph":
     """Laser output: draws its figures, in order, on each projector in the
     clip's selection: `laser([sheet, rails, dots])`. A projector's elements
     are every figure's together, at most 64, and share its scan: a figure
     added dims the others, as on a real projector.
 
-    `alpha` is the clip's fade. `zone` is a zone id from luma.venue (empty:
-    the venue's first zone).
+    `alpha` is the clip's fade.
 
     A laser's colour is its figures': Color clips do not reach projectors. A
     laser clip blends "replace" (morphs the elements under it into its
@@ -735,8 +734,8 @@ def laser(figures, alpha=None, zone="") -> "Graph":
         if not isinstance(item, Figure):
             raise ClipError(f"laser.figures: expected figure() nodes; got {item!r}. "
                             "Example: laser([figure(\"line\"), figure(count=4)])")
-    return Graph(_Output("laser", {"zone": zone}, {"figures": list(figures),
-                                                   "alpha": _input(alpha, "laser.alpha")}))
+    return Graph(_Output("laser", {}, {"figures": list(figures),
+                                       "alpha": _input(alpha, "laser.alpha")}))
 
 
 def preset(name) -> "Graph":
@@ -1137,7 +1136,7 @@ def _gradient_literal(value):
 
 
 _DEFAULT_SETTINGS = {"space": {"kind": "line"}, "control": {"kind": "number"}, "aim": {"base": "direction"}, "split": {"by": "fixture"},
-                     "figure": {"kind": "beams"}, "laser": {"zone": ""},
+                     "figure": {"kind": "beams"},
                      "button": {"name": "button", "mode": "flash", "start": "now", "attack": "0", "decay": "0", "sustain": "1",
                                 "release": "0", "unit": "beats", "shape": "smooth"}}
 # Python precedence: an atom (a name, a number, a call) binds tightest.

@@ -154,9 +154,9 @@ impl From<crate::services::patch::PatchError> for StageError {
         use crate::services::patch::PatchError;
         let message = error.to_string();
         match error {
-            PatchError::OutOfRange { .. } | PatchError::Collision { .. } => {
-                StageError::Refused(message)
-            }
+            PatchError::OutOfRange { .. }
+            | PatchError::Collision { .. }
+            | PatchError::NoFootprint(_) => StageError::Refused(message),
             PatchError::Database(_) => StageError::Internal(message),
         }
     }
@@ -1362,7 +1362,12 @@ impl<'a> Stage<'a> {
         let run = distribute_service::run_of(&solved, &edge.parent);
         let channels = u16::try_from(source.num_channels)
             .map_err(|_| StageError::Internal(format!("`{}` has no channel count", source.id)))?;
-        let footprint = distribute_service::offer(&solved, &rows, run.as_deref(), channels, 1)?[0];
+        // A fixture with no channels takes no address.
+        let footprint = if channels == 0 {
+            None
+        } else {
+            Some(distribute_service::offer(&solved, &rows, run.as_deref(), channels, 1)?[0])
+        };
         let term = source
             .label
             .as_deref()

@@ -656,7 +656,12 @@ async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
             // A second row placed physically before the first must receive
             // addresses before it even though it was created later.
             if step >= 2 {
-                let new_last = report.fixtures.iter().map(|f| f.address).max().unwrap();
+                let new_last = report
+                    .fixtures
+                    .iter()
+                    .map(|f| f.address.expect("a DMX fixture is patched"))
+                    .max()
+                    .unwrap();
                 let old_first = before
                     .iter()
                     .filter(|f| {

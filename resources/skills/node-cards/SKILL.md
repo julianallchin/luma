@@ -175,8 +175,8 @@ music decide *where* strobe clips go, not how fast they flash.
 
 What a laser draws. Each projector draws `count` elements of `kind`:
 `beams` (points), `line`, `ring`, `polygon` (`sides` corners) or `grid`
-(points in rows), on the zone's canvas: -1 to 1 across and up the zone's
-window, the same directions from every projector, so six projectors draw
+(points in rows), on the venue's laser canvas: -1 to 1 across and up its
+window (`luma.venue.laser_window()`), the same directions from every projector, so six projectors draw
 six parallel shows. Each element is a head of its figure: `space`,
 `shuffle`, `mirror` and `random` read a figure's elements as they read a
 mover's heads, apart from any other figure's, so one `space` wired into
@@ -193,7 +193,7 @@ wired. A `mirror` on `heads` reflects each element.
 Wire `along()` through curves and math into x, y, size, rotation or color
 to vary them within each line, ring or polygon: a wave, a gradient, dashes.
 
-**laser** `laser(figures, alpha=None, zone="")`
+**laser** `laser(figures, alpha=None)`
 
 | Input | Type | Unit | Range | Empty |
 |---|---|---|---|---|
@@ -204,8 +204,7 @@ Laser shows from projectors. Select projectors, as any fixture; a laser
 clip skips other fixtures. It draws its figures in order on each
 projector: `laser([sheet, rails, dots])` is a sheet, its rails and four
 beams in one clip. A projector's elements are every figure's together, at
-most 64. `zone` is a zone id from `luma.venue.laser_zones()`; empty is the
-venue's first zone.
+most 64.
 
 A laser's colour is its figures': a **color** clip never reaches
 projectors. Blend modes: `replace` morphs the elements under it into its

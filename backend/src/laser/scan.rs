@@ -6,41 +6,74 @@
 //! frame aims for [`FRAME_RATE`] scans a second: the points the jumps and
 //! the lit strokes need come first, and what is left of the budget is
 //! shared out as dwell on the beams. A frame with more to draw than the
-//! budget runs long, and so refreshes slower, as a real projector would.
+//! budget runs long, and so refreshes slower, as a real projector would;
+//! [`LaserFrame::scans`] says how slow.
 //!
 //! Brightness is power times time: a projector that splits a frame over
 //! sixteen beams gives each a sixteenth of the time, and so a sixteenth of
 //! the light. Nothing here hides that.
-use super::{LaserRig, Projector};
+//!
+//! How far the mirrors may move between two points comes from the
+//! projector: a scanner run at its rated points a second follows the same
+//! angle per point whatever that rating is, so the steps are in degrees and
+//! a wider scan takes more points to cross.
+use super::{Projector, Settings, Window};
 use crate::models::universe::UniverseState;
 use luma_patterns::laser::{Element, Outline};
 use serde::{Deserialize, Serialize};
 
 /// Scans a second a frame aims for.
 pub const FRAME_RATE: u32 = 30;
-/// The longest mirror move between two points, in galvo units, with the light
-/// off.
-const BLANK_STEP: f64 = 0.08;
+/// Scans a second below which a scan visibly flickers.
+pub const FLICKER_RATE: f64 = 25.;
+/// The longest mirror move between two points with the light off, in
+/// optical degrees.
+const BLANK_STEP: f64 = 2.4;
+/// The longest move between two points of a lit stroke, in optical degrees:
+/// short enough that the mirrors follow it rather than cut its corners.
+const LINE_STEP: f64 = 0.6;
 /// Points spent still at either end of a jump, so the mirrors settle before
 /// the light turns on and do not trail it when it turns off: about two of
-/// the mirrors' time constants at 30k points a second.
+/// the mirrors' time constants at their rated speed.
 const SETTLE: usize = 8;
-/// The longest move between two points of a lit stroke: short enough that
-/// the mirrors follow it rather than cut its corners.
-const LINE_STEP: f64 = 0.02;
 /// How many pieces a stretch of an element is cut into to measure how long
-/// it is in the projector's view, before it is drawn in steps of
-/// [`LINE_STEP`].
+/// it is in the projector's view, before it is drawn in line steps.
 const MEASURE: usize = 16;
 /// The fewest and most points a beam dwells for.
 const DWELL: [usize; 2] = [4, 80];
-/// How far inside a limit's edge lit points must stay, in galvo units: the
-/// mirrors overshoot a fast move by about this much.
-const MARGIN: f64 = 0.02;
+
+/// How a projector's scanner is paced, in galvo units and points.
+#[derive(Clone, Copy, Debug)]
+struct Pace {
+    /// The longest lit move between two points. Also how far inside a
+    /// limit's edge lit points stay: the mirrors overshoot a fast move by
+    /// about this much.
+    line: f64,
+    /// The longest dark move between two points.
+    blank: f64,
+    /// The points of one scan at [`FRAME_RATE`].
+    budget: usize,
+}
+
+/// The longest dark move between two points of `settings`' scanner, in
+/// galvo units.
+pub fn blank_step(settings: &Settings) -> f64 {
+    BLANK_STEP / settings.reach()
+}
+
+impl Pace {
+    fn of(settings: &Settings) -> Self {
+        Pace {
+            line: LINE_STEP / settings.reach(),
+            blank: blank_step(settings),
+            budget: (settings.rate() / FRAME_RATE) as usize,
+        }
+    }
+}
 
 /// One point of a projector's stream: where its mirrors point, galvo
-/// coordinates −1 to 1 across and up its field, and its light, 0 to 1 per
-/// emitter. Black is the light off.
+/// coordinates −1 to 1 across and up its scan, and how hard each diode is
+/// driven, 0 to 1 ([`Settings::drive`]). Black is the light off.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LaserPoint {
     pub x: f32,
@@ -63,6 +96,14 @@ pub struct LaserFrame {
     pub points: Vec<LaserPoint>,
 }
 
+impl LaserFrame {
+    /// How many times a second the scan repeats. Below [`FLICKER_RATE`] it
+    /// has more to draw than the scanner can keep steady.
+    pub fn scans(&self) -> f64 {
+        f64::from(self.rate) / self.points.len().max(1) as f64
+    }
+}
+
 /// A galvo place and its light.
 type Point = ([f64; 2], [f64; 3]);
 
@@ -71,7 +112,7 @@ type Point = ([f64; 2], [f64; 3]);
 enum Stroke {
     /// A beam: one direction, dwelt on.
     Dot(Point),
-    /// A lit run of an element, each point at most about [`LINE_STEP`] from
+    /// A lit run of an element, each point at most about a line step from
     /// the last.
     Line(Vec<Point>),
 }
@@ -89,6 +130,13 @@ impl Stroke {
             Stroke::Line(points) => points[points.len() - 1].0,
         }
     }
+    /// The same stroke drawn from its other end.
+    fn reversed(mut self) -> Self {
+        if let Stroke::Line(points) = &mut self {
+            points.reverse();
+        }
+        self
+    }
 }
 
 fn lit(rgb: [f64; 3]) -> bool {
@@ -96,10 +144,11 @@ fn lit(rgb: [f64; 3]) -> bool {
 }
 
 pub(super) fn frame(
-    rig: &LaserRig,
+    window: Window,
     projector: &Projector,
     state: &UniverseState,
 ) -> Option<LaserFrame> {
+    let pace = Pace::of(&projector.settings);
     let mut elements: Vec<&Element> = state
         .lasers
         .iter()
@@ -108,24 +157,23 @@ pub(super) fn frame(
     elements.sort_by(|a, b| a.layer.cmp(&b.layer).then(a.s.total_cmp(&b.s)));
     let strokes: Vec<Stroke> = elements
         .into_iter()
-        .flat_map(|element| strokes(rig, projector, element))
+        .flat_map(|element| strokes(window, projector, pace, element))
         .collect();
     if strokes.is_empty() {
         return None;
     }
-    let points = plan(&strokes, projector.rate);
-    let points = points
+    let points = plan(&route(strokes), pace)
         .into_iter()
         .map(|(at, rgb)| {
             let inside = projector
                 .limit
                 .as_deref()
-                .is_none_or(|limit| inside(limit, at, MARGIN));
+                .is_none_or(|limit| inside(limit, at, pace.line));
             LaserPoint {
                 x: at[0] as f32,
                 y: at[1] as f32,
                 rgb: if inside {
-                    rgb.map(|c| c.clamp(0., 1.) as f32)
+                    rgb.map(|c| c as f32)
                 } else {
                     [0.; 3]
                 },
@@ -134,19 +182,50 @@ pub(super) fn frame(
         .collect();
     Some(LaserFrame {
         projector: projector.id.clone(),
-        rate: projector.rate,
+        rate: projector.settings.rate(),
         points,
     })
+}
+
+/// `strokes` in the order that keeps the jumps between them short: from the
+/// first, always on to whichever is nearest, a line from whichever end is.
+/// The first stays first, so the scan starts in the same place from one
+/// frame to the next.
+fn route(strokes: Vec<Stroke>) -> Vec<Stroke> {
+    let mut left = strokes.into_iter();
+    let mut route: Vec<Stroke> = left.next().into_iter().collect();
+    let mut left: Vec<Stroke> = left.collect();
+    while !left.is_empty() {
+        let at = route[route.len() - 1].last();
+        let (next, backward) = left
+            .iter()
+            .enumerate()
+            .flat_map(|(i, stroke)| {
+                [
+                    (i, false, distance(at, stroke.first())),
+                    (i, true, distance(at, stroke.last())),
+                ]
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(i, backward, _)| (i, backward))
+            .expect("a stroke left");
+        // Not `swap_remove`: strokes as near as each other keep their order.
+        let stroke = left.remove(next);
+        route.push(if backward { stroke.reversed() } else { stroke });
+    }
+    route
 }
 
 /// What `element` draws on `projector`: a beam it can reach and that is
 /// lit, or the lit runs along an outline. A stretch the scanner cannot reach
 /// or that is black is left out, and the scan jumps over it in black.
-fn strokes(rig: &LaserRig, projector: &Projector, element: &Element) -> Vec<Stroke> {
-    let zone = rig.zone(&element.zone);
+fn strokes(window: Window, projector: &Projector, pace: Pace, element: &Element) -> Vec<Stroke> {
     let view = |along: f64| -> Option<Point> {
         let ([x, y], rgb) = element.point(along);
-        Some((projector.galvo(zone.direction(x, y))?, rgb))
+        Some((
+            projector.galvo(window.direction(x, y))?,
+            projector.settings.drive(rgb),
+        ))
     };
     if element.outline == Outline::Point {
         return view(0.)
@@ -165,7 +244,7 @@ fn strokes(rig: &LaserRig, projector: &Projector, element: &Element) -> Vec<Stro
         let length: f64 = (0..MEASURE)
             .filter_map(|k| Some(distance(view(at(k))?.0, view(at(k + 1))?.0)))
             .sum();
-        let n = ((length / LINE_STEP).ceil() as usize).max(1);
+        let n = ((length / pace.line).ceil() as usize).max(1);
         places.extend((1..=n).map(|k| from + (to - from) * k as f64 / n as f64));
     }
     let mut runs: Vec<Vec<Point>> = Vec::new();
@@ -207,7 +286,7 @@ fn steps(from: [f64; 2], to: [f64; 2], step: f64) -> impl Iterator<Item = [f64; 
 /// The stream for `strokes`: a jump in black to each, settled at both
 /// ends, each beam dwelt on, each line drawn point by point, and a jump
 /// back to the start so the scan repeats seamlessly.
-fn plan(strokes: &[Stroke], rate: u32) -> Vec<Point> {
+fn plan(strokes: &[Stroke], pace: Pace) -> Vec<Point> {
     let black = [0.; 3];
     let start = strokes[0].first();
     // What the jumps and lines cost, so the rest of the budget can go to
@@ -215,26 +294,25 @@ fn plan(strokes: &[Stroke], rate: u32) -> Vec<Point> {
     let mut fixed = 0;
     let mut at = start;
     for stroke in strokes {
-        fixed += steps(at, stroke.first(), BLANK_STEP).count() + 2 * SETTLE;
+        fixed += steps(at, stroke.first(), pace.blank).count() + 2 * SETTLE;
         if let Stroke::Line(points) = stroke {
             fixed += points.len();
         }
         at = stroke.last();
     }
-    fixed += steps(at, start, BLANK_STEP).count();
+    fixed += steps(at, start, pace.blank).count();
     let dots = strokes
         .iter()
         .filter(|stroke| matches!(stroke, Stroke::Dot(_)))
         .count();
-    let budget = (rate / FRAME_RATE) as usize;
-    let dwell = ((budget.saturating_sub(fixed) as f64 / dots.max(1) as f64).round() as usize)
+    let dwell = ((pace.budget.saturating_sub(fixed) as f64 / dots.max(1) as f64).round() as usize)
         .clamp(DWELL[0], DWELL[1]);
 
     let mut out = Vec::new();
     let mut at = start;
     for stroke in strokes {
         // Jump in black and settle.
-        out.extend(steps(at, stroke.first(), BLANK_STEP).map(|p| (p, black)));
+        out.extend(steps(at, stroke.first(), pace.blank).map(|p| (p, black)));
         out.extend(std::iter::repeat_n((stroke.first(), black), SETTLE));
         match stroke {
             Stroke::Dot(point) => out.extend(std::iter::repeat_n(*point, dwell)),
@@ -243,7 +321,7 @@ fn plan(strokes: &[Stroke], rate: u32) -> Vec<Point> {
         at = stroke.last();
         out.extend(std::iter::repeat_n((at, black), SETTLE));
     }
-    out.extend(steps(at, start, BLANK_STEP).map(|p| (p, black)));
+    out.extend(steps(at, start, pace.blank).map(|p| (p, black)));
     out
 }
 
@@ -274,14 +352,13 @@ fn inside(polygon: &[[f64; 2]], p: [f64; 2], margin: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::tests::facing_house;
-    use super::super::{LaserRig, Zone};
+    use super::super::{Key, LaserRig};
     use super::*;
     use luma_patterns::laser::{frame as turn, Sample};
 
     fn element(outline: Outline, layer: u32, s: f64, x: f64) -> Element {
         Element {
             projector: "p".into(),
-            zone: String::new(),
             layer,
             outline,
             s,
@@ -301,13 +378,11 @@ mod tests {
     fn rig() -> LaserRig {
         LaserRig {
             projectors: vec![facing_house("p", 0.)],
-            zones: vec![(
-                "z".into(),
-                Zone {
-                    turn: [-20., 20.],
-                    tilt: [0., 20.],
-                },
-            )],
+            window: Some(Window {
+                turn: [-20., 20.],
+                tilt: [0., 20.],
+            }),
+            shared: Settings::default(),
         }
     }
 
@@ -366,7 +441,7 @@ mod tests {
         for pair in points.windows(2) {
             assert_ne!((pair[0].x, pair[0].y), (pair[1].x, pair[1].y));
             let step = (pair[0].x - pair[1].x).hypot(pair[0].y - pair[1].y);
-            assert!(f64::from(step) < LINE_STEP * 1.5, "{step}");
+            assert!(f64::from(step) < LINE_STEP / 30. * 1.5, "{step}");
         }
     }
 
@@ -414,11 +489,12 @@ mod tests {
         red.samples[0].rgb = [1., 0., 0.];
         let mut blue = beam(0, 1., 0.5);
         blue.samples[0].rgb = [0., 0., 1.];
-        let colours: std::collections::BTreeSet<[u32; 3]> = lit(&solve(vec![red, blue]))
-            .iter()
-            .map(|p| p.rgb.map(|c| c as u32))
-            .collect();
-        assert_eq!(colours.len(), 2, "{colours:?}");
+        // Which diode each spot drives hardest, left to right.
+        let mut spots = lit(&solve(vec![red, blue]));
+        spots.sort_by(|a, b| a.x.total_cmp(&b.x));
+        let hardest = |p: &LaserPoint| (0..3).max_by(|a, b| p.rgb[*a].total_cmp(&p.rgb[*b]));
+        assert_eq!(hardest(&spots[0]), Some(0), "{:?}", spots[0]);
+        assert_eq!(hardest(&spots[spots.len() - 1]), Some(2));
     }
 
     /// Splitting the frame over more beams gives each less time: the
@@ -461,13 +537,84 @@ mod tests {
     #[test]
     fn a_beam_outside_the_field_is_dropped() {
         let mut rig = rig();
-        rig.zones[0].1.turn = [-80., 80.];
+        rig.window = Some(Window {
+            turn: [-80., 80.],
+            tilt: [0., 20.],
+        });
         let state = UniverseState {
             lasers: vec![beam(0, 0., 1.), beam(0, 0.5, 0.)],
             ..UniverseState::default()
         };
         let frame = rig.solve(&state).pop().unwrap();
         assert!(lit(&frame).iter().all(|p| p.x.abs() < 1e-6));
+    }
+
+    /// Beams from two clips that cross are visited by where they are, not
+    /// clip by clip: the scan spends less of its frame jumping in black.
+    #[test]
+    fn strokes_are_visited_nearest_next() {
+        let lasers: Vec<Element> = [-0.9, 0.9, -0.8, 0.8, -0.7, 0.7]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| beam(i as u32, 0., x))
+            .collect();
+        let frame = solve(lasers);
+        let visited: Vec<f32> = lit(&frame)
+            .chunk_by(|a, b| a.x == b.x)
+            .map(|spot| spot[0].x)
+            .collect();
+        let crossings = visited
+            .windows(2)
+            .filter(|pair| pair[0].signum() != pair[1].signum())
+            .count();
+        assert_eq!(crossings, 1, "{visited:?}");
+    }
+
+    /// The plan is the projector's own: paced in degrees whatever its scan
+    /// angle, at its scanner's points a second.
+    #[test]
+    fn the_plan_follows_the_scanner() {
+        let line = |change: fn(&mut Settings)| {
+            let mut rig = rig();
+            change(&mut rig.projectors[0].settings);
+            let state = UniverseState {
+                lasers: vec![element(Outline::Line, 0, 0.5, 0.)],
+                ..UniverseState::default()
+            };
+            rig.solve(&state).pop().expect("a frame")
+        };
+        let reference = line(|_| {});
+        // The line is as many degrees long through any scan, so it takes as
+        // many points, further apart in a narrower scan's galvo units.
+        let narrow = line(|settings| settings.set(Key::Angle, 45.));
+        let (points, narrow_points) = (lit(&reference).len(), lit(&narrow).len());
+        assert!(
+            points.abs_diff(narrow_points) <= points / 10,
+            "{points} {narrow_points}"
+        );
+        let width = |frame: &LaserFrame| {
+            let xs = lit(frame).into_iter().map(|p| p.x);
+            xs.clone().fold(f32::MIN, f32::max) - xs.fold(f32::MAX, f32::min)
+        };
+        assert!(width(&narrow) > 1.2 * width(&reference));
+        // A faster scanner is sent more points a second, and repeats the
+        // same picture more often.
+        let fast = line(|settings| settings.set(Key::Speed, 60.));
+        assert!(fast.rate > reference.rate && fast.scans() > reference.scans());
+    }
+
+    /// What the stream carries is drive levels: the power cap is in them.
+    #[test]
+    fn the_power_cap_reaches_the_stream() {
+        let mut rig = rig();
+        rig.projectors[0].settings.set(Key::Cap, 0.2);
+        let state = UniverseState {
+            lasers: vec![beam(0, 0., 0.)],
+            ..UniverseState::default()
+        };
+        let frame = rig.solve(&state).pop().unwrap();
+        let peak = lit(&frame).iter().flat_map(|p| p.rgb).fold(0f32, f32::max);
+        assert!(peak > 0. && peak <= 0.2 + 1e-6, "{peak}");
     }
 
     #[test]

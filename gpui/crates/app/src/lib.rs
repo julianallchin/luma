@@ -291,6 +291,9 @@ pub struct Luma {
     /// quit — see [`Luma::guard_quit`].
     pub(crate) quit_guarded: bool,
     /// Session items changed but not yet written, by key: what a quit must
+    /// Whether laser output is on, as last heard: what the status bar says.
+    /// It is off at every launch.
+    pub(crate) laser_output: bool,
     /// write before the debounce would have — see [`session_store`].
     pub(crate) unsaved_session: std::collections::BTreeMap<String, String>,
 }
@@ -370,6 +373,7 @@ impl Luma {
         };
         // Which door the app opens on. Nothing opens without a principal: a
         // stored session that still proves one goes straight in; one that
+            laser_output: false,
         // stopped proving anyone (see `Library::lapsed`) is asked online
         // whether it can be made to, behind a splash; anything else is the
         // gate. The gate is a first screen, not a failure, and it lands on

@@ -170,6 +170,15 @@ after it. A new migration adds its line here.
   the app keeps a member from writing a score someone else owns. After it, an
   older client's edit of such a score uploads to no rows and is undone by the
   next download. Server only; there is no local migration
+- `20261112150000_laser_projectors.sql` — data format 3
+  ([lasers.md](../docs/design/lasers.md)). After
+  `20261112120000_data_layer.sql`. Its contract marker names 0.8.0, so it
+  runs in the first release after it, and that release is the first build
+  that reads format 3: from then on a 0.8.0 or older install neither uploads
+  nor downloads until it updates, and the new build clears its copy and
+  downloads again. Then redeploy `powersync/sync-config.yaml`, which stops
+  naming `laser_zones`. The table is left in place, unread; a later
+  migration drops it
 
 `row_model.sql` drops the old sync schema first and builds the row model, so
 the folder starts there and runs on a project that has been reset. On an

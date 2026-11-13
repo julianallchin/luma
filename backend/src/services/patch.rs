@@ -59,6 +59,10 @@ pub enum PatchError {
         conflict_label: String,
     },
 
+    /// The fixture is not driven over DMX, so it has no address to set.
+    #[error("{0} has no DMX channels, so it takes no address")]
+    NoFootprint(String),
+
     /// Anything the database said no to.
     #[error("{0}")]
     Database(String),
@@ -71,7 +75,9 @@ impl From<PatchError> for crate::error::CommandError {
     fn from(error: PatchError) -> Self {
         let message = error.to_string();
         match error {
-            PatchError::OutOfRange { .. } | PatchError::Collision { .. } => Self::Invalid(message),
+            PatchError::OutOfRange { .. }
+            | PatchError::Collision { .. }
+            | PatchError::NoFootprint(_) => Self::Invalid(message),
             PatchError::Database(_) => Self::Internal(message),
         }
     }
@@ -87,7 +93,8 @@ impl From<String> for PatchError {
 // Deriving
 // ---------------------------------------------------------------------------
 
-/// The patch rows as the allocator's input.
+/// The patch rows as the allocator's input. A fixture with no channels (a
+/// laser projector) is not in the patch.
 ///
 /// A channel count wider than a universe cannot exist: the
 /// `fixtures_address_fits_universe_*` triggers test
@@ -101,6 +108,7 @@ impl From<String> for PatchError {
 /// are free.
 pub(crate) fn inputs(rows: &[PatchedFixture]) -> Vec<Fixture> {
     rows.iter()
+        .filter(|row| row.num_channels > 0)
         .map(|row| {
             let channels = u16::try_from(row.num_channels).unwrap_or(u16::MAX);
             let address = match (footprint_of(row), row.address_pinned) {
@@ -117,8 +125,8 @@ pub(crate) fn inputs(rows: &[PatchedFixture]) -> Vec<Fixture> {
         .collect()
 }
 
-/// One row's stored footprint. `None` only for a row written before the
-/// migration's repair pass, which cannot happen after it.
+/// One row's stored footprint. `None` for a fixture with no channels, which
+/// takes no address.
 fn footprint_of(row: &PatchedFixture) -> Option<Footprint> {
     Footprint::new(
         u16::try_from(row.universe).ok()?,
@@ -322,6 +330,9 @@ pub async fn set_address(
         .iter()
         .find(|row| row.id == id)
         .ok_or_else(|| PatchError::Database(format!("no fixture {id} in this venue")))?;
+    if row.num_channels == 0 {
+        return Err(PatchError::NoFootprint(display_name(row)));
+    }
     let channels = u16::try_from(row.num_channels).unwrap_or(u16::MAX);
 
     let footprint = Patched::of(&rows).admit(Some(id), universe, address, channels)?;

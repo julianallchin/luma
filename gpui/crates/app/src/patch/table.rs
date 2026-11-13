@@ -192,8 +192,18 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
                 .truncate()
                 .child(format!("{} {}", row.manufacturer, row.model)),
         )
-        .child(mode_cell(state, row, &name, app, W_MODE))
-        .child(number_cell(
+        .child(mode_cell(state, row, &name, app, W_MODE));
+    // A fixture DMX does not drive (a laser projector) has no address to
+    // show or set.
+    let line = if row.num_channels == 0 {
+        line.child(reading(W_NUMBER, "–".into()))
+            .child(reading(W_NUMBER, "–".into()))
+            .child(
+                reading(W_RANGE, "–".into())
+                    .agent_node(Role::Text, format!("{name} has no DMX address")),
+            )
+    } else {
+        line.child(number_cell(
             state,
             row,
             &name,
@@ -217,6 +227,8 @@ fn fixture_row(state: &Patch, row: &PatchedFixture, app: &Entity<Luma>) -> AnyEl
             reading(W_RANGE, format!("{}–{last}", row.address))
                 .agent_node(Role::Text, format!("{name} range = {}–{last}", row.address)),
         )
+    };
+    let line = line
         .child(groups_cell(state, row, &name, app))
         .agent_node(Role::Row, name.clone())
         .agent_focused(selected);

@@ -264,7 +264,7 @@ fn node_shape(id: &str, node: &Node) -> Result<()> {
                 definition.settings[0].1.default
             ));
         };
-        // A setting with no options takes any text, such as a zone id.
+        // A setting with no options takes any text.
         if !setting.options.is_empty() && !setting.options.contains(&value.as_str()) {
             return fail(format!(
                 "{id}.{name}: expected {}; got \"{value}\". Example: {name}=\"{}\"",

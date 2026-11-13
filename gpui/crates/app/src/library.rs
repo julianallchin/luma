@@ -83,7 +83,7 @@ use fixtures::FixtureTrackSources;
 pub use fixtures::{
     NavigationFixture, SignInFixture, SourceAdapterFixture, SourceSearchFixtureResponse,
 };
-pub use patch::Patch;
+pub use patch::{LaserEdits, Lasers, Patch};
 pub(crate) use scores::ScoreContents;
 pub use sources::{SourceLibrary, SourcePlaylist, SourceTrack, TrackSource};
 pub use stage::Rig;

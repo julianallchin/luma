@@ -1,11 +1,11 @@
 ---
 title: Lasers
-description: Laser projectors, zones, laser clips and how Luma previews them.
+description: Laser projectors, the window, laser clips, the preview and output to a DAC.
 ---
 
 # Lasers
 
-Luma draws beam shows for ILDA laser projectors. A laser clip never names
+Luma draws beam shows for laser projectors driven through a DAC. A laser clip never names
 points or mirror angles. It says what figures to draw, where and in what
 color, and a solver turns that into each projector's point stream, the way an
 aim becomes pan and tilt.
@@ -15,32 +15,54 @@ like any other light.
 
 ## Projectors
 
-A projector is a fixture whose definition has the type `Laser Projector`.
-Luma ships `Generic/Generic-ILDA-Laser-Projector.qxf`. Place it on the stage
-in Rig like any other fixture. Its scan field is the pan and tilt range of its
-definition, and it draws 30,000 points a second. It scans around the
-direction it is mounted in.
+Add a **Laser Projector** in Rig like any other fixture. A projector has no
+DMX address and is not in the patch. It scans around the direction it is
+mounted in, out of the glass on its front.
 
-## Zones
+Most rigs hang several of one projector, so Rig's **Lasers** tab asks once
+what they are, under **Projectors**:
 
-A **zone** is a named window of directions in the room, for example 5° to 20°
-up and 60° either side. Every projector shares it. A laser clip draws on a
-canvas from −1 to 1 that maps onto the zone, so the middle of the canvas is
-the same direction from every projector: six projectors draw six parallel
+- **Preset**: 1, 3, 5 or 10 W RGB, a place to start.
+- **Scan angle**, **Scanner** speed in kpps, and a **Power cap**.
+- Under **Details**: each diode's power, wavelength and threshold, analog or
+  on-or-off (TTL) modulation, and the beam's width and divergence.
+
+Drag a number to change it a step at a time, or click it to type one.
+
+Each projector then has its own row:
+
+- **DAC**: the box on the network that plays it. With none, it draws on
+  screen only.
+- **Test**: draws the window's edge and a cross at its middle, in the room
+  and on its DAC.
+- Under **Setup**, **DAC output**: mirror, size, offset and swapped axes,
+  for a box hung upside down, behind a screen, or wired with its axes
+  crossed. These change what the DAC is sent, never the picture in Luma.
+- **Limit**: an outline in the projector's own scan. Light outside it is
+  blanked. Drag its corners; right-click removes one.
+- **A different kind of projector from the rest** gives it settings of its
+  own.
+
+## Window
+
+A venue has one **window**: a range of directions in the room, for example
+5° to 25° up and 20° either side, shared by every projector. A laser clip
+draws on a canvas from −1 to 1 that maps onto it, so the middle of the canvas
+is the same direction from every projector: six projectors draw six parallel
 fans.
 
-A laser clip names its zone. With no zone, or a zone the venue does not have,
-it uses the venue's first zone. A venue with no zones draws ahead into the
-house, inside every projector's scan.
-
-The app has no zone editor yet. Ask the venue's chat to make one: its Python
-has `luma.venue.laser_zones()` and
-`luma.venue.laser_zone(name, turn=[min, max], tilt=[min, max])`, in degrees.
+Until you set it, the window is fitted to the projectors: ahead into the
+house, just above level. On the Lasers tab it sits on a graph of directions:
+drag it to move it, pull a handle to resize it, or drag on the graph to draw
+a new one. It lands on whole degrees and is drawn to the middle and to level
+when it comes near; Alt resizes about its middle. The grey outlines are
+where each projector can reach. You can also ask the venue's chat: its Python has `luma.venue.laser_window(turn=[min, max], tilt=[min, max])`,
+in degrees.
 
 ## Laser Clips
 
 A laser clip's output is a **laser** node. It draws one or more **figure**
-nodes, in order, and holds the clip's alpha and its zone. A figure has a kind
+nodes, in order, and holds the clip's alpha. A figure has a kind
 (`beams`, `line`, `ring`, `polygon` or `grid`), a count, and the place, size,
 rotation and color of each of its elements. The elements are the figure's
 heads, so Space, Random, Shuffle and Mirror spread over them as they spread
@@ -66,5 +88,21 @@ would be sent. It runs them through a model of the scanner's mirrors, so a
 fast shape's corners round and dwell brighter, and it scatters the beams in
 the venue's haze.
 
-Luma does not send laser frames to projector hardware yet. Laser shows play
-in the visualizer and in exported videos only.
+## Output
+
+Luma plays a projector through an [Ether Dream](https://ether-dream.com) DAC
+on the same network. Choose the DAC on the projector's row, then turn on
+**Laser output** at the top of the Lasers tab.
+
+- Laser output is off every time Luma starts. While it is on, the status bar
+  says so, and pressing that turns it off.
+- **Test** draws the window's edge and a cross at its middle on one
+  projector, at a quarter of its capped power, in the room as on the DAC.
+- Max Brightness and the Perform master dim lasers with the lights, and a
+  blackout blanks them.
+- A projector's row says how many times a second it draws the picture. Under
+  25 it flickers: the clip is drawing more than the scanner can.
+
+You are responsible for running lasers safely and legally. Set each
+projector's limit and power cap before turning output on, and keep the
+projector's own interlock and emergency stop in reach.

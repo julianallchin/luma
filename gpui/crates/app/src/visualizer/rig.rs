@@ -271,6 +271,22 @@ impl Visualizer {
     /// A rig re-read after a graph edit. The camera stays where the operator
     /// left it — a builder that re-framed on every placement would throw the
     /// view away once per piece.
+    /// Draw the venue's lasers as `rig` has them: an edit shows as it is
+    /// made, ahead of the write and the reload that follows it.
+    pub(crate) fn set_lasers(&mut self, rig: luma_lib::laser::LaserRig) {
+        let mut stage = self.stage.borrow_mut();
+        stage.lasers = rig;
+        stage.idle = None;
+    }
+
+    /// Show a projector's test pattern in place of what it plays, or with
+    /// `None` go back to the show.
+    pub(crate) fn set_laser_test(&mut self, projector: Option<String>) {
+        let mut stage = self.stage.borrow_mut();
+        stage.laser_test = projector;
+        stage.idle = None;
+    }
+
     pub(crate) fn rig_reloaded(&mut self, loaded: Result<Rig, LibraryError>) {
         let framing = self.framing.clone();
         let camera = self.camera;
