@@ -83,7 +83,11 @@ const GROUND_ALBEDO_REFERENCE: f32 = 0.3;
 const VIEW_HEIGHT_KM: f32 = 0.002;
 
 /// Angular radius of the solar disc, radians. Half of 0.535 degrees.
-const SUN_ANGULAR_RADIUS: f32 = 0.004_675;
+pub(crate) const SUN_ANGULAR_RADIUS: f32 = 0.004_675;
+
+/// How much of the sun's light the disc the sky draws carries: the rest goes
+/// to its limb darkening and soft rim (`atmosphere_sky.wgsl`).
+pub(crate) const SUN_DISC_DRAWN: f32 = 0.755;
 
 const TRANSMITTANCE_WIDTH: u32 = 256;
 const TRANSMITTANCE_HEIGHT: u32 = 64;

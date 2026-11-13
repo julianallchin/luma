@@ -113,6 +113,14 @@ struct TonemapUniform {
     /// rgb: the sun's light times the veil's scale, in exposed light ·
     /// square degrees. w: focal length, output pixels.
     sun_veil: [f32; 4],
+    /// xy: the sun's centre, output pixels. z: output pixels per glare texel.
+    /// w: half the spread of the sun's disc on the glare grid, texels.
+    sun_at: [f32; 4],
+    /// rgb: the sun's light as the glare grid would hold it, summed over its
+    /// texels. w: 0 when the sun has no place on the grid.
+    sun_source: [f32; 4],
+    /// xy: the glare grid, texels. zw: how far its kernel reaches, texels.
+    kernel: [f32; 4],
 }
 
 /// The sensor noise's seed for the frame at `time`: a new grain every frame,
@@ -191,7 +199,7 @@ pub(crate) struct Pipelines {
     sampler: wgpu::Sampler,
     /// Bound in place of the glare when there is none.
     no_glare: wgpu::TextureView,
-    /// Bound in place of the kernel texels outside a kernel build.
+    /// Bound in place of the kernel's texels when there is no glare.
     no_kernel: wgpu::Buffer,
 }
 
@@ -399,6 +407,7 @@ impl Pipelines {
                 entry(2, fragment, texture(true)),
                 entry(3, fragment, sampler()),
                 entry(4, fragment, storage(true)),
+                entry(5, fragment, storage(true)),
             ],
         });
         let tonemap_module = module(
@@ -521,7 +530,10 @@ struct Glare {
     /// The convolved glare, `region` texels.
     texture: wgpu::TextureView,
     spectrum: wgpu::Buffer,
+    /// The kernel's spectrum, which the frame's is multiplied by.
     kernel: wgpu::Buffer,
+    /// The kernel itself, which the tonemap reads for a sun off the frame.
+    kernel_texels: wgpu::Buffer,
     built: Option<KernelKey>,
 }
 
@@ -565,6 +577,12 @@ impl Glare {
             texture: texture.create_view(&wgpu::TextureViewDescriptor::default()),
             spectrum: buffer("post-glare-spectrum"),
             kernel: buffer("post-glare-kernel"),
+            kernel_texels: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("post-glare-kernel-texels"),
+                size: (gw * gh * std::mem::size_of::<[f32; 4]>()) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
             built: None,
         }
     }
@@ -822,6 +840,7 @@ impl Post {
         let glare = targets.glare.as_mut().filter(|_| glare_on);
         let mut uv_scale = [1.0f32; 2];
         let mut texel_px = 1.0f32;
+        let mut kernel_grid = None;
         if let Some(glare) = glare {
             texel_px = glare.scale;
             let frame_texels = [
@@ -899,15 +918,11 @@ impl Post {
                 focal: grid.focal,
                 reach: grid.reach,
             };
+            kernel_grid = Some(grid);
             if glare.built.is_none_or(|built| !built.matches(&key)) {
-                use wgpu::util::DeviceExt;
                 let texels = psf::kernel(key.style, key.diffraction, &grid, pipelines.patterns());
-                let kernel_texels = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("post-glare-kernel-texels"),
-                    contents: bytemuck::cast_slice(&texels),
-                    usage: wgpu::BufferUsages::STORAGE,
-                });
-                let bind = bind(&kernel_texels);
+                queue.write_buffer(&glare.kernel_texels, 0, bytemuck::cast_slice(&texels));
+                let bind = bind(&glare.kernel_texels);
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("post-glare-kernel"),
                     timestamp_writes: pass_queries.compute("post-glare-kernel", None),
@@ -935,10 +950,10 @@ impl Post {
         }
 
         // --- tonemap ----------------------------------------------------------
-        let sun_glare = if glare_on {
-            off_frame_sun(frame, texel_px)
+        let sun = if glare_on {
+            off_frame_sun(frame, texel_px, kernel_grid.as_ref())
         } else {
-            ([0.0; 4], [0.0; 4])
+            SunGlare::default()
         };
         queue.write_buffer(
             &self.tonemap,
@@ -955,15 +970,16 @@ impl Post {
                     frame.headroom,
                 ],
                 glare: [uv_scale[0], uv_scale[1], noise_seed(frame.time), 0.0],
-                sun: sun_glare.0,
-                sun_veil: sun_glare.1,
+                sun: sun.sun,
+                sun_veil: sun.veil,
+                sun_at: sun.at,
+                sun_source: sun.source,
+                kernel: sun.kernel,
             }),
         );
-        let glare_view = targets
-            .glare
-            .as_ref()
-            .filter(|_| glare_on)
-            .map_or(&pipelines.no_glare, |g| &g.texture);
+        let glare = targets.glare.as_ref().filter(|_| glare_on);
+        let glare_view = glare.map_or(&pipelines.no_glare, |g| &g.texture);
+        let kernel_texels = glare.map_or(&pipelines.no_kernel, |g| &g.kernel_texels);
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("post-tonemap"),
             layout: &pipelines.tonemap_layout,
@@ -987,6 +1003,10 @@ impl Post {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: self.state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: kernel_texels.as_entire_binding(),
                 },
             ],
         });
@@ -1019,16 +1039,29 @@ fn attachment(view: &wgpu::TextureView, clear: bool) -> wgpu::RenderPassColorAtt
     }
 }
 
+/// The tonemap's uniforms for a sun off the frame, as [`TonemapUniform`]
+/// lays them out. All zero is no sun.
+#[derive(Default)]
+struct SunGlare {
+    sun: [f32; 4],
+    veil: [f32; 4],
+    at: [f32; 4],
+    source: [f32; 4],
+    kernel: [f32; 4],
+}
+
 /// The sun's glare while it is off the frame, for the tonemap to draw.
 ///
 /// The convolution only sees light in the frame, so a sun just past its
 /// edge would take all its glare with it; a real lens is still lit by it.
-/// The tonemap draws the sun's veil (not its diffraction rays) from its
-/// direction, and fades that in over a few glare texels as the disc leaves
-/// the frame, as the convolution's own copy fades out.
-fn off_frame_sun(frame: &PostFrame, texel_px: f32) -> ([f32; 4], [f32; 4]) {
+/// The tonemap draws it from the sun's place on `grid`, the glare's own:
+/// the kernel the convolution would have spread it by, rays and all, as far
+/// as that reaches, and the veil alone past it. It fades that in over a few
+/// glare texels as the disc leaves the frame, as the convolution's own copy
+/// fades out.
+fn off_frame_sun(frame: &PostFrame, texel_px: f32, grid: Option<&psf::Grid>) -> SunGlare {
     let Some((direction, light)) = frame.sun else {
-        return ([0.0; 4], [0.0; 4]);
+        return SunGlare::default();
     };
     let inverse = frame.view_proj.inverse();
     let at = |x: f32, y: f32| inverse.project_point3(Vec3::new(x, y, 1.0));
@@ -1040,22 +1073,46 @@ fn off_frame_sun(frame: &PostFrame, texel_px: f32) -> ([f32; 4], [f32; 4]) {
     let camera = Vec3::new(s.dot(right), s.dot(up), s.dot(forward));
     let (w, h) = (frame.width as f32, frame.height as f32);
     let focal = h * 0.5 / (frame.fov_y_deg.to_radians() * 0.5).tan();
+    // The sun's centre in the frame's plane, pixels, while it is in front.
+    let place = (camera.z > 1e-2).then(|| {
+        [
+            w * 0.5 + focal * camera.x / camera.z,
+            h * 0.5 - focal * camera.y / camera.z,
+        ]
+    });
     // Signed distance of the sun's centre inside the frame, pixels.
-    let inside = if camera.z > 1e-4 {
-        let x = w * 0.5 + focal * camera.x / camera.z;
-        let y = h * 0.5 - focal * camera.y / camera.z;
-        x.min(w - x).min(y).min(h - y)
-    } else {
-        -f32::INFINITY
-    };
+    let inside = place.map_or(-f32::INFINITY, |[x, y]| x.min(w - x).min(y).min(h - y));
     // Two glare texels.
     let margin = 2.0 * texel_px;
     let off = 1.0 - ((inside + margin) / (2.0 * margin)).clamp(0.0, 1.0);
     let scale =
         crate::psf::veil_scale(frame.look.glare.style) * (180.0 / std::f32::consts::PI).powi(2);
     let veil = light * scale;
-    (
-        camera.extend(off).to_array(),
-        [veil.x, veil.y, veil.z, focal],
-    )
+    let mut glare = SunGlare {
+        sun: camera.extend(off).to_array(),
+        veil: [veil.x, veil.y, veil.z, focal],
+        ..SunGlare::default()
+    };
+    if let (Some([x, y]), Some(grid)) = (place, grid) {
+        // What the grid's texels would sum to with the disc drawn on them:
+        // its light over a texel's solid angle there, which shrinks as the
+        // cube of the cosine away from the axis.
+        let source =
+            light * crate::atmosphere::SUN_DISC_DRAWN * grid.focal * grid.focal / camera.z.powi(3);
+        // The disc's radius on the grid, as a circle of its area there.
+        let radius = crate::atmosphere::SUN_ANGULAR_RADIUS * grid.focal / camera.z.powf(1.5);
+        // Four taps of a linear filter as wide as that disc averaged into
+        // texels and read through the glare texture's cubic filter: the
+        // variances add (disc r²/4, texel 1/12, cubic 1/3, linear 1/6).
+        let spread = (radius * radius / 4.0 + 0.25).sqrt();
+        glare.at = [x, y, texel_px, spread];
+        glare.source = [source.x, source.y, source.z, 1.0];
+        glare.kernel = [
+            grid.width as f32,
+            grid.height as f32,
+            grid.reach[0],
+            grid.reach[1],
+        ];
+    }
+    glare
 }
